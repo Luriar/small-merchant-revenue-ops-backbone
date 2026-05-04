@@ -1,0 +1,41 @@
+{
+  "private": true,
+  "scripts": {
+    "validate:m2-1:cdc": "python3 scripts/validate_m2_1_cdc_contract.py",
+    "validate:m2-1:fixtures": "python3 scripts/validate_m2_1_cdc_contract.py",
+    "validate:m2-1:runbook": "python3 scripts/validate_m2_1_cdc_contract.py",
+    "validate:m2-1:evidence": "python3 scripts/validate_m2_1_cdc_contract.py",
+    "validate:m2-2:runtime-package": "python3 scripts/validate_m2_2_runtime_package.py",
+    "validate:m2-3:observability-contract": "python3 scripts/validate_m2_3_observability_contract.py",
+    "validate:m2-4:dlq-storage-contract": "python3 scripts/validate_m2_4_dlq_storage_contract.py",
+    "validate:m2-5:dlq-replay-api-contract": "python3 scripts/validate_m2_5_dlq_replay_api_contract.py",
+    "validate:m2-6:handler-repository-contract": "python3 scripts/validate_m2_6_handler_repository_contract.py",
+    "validate:m2-7:skeleton-contract": "python3 scripts/validate_m2_7_skeleton_contract.py",
+    "validate:m2-8a:route-readiness": "python3 scripts/validate_m2_8a_route_wiring_readiness.py",
+    "validate:m2-8b-prep:auth-roles": "python3 scripts/validate_m2_8b_auth_role_reconciliation.py",
+    "validate:m2-8c-prep:error-envelope": "python3 scripts/validate_m2_8c_error_envelope_integration.py",
+    "validate:m2-8d-prep:repository-strategy": "python3 scripts/validate_m2_8d_repository_strategy.py",
+    "validate:m2-8e-prep:openapi-ownership": "python3 scripts/validate_m2_8e_openapi_merge_ownership.py",
+    "validate:m2-8f-prep:route-tests": "python3 scripts/validate_m2_8f_route_level_test_contract.py",
+    "validate:m2-8g:final-pre-wiring": "python3 scripts/validate_m2_8g_final_pre_wiring.py",
+    "test:m2-8b:cdc-recovery-routes": "node --test apps/api/src/cdc-recovery/cdc-recovery-route-level.test.js",
+    "validate:m2-8b:test-only-harness": "python3 scripts/validate_m2_8b_test_only_harness.py",
+    "validate:m2-8h:route-wiring-readiness": "python3 scripts/validate_m2_8h_route_wiring_readiness.py",
+    "test:m2-8i:production-routes": "node --test apps/api/src/cdc-recovery/cdc-recovery-production-routes.test.js",
+    "validate:m2-8i:production-route-wiring": "python3 scripts/validate_m2_8i_production_route_wiring.py",
+    "validate:m2-8j:openapi-readiness": "python3 scripts/validate_m2_8j_openapi_merge_readiness.py",
+    "validate:m2-8m:openapi-merge": "python3 scripts/validate_m2_8m_openapi_merge.py",
+    "validate:m2-8n:post-merge-closure": "python3 scripts/validate_m2_8n_post_merge_closure.py",
+    "test:m2-8o:aurora-repository": "node --test apps/api/src/cdc-recovery/cdc-recovery-aurora-repository.test.js",
+    "validate:m2-8o:aurora-repository": "python3 scripts/validate_m2_8o_aurora_repository.py",
+    "validate:m2-9a:live-db-preflight": "python3 scripts/validate_m2_9a_live_db_preflight.py",
+    "validate:m2-9a:live-db-go": "python3 scripts/validate_m2_9a_live_db_go.py",
+    "validate:m2-9b:sql-apply-evidence": "python3 scripts/validate_m2_9b_sql_apply_evidence.py",
+    "validate:m2-9c:runtime-dry-run-evidence": "python3 scripts/validate_m2_9c_runtime_dry_run_evidence.py",
+    "test:m2-7:cdc-recovery": "node --test apps/api/src/cdc-recovery/cdc-recovery-dto-mapper.test.js apps/api/src/cdc-recovery/cdc-recovery-service.test.js",
+    "validate:m2:global-safety": "python3 scripts/validate_m2_global_safety.py"
+  },
+  "dependencies": {
+    "pg": "^8.20.0"
+  }
+}

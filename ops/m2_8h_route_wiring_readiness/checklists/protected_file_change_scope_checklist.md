@@ -1,0 +1,33 @@
+# M2-8H Protected File Change Scope Checklist
+
+- [ ] no live route wiring in M2-8H
+- [ ] no server.js modification in M2-8H
+- [ ] no auth.js modification in M2-8H
+- [ ] no error-response.js modification in M2-8H
+- [ ] no cdc-recovery runtime module modification in M2-8H
+- [ ] no main OpenAPI merge in M2-8H
+- [ ] no real DB queries
+- [ ] no Aurora connection
+- [ ] no SQL apply
+- [ ] no external infrastructure commands
+- [ ] M2-8B test-only harness passed
+- [ ] M2-8B route-level tests passed
+- [ ] M2-8B validator passed
+- [ ] global safety scanner passed
+- [ ] M2-8I may be conditionally scoped
+- [ ] M2-8I server.js modification allowed only for isolated route factory registration
+- [ ] M2-8I auth.js modification remains no-go unless re-scoped
+- [ ] M2-8I error-response.js modification remains no-go unless re-scoped
+- [ ] M2-8I cdc-recovery runtime module modification must stay minimal and tested
+- [ ] M2-8I must keep stub repository
+- [ ] M2-8I must keep OpenAPI patch proposal-only
+- [ ] M2-8I must not implement Aurora repository
+- [ ] production route registration tests required
+- [ ] rollback strategy required
+- [ ] no raw payloads
+- [ ] no full message bodies
+- [ ] no issue raw values
+- [ ] no prod_change payload/actor values
+- [ ] no stack traces
+- [ ] no SQL details
+- [ ] no persistence internals

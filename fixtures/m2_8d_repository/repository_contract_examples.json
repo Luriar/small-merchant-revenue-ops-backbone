@@ -1,0 +1,113 @@
+{
+  "purpose": "M2-8D-Prep safe repository contract examples",
+  "examples": {
+    "list_failures_result": {
+      "items": [
+        {
+          "failure_id": "cdc_fail_example_1",
+          "failure_type": "parse_failure",
+          "source_topic": "cdc.safe.traceability",
+          "source_table": "trace",
+          "primary_key": {
+            "trace_id": "trace_example_1"
+          },
+          "op": "u",
+          "ts_ms": 1760000000000,
+          "observed_field_names": [
+            "trace_id",
+            "primary_issue_id",
+            "status"
+          ],
+          "parser_error_class": "safe_parse_error",
+          "parser_error_summary": "safe parse failure summary",
+          "status": "open",
+          "owner": "ops-maintainer",
+          "evidence_report_ref": "ops/evidence/m2-8d-failure.md"
+        }
+      ],
+      "next_cursor": null
+    },
+    "get_failure_result": {
+      "failure_id": "cdc_fail_example_1",
+      "failure_type": "parse_failure",
+      "source_topic": "cdc.safe.traceability",
+      "source_table": "trace",
+      "primary_key": {
+        "trace_id": "trace_example_1"
+      },
+      "op": "u",
+      "ts_ms": 1760000000000,
+      "status": "open",
+      "owner": "ops-maintainer",
+      "evidence_report_ref": "ops/evidence/m2-8d-failure.md",
+      "source_run_id": "run_source_example_1"
+    },
+    "replay_request_created": {
+      "replay_request_id": "cdc_replay_req_example_1",
+      "failure_id": "cdc_fail_example_1",
+      "requested_action": "replay",
+      "status": "requested",
+      "idempotency_key": "idem_example_1",
+      "bounded_scope": {
+        "scope_kind": "single_failure",
+        "primary_key_ref": "trace:trace_example_1",
+        "max_records": 1
+      },
+      "source_run_id": "run_source_example_1",
+      "new_run_id": null,
+      "cleanup_status": "not_started",
+      "evidence_report_ref": "ops/evidence/m2-8d-created.md"
+    },
+    "idempotent_duplicate_result": {
+      "result_kind": "duplicate",
+      "status_code": 200,
+      "replay_request_id": "cdc_replay_req_example_1",
+      "failure_id": "cdc_fail_example_1",
+      "status": "requested",
+      "idempotency_key": "idem_example_1",
+      "evidence_report_ref": "ops/evidence/m2-8d-created.md"
+    },
+    "idempotency_conflict_result": {
+      "result_kind": "conflict",
+      "status_code": 409,
+      "code": "idempotency_conflict",
+      "message": "idempotency conflict",
+      "evidence_report_ref": "ops/evidence/m2-8d-idempotency.md"
+    },
+    "invalid_state_transition_result": {
+      "result_kind": "conflict",
+      "status_code": 409,
+      "code": "invalid_state_transition",
+      "message": "invalid state transition",
+      "from_status": "succeeded",
+      "action": "approve",
+      "evidence_report_ref": "ops/evidence/m2-8d-transition.md"
+    },
+    "replay_request_approved": {
+      "replay_request_id": "cdc_replay_req_example_1",
+      "failure_id": "cdc_fail_example_1",
+      "requested_action": "replay",
+      "from_status": "requested",
+      "status": "approved",
+      "approved_by_ref": "maintainer_ref_example_1",
+      "evidence_report_ref": "ops/evidence/m2-8d-approved.md"
+    },
+    "replay_request_cancelled": {
+      "replay_request_id": "cdc_replay_req_example_2",
+      "failure_id": "cdc_fail_example_2",
+      "requested_action": "reprocess",
+      "from_status": "requested",
+      "status": "cancelled",
+      "cancelled_by_ref": "maintainer_ref_example_1",
+      "evidence_report_ref": "ops/evidence/m2-8d-cancelled.md"
+    },
+    "link_new_run_id_future_worker_result": {
+      "result_kind": "linked",
+      "worker_boundary": "future_worker_only",
+      "replay_request_id": "cdc_replay_req_example_1",
+      "new_run_id": "run_new_example_1",
+      "status": "running",
+      "evidence_report_ref": "ops/evidence/m2-8d-linked.md"
+    }
+  }
+}

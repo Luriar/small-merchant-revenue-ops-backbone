@@ -1,0 +1,2275 @@
+openapi: 3.0.3
+info:
+  title: Event-Driven Product Ops Backbone API
+  version: 0.2.0
+  description: |
+    MVP API for the personal project.
+
+    Scope:
+      - Change intake
+      - Event + issue normalized intake
+      - Reliable processing (run / retry / reprocess / DLQ)
+      - Change → anomaly pattern → issue traceability
+      - Evidence-based trace detail
+
+    Key updates in v0.2:
+      - intake APIs added
+      - /traces/{trace_id}/primary-issue replaces /issues
+      - bearer auth + 401/403 added
+      - expected_version added for issue status update
+      - idempotency_key added for retry/reprocess and intake
+      - CDC recovery API contract added with safe metadata-only responses
+
+servers:
+  - url: https://api.example.com
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Intake
+  - name: Dashboard
+  - name: Traces
+  - name: Changes
+  - name: Runs
+  - name: Issues
+  - name: Actions
+  - name: CDC Recovery
+
+paths:
+  /api/v1/changes:
+    post:
+      tags: [Intake]
+      summary: Intake a product or operational change record
+      description: |
+        Creates a new change intake record.
+
+        Security:
+          - operator or higher
+
+        Idempotency:
+          - clients should send idempotency_key
+          - server should return the existing change when the same idempotency_key is replayed
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeIntakeRequest'
+      responses:
+        '201':
+          description: Change created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeIntakeResponse'
+        '200':
+          description: Existing change returned for an idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeIntakeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      tags: [Changes]
+      summary: List changes with summary counts
+      parameters:
+        - $ref: '#/components/parameters/ServiceQuery'
+        - name: change_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ChangeType'
+        - $ref: '#/components/parameters/FromQuery'
+        - $ref: '#/components/parameters/ToQuery'
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+      responses:
+        '200':
+          description: Change list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/events/intake:
+    post:
+      tags: [Intake]
+      summary: Intake a normalized event record
+      description: |
+        Accepts product-side or support-side events into the normalized intake layer.
+
+        Security:
+          - operator or higher
+
+        Idempotency:
+          - event_id is the authoritative dedupe key
+          - replay of the same event_id should not create duplicate accepted events
+
+        Data handling:
+          - user_id, session_id, request_id should be pseudonymous identifiers
+          - raw payload should be redacted before logging
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventIntakeRequest'
+      responses:
+        '202':
+          description: Event accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventIntakeResponse'
+        '200':
+          description: Existing accepted event returned for an idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventIntakeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/issues/intake:
+    post:
+      tags: [Intake]
+      summary: Intake an issue from an external support source
+      description: |
+        Creates a normalized issue intake record.
+
+        Security:
+          - operator or higher
+
+        Idempotency:
+          - use source + external_id when available
+          - clients may also send idempotency_key for safe replay
+
+        Data handling:
+          - title, body, payload, reporter may contain PII
+          - masking / redaction should be applied before persistence when possible
+          - raw payload must not be echoed into logs or error responses
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueIntakeRequest'
+      responses:
+        '201':
+          description: Issue created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueIntakeResponse'
+        '200':
+          description: Existing issue returned for an idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueIntakeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/dashboard/overview:
+    get:
+      tags: [Dashboard]
+      summary: Get dashboard overview KPIs and chart context
+      parameters:
+        - $ref: '#/components/parameters/ServiceQuery'
+        - $ref: '#/components/parameters/FromQuery'
+        - $ref: '#/components/parameters/ToQuery'
+        - $ref: '#/components/parameters/TimeRangeQuery'
+      responses:
+        '200':
+          description: Dashboard overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardOverviewResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/dashboard/timeline:
+    get:
+      tags: [Dashboard]
+      summary: Get timeline series with change and anomaly markers
+      description: |
+        Read path:
+          - metric series and anomaly markers: ClickHouse
+          - change markers: Aurora prod_change
+      parameters:
+        - $ref: '#/components/parameters/ServiceQuery'
+        - name: metric
+          in: query
+          required: true
+          schema:
+            type: string
+            example: checkout_error_rate
+        - $ref: '#/components/parameters/FromQuery'
+        - $ref: '#/components/parameters/ToQuery'
+        - name: granularity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [1m, 5m, 15m]
+            default: 1m
+      responses:
+        '200':
+          description: Timeline data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardTimelineResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # POST is intentionally omitted: trace creation is worker/pipeline-generated
+  # and is not a public MVP contract. Do not add a post operation here.
+  /api/v1/traces:
+    get:
+      tags: [Traces]
+      summary: List traces
+      parameters:
+        - $ref: '#/components/parameters/ServiceQuery'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/TraceStatus'
+        - name: confidence
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/Confidence'
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+      responses:
+        '200':
+          description: Trace list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/traces/{trace_id}:
+    get:
+      tags: [Traces]
+      summary: Get trace detail
+      parameters:
+        - $ref: '#/components/parameters/TraceIdPath'
+      responses:
+        '200':
+          description: Trace detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceDetailResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/traces/{trace_id}/evidences:
+    get:
+      tags: [Traces]
+      summary: Get evidence list for a trace
+      parameters:
+        - $ref: '#/components/parameters/TraceIdPath'
+      responses:
+        '200':
+          description: Trace evidences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvidenceListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/traces/{trace_id}/primary-issue:
+    get:
+      tags: [Traces]
+      summary: Get the primary issue linked to a trace in the current MVP data model
+      description: |
+        Current MVP physical model uses trace.primary_issue_id as the authoritative issue anchor.
+        This endpoint intentionally does not imply a general M:N trace-issue linkage model.
+      parameters:
+        - $ref: '#/components/parameters/TraceIdPath'
+      responses:
+        '200':
+          description: Primary issue linked to the trace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueDetailNullableResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/changes/{change_id}:
+    get:
+      tags: [Changes]
+      summary: Get change detail
+      parameters:
+        - $ref: '#/components/parameters/ChangeIdPath'
+      responses:
+        '200':
+          description: Change detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangeDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/changes/{change_id}/traces:
+    get:
+      tags: [Changes]
+      summary: Get traces derived from a change
+      parameters:
+        - $ref: '#/components/parameters/ChangeIdPath'
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+      responses:
+        '200':
+          description: Change-linked traces
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/runs/overview:
+    get:
+      tags: [Runs]
+      summary: Get reliability overview KPIs and status distribution
+      parameters:
+        - $ref: '#/components/parameters/ServiceQuery'
+        - name: run_type
+          in: query
+          required: false
+          schema:
+            type: string
+            example: normalization
+        - $ref: '#/components/parameters/FromQuery'
+        - $ref: '#/components/parameters/ToQuery'
+      responses:
+        '200':
+          description: Run overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunOverviewResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/runs/failures:
+    get:
+      tags: [Runs]
+      summary: Get failed or DLQ run groups by error_class
+      description: |
+        Intended for Reliability Panel grouped failure investigation.
+        Clients should normally provide a time range to avoid wide scans.
+      parameters:
+        - $ref: '#/components/parameters/ServiceQuery'
+        - name: run_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            example: failed,dlq
+        - $ref: '#/components/parameters/FromQuery'
+        - $ref: '#/components/parameters/ToQuery'
+      responses:
+        '200':
+          description: Failure groups
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunFailureGroupsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/runs:
+    get:
+      tags: [Runs]
+      summary: List runs
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/RunStatus'
+        - name: error_class
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: run_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+      responses:
+        '200':
+          description: Run list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/runs/{run_id}:
+    get:
+      tags: [Runs]
+      summary: Get run detail
+      parameters:
+        - $ref: '#/components/parameters/RunIdPath'
+      responses:
+        '200':
+          description: Run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/runs/{run_id}/state-log:
+    get:
+      tags: [Runs]
+      summary: Get run state transition log
+      parameters:
+        - $ref: '#/components/parameters/RunIdPath'
+      responses:
+        '200':
+          description: Run state log
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunStateLogResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/runs/{run_id}/retry:
+    post:
+      tags: [Actions]
+      summary: Request retry for a failed run
+      parameters:
+        - $ref: '#/components/parameters/RunIdPath'
+      description: |
+        Security:
+          - operator or higher
+
+        Execution model:
+          - server creates a new run row
+          - original failed run remains unchanged
+          - response includes new_run_id for subsequent status polling
+
+        Idempotency:
+          - clients must send idempotency_key
+          - replay of the same idempotency_key should return the same new_run_id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetryRunRequest'
+      responses:
+        '202':
+          description: Retry accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryRunResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Run is not retryable or an active retry already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/reprocess:
+    post:
+      tags: [Actions]
+      summary: Request reprocess for a target batch or DLQ batch
+      description: |
+        Security:
+          - admin or ops_lead
+
+        Execution model:
+          - server creates a new run row
+          - worker or batch execution performs actual reprocess
+          - response includes new_run_id for subsequent status polling
+
+        Idempotency:
+          - clients must send idempotency_key
+          - replay of the same idempotency_key should return the same new_run_id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReprocessRequest'
+      responses:
+        '202':
+          description: Reprocess accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReprocessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: An active reprocess already exists for the same target
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/cdc/failures:
+    get:
+      tags: [CDC Recovery]
+      summary: List CDC failure summaries
+      description: |
+        Security:
+          - readonly_role, operator, or maintainer
+
+        Data handling:
+          - returns safe metadata only
+          - system_worker is not a human read role
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: failure_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: source_topic
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: owner
+          in: query
+          required: false
+          schema:
+            type: string
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+      responses:
+        '200':
+          description: CDC failure list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CdcFailureListResponse'
+        '401':
+          $ref: '#/components/responses/CdcUnauthorized'
+        '403':
+          $ref: '#/components/responses/CdcForbidden'
+        '500':
+          $ref: '#/components/responses/CdcInternalError'
+
+  /api/v1/cdc/failures/{failure_id}:
+    get:
+      tags: [CDC Recovery]
+      summary: Get CDC failure detail
+      description: |
+        Security:
+          - readonly_role, operator, or maintainer
+
+        Data handling:
+          - returns safe metadata only
+      parameters:
+        - $ref: '#/components/parameters/FailureIdPath'
+      responses:
+        '200':
+          description: CDC failure detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CdcFailureDetail'
+        '401':
+          $ref: '#/components/responses/CdcUnauthorized'
+        '403':
+          $ref: '#/components/responses/CdcForbidden'
+        '404':
+          $ref: '#/components/responses/CdcNotFound'
+        '500':
+          $ref: '#/components/responses/CdcInternalError'
+
+  /api/v1/cdc/failures/{failure_id}/state-log:
+    get:
+      tags: [CDC Recovery]
+      summary: List CDC failure state log entries
+      description: |
+        Security:
+          - readonly_role, operator, or maintainer
+
+        State log entries are append-only safe metadata projections.
+      parameters:
+        - $ref: '#/components/parameters/FailureIdPath'
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+      responses:
+        '200':
+          description: CDC failure state log
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CdcFailureStateLogListResponse'
+        '401':
+          $ref: '#/components/responses/CdcUnauthorized'
+        '403':
+          $ref: '#/components/responses/CdcForbidden'
+        '404':
+          $ref: '#/components/responses/CdcNotFound'
+        '500':
+          $ref: '#/components/responses/CdcInternalError'
+
+  /api/v1/cdc/failures/{failure_id}/replay-requests:
+    post:
+      tags: [CDC Recovery]
+      summary: Create an idempotent CDC replay request
+      description: |
+        Security:
+          - operator or maintainer
+
+        Role boundary:
+          - readonly_role cannot mutate
+          - operator can create replay requests
+          - system_worker cannot create arbitrary replay requests
+
+        Idempotency:
+          - same idempotency_key and same safe intent returns 200
+          - same idempotency_key with a different safe intent returns 409
+      parameters:
+        - $ref: '#/components/parameters/FailureIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCdcReplayRequestRequest'
+      responses:
+        '201':
+          description: Replay request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCdcReplayRequestResponse'
+        '200':
+          description: Existing replay request returned for idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCdcReplayRequestResponse'
+        '400':
+          $ref: '#/components/responses/CdcValidationError'
+        '401':
+          $ref: '#/components/responses/CdcUnauthorized'
+        '403':
+          $ref: '#/components/responses/CdcForbidden'
+        '404':
+          $ref: '#/components/responses/CdcNotFound'
+        '409':
+          $ref: '#/components/responses/CdcConflict'
+        '500':
+          $ref: '#/components/responses/CdcInternalError'
+
+  /api/v1/cdc/replay-requests:
+    get:
+      tags: [CDC Recovery]
+      summary: List CDC replay request summaries
+      description: |
+        Security:
+          - readonly_role, operator, or maintainer
+
+        Data handling:
+          - returns safe replay request metadata only
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: failure_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: owner
+          in: query
+          required: false
+          schema:
+            type: string
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+      responses:
+        '200':
+          description: CDC replay request list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CdcReplayRequestListResponse'
+        '401':
+          $ref: '#/components/responses/CdcUnauthorized'
+        '403':
+          $ref: '#/components/responses/CdcForbidden'
+        '500':
+          $ref: '#/components/responses/CdcInternalError'
+
+  /api/v1/cdc/replay-requests/{replay_request_id}:
+    get:
+      tags: [CDC Recovery]
+      summary: Get CDC replay request detail
+      description: |
+        Security:
+          - readonly_role, operator, or maintainer
+      parameters:
+        - $ref: '#/components/parameters/ReplayRequestIdPath'
+      responses:
+        '200':
+          description: CDC replay request detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CdcReplayRequestDetail'
+        '401':
+          $ref: '#/components/responses/CdcUnauthorized'
+        '403':
+          $ref: '#/components/responses/CdcForbidden'
+        '404':
+          $ref: '#/components/responses/CdcNotFound'
+        '500':
+          $ref: '#/components/responses/CdcInternalError'
+
+  /api/v1/cdc/replay-requests/{replay_request_id}/approve:
+    post:
+      tags: [CDC Recovery]
+      summary: Approve a CDC replay request
+      description: |
+        Security:
+          - maintainer only
+
+        Role boundary:
+          - operator cannot approve or cancel
+          - readonly_role cannot mutate
+          - system_worker cannot approve or cancel
+
+        Invalid state transitions return 409.
+      parameters:
+        - $ref: '#/components/parameters/ReplayRequestIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveCdcReplayRequestRequest'
+      responses:
+        '200':
+          description: Replay request approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApproveCdcReplayRequestResponse'
+        '400':
+          $ref: '#/components/responses/CdcValidationError'
+        '401':
+          $ref: '#/components/responses/CdcUnauthorized'
+        '403':
+          $ref: '#/components/responses/CdcForbidden'
+        '404':
+          $ref: '#/components/responses/CdcNotFound'
+        '409':
+          $ref: '#/components/responses/CdcConflict'
+        '500':
+          $ref: '#/components/responses/CdcInternalError'
+
+  /api/v1/cdc/replay-requests/{replay_request_id}/cancel:
+    post:
+      tags: [CDC Recovery]
+      summary: Cancel a CDC replay request
+      description: |
+        Security:
+          - maintainer only
+
+        Role boundary:
+          - operator cannot approve or cancel
+          - readonly_role cannot mutate
+          - system_worker cannot approve or cancel
+
+        Invalid state transitions return 409.
+      parameters:
+        - $ref: '#/components/parameters/ReplayRequestIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelCdcReplayRequestRequest'
+      responses:
+        '200':
+          description: Replay request cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelCdcReplayRequestResponse'
+        '400':
+          $ref: '#/components/responses/CdcValidationError'
+        '401':
+          $ref: '#/components/responses/CdcUnauthorized'
+        '403':
+          $ref: '#/components/responses/CdcForbidden'
+        '404':
+          $ref: '#/components/responses/CdcNotFound'
+        '409':
+          $ref: '#/components/responses/CdcConflict'
+        '500':
+          $ref: '#/components/responses/CdcInternalError'
+
+  /api/v1/issues:
+    get:
+      tags: [Issues]
+      summary: List issues
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/IssueStatus'
+        - name: severity
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5
+        - name: issue_family
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: affected_variation
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+        - $ref: '#/components/parameters/FromQuery'
+        - $ref: '#/components/parameters/ToQuery'
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+      responses:
+        '200':
+          description: Issue list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/issues/{issue_id}:
+    get:
+      tags: [Issues]
+      summary: Get issue detail
+      parameters:
+        - $ref: '#/components/parameters/IssueIdPath'
+      responses:
+        '200':
+          description: Issue detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/issues/{issue_id}/traces:
+    get:
+      tags: [Issues]
+      summary: Get traces linked to an issue
+      description: |
+        Current MVP physical model resolves this primarily through trace.primary_issue_id.
+      parameters:
+        - $ref: '#/components/parameters/IssueIdPath'
+        - $ref: '#/components/parameters/LimitQuery'
+        - $ref: '#/components/parameters/CursorQuery'
+      responses:
+        '200':
+          description: Issue-linked traces
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/issues/{issue_id}/status:
+    patch:
+      tags: [Actions]
+      summary: Update issue status
+      parameters:
+        - $ref: '#/components/parameters/IssueIdPath'
+      description: |
+        Security:
+          - operator or higher
+
+        Concurrency:
+          - client must provide expected_version
+          - server returns 409 on optimistic lock mismatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateIssueStatusRequest'
+      responses:
+        '200':
+          description: Issue status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateIssueStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Invalid transition or optimistic lock mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ServiceQuery:
+      name: service
+      in: query
+      required: false
+      schema:
+        type: string
+        example: checkout-service
+
+    TimeRangeQuery:
+      name: time_range
+      in: query
+      required: false
+      schema:
+        type: string
+        example: last_30m
+
+    FromQuery:
+      name: from
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date-time
+
+    ToQuery:
+      name: to
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date-time
+
+    LimitQuery:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    CursorQuery:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+
+    TraceIdPath:
+      name: trace_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+    ChangeIdPath:
+      name: change_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+    RunIdPath:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+    IssueIdPath:
+      name: issue_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+    FailureIdPath:
+      name: failure_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+    ReplayRequestIdPath:
+      name: replay_request_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Authenticated but not allowed to perform this action
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    CdcValidationError:
+      description: CDC validation_error safe envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CdcErrorResponse'
+    CdcUnauthorized:
+      description: CDC unauthorized safe envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CdcErrorResponse'
+    CdcForbidden:
+      description: CDC forbidden safe envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CdcErrorResponse'
+    CdcNotFound:
+      description: CDC not_found safe envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CdcErrorResponse'
+    CdcConflict:
+      description: CDC idempotency_conflict or invalid_state_transition safe envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CdcErrorResponse'
+    CdcInternalError:
+      description: CDC internal_error safe envelope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CdcErrorResponse'
+
+  schemas:
+    TraceStatus:
+      type: string
+      enum: [suspected]
+
+    Confidence:
+      type: string
+      enum: [strong, medium, weak]
+
+    ChangeType:
+      type: string
+      enum: [release, flag, rule]
+
+    RunStatus:
+      type: string
+      enum: [pending, processing, completed, failed, dlq]
+
+    IssueStatus:
+      type: string
+      enum: [open, investigating, resolved, ignored]
+
+    ChangeIntakeRequest:
+      type: object
+      required: [idempotency_key, change_type, title, target_service, source, occurred_at]
+      properties:
+        idempotency_key:
+          type: string
+        change_type:
+          $ref: '#/components/schemas/ChangeType'
+        title:
+          type: string
+        target_service:
+          type: string
+        target_component:
+          type: string
+          nullable: true
+        variation:
+          type: string
+          nullable: true
+        cohort:
+          type: string
+          nullable: true
+        rule_scope:
+          type: object
+          nullable: true
+          additionalProperties: true
+        payload:
+          type: object
+          nullable: true
+          additionalProperties: true
+        actor:
+          type: string
+          nullable: true
+          maxLength: 120
+          description: Optional non-personal system actor identifier (e.g. deploy_bot). Must not contain '@' or whitespace and must be at most 120 characters. Personal identifiers such as emails or display names are rejected at intake.
+        source:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+
+    ChangeIntakeResponse:
+      type: object
+      properties:
+        change_id:
+          type: string
+        idempotent_replay:
+          type: boolean
+        created:
+          type: boolean
+
+    EventIntakeRequest:
+      type: object
+      required: [event_id, occurred_at, target_service, event_type, event_subtype, source]
+      properties:
+        event_id:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        target_service:
+          type: string
+        event_type:
+          type: string
+          enum: [product, support_issue]
+        event_subtype:
+          type: string
+        variation:
+          type: string
+          nullable: true
+        cohort:
+          type: string
+          nullable: true
+        duration_ms:
+          type: integer
+          minimum: 0
+          nullable: true
+        retry_count:
+          type: integer
+          minimum: 0
+          maximum: 255
+        is_error:
+          type: boolean
+        user_id:
+          type: string
+          nullable: true
+          description: Use a pseudonymous internal identifier, not an email or real name.
+        session_id:
+          type: string
+          nullable: true
+          description: Use a pseudonymous system identifier.
+        request_id:
+          type: string
+          nullable: true
+          description: Use a pseudonymous system identifier.
+        payload:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Apply redaction before logging. Validation should allow only whitelisted keys.
+        source:
+          type: string
+        ingestion_batch_id:
+          type: string
+          nullable: true
+
+    EventIntakeResponse:
+      type: object
+      properties:
+        event_id:
+          type: string
+        accepted:
+          type: boolean
+        idempotent_replay:
+          type: boolean
+
+    IssueIntakeRequest:
+      type: object
+      required: [source, title, occurred_at, issue_family, severity]
+      properties:
+        idempotency_key:
+          type: string
+          nullable: true
+        external_id:
+          type: string
+          nullable: true
+        source:
+          type: string
+        title:
+          type: string
+          description: May contain PII. Apply masking/redaction when possible.
+        body:
+          type: string
+          nullable: true
+          description: May contain PII. Must not be echoed into logs or error responses.
+        issue_family:
+          type: string
+        severity:
+          type: integer
+          minimum: 1
+          maximum: 5
+        keywords:
+          type: array
+          nullable: true
+          items:
+            type: string
+        affected_variation:
+          type: string
+          nullable: true
+        payload:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: May contain PII. Apply masking/redaction when possible.
+        reporter:
+          type: string
+          nullable: true
+          description: May contain PII.
+        occurred_at:
+          type: string
+          format: date-time
+
+    IssueIntakeResponse:
+      type: object
+      properties:
+        issue_id:
+          type: string
+        idempotent_replay:
+          type: boolean
+        created:
+          type: boolean
+
+    DashboardOverviewResponse:
+      type: object
+      properties:
+        scope:
+          type: object
+          properties:
+            service:
+              type: string
+            from:
+              type: string
+              format: date-time
+            to:
+              type: string
+              format: date-time
+        kpis:
+          type: object
+          properties:
+            changes:
+              type: integer
+            detected_anomaly_patterns:
+              type: integer
+            linked_issues:
+              type: integer
+            suspected_traces:
+              type: integer
+        chart_context:
+          type: object
+          properties:
+            metric:
+              type: string
+            baseline_window:
+              type: string
+            compare_window:
+              type: string
+            granularity:
+              type: string
+
+    DashboardTimelineResponse:
+      type: object
+      properties:
+        metric:
+          type: string
+        series:
+          type: array
+          items:
+            type: object
+            properties:
+              ts:
+                type: string
+                format: date-time
+              value:
+                type: number
+                format: double
+        change_markers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChangeMarker'
+        anomaly_markers:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnomalyMarker'
+
+    ChangeMarker:
+      type: object
+      properties:
+        change_id:
+          type: string
+        title:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+
+    AnomalyMarker:
+      type: object
+      description: Detected pattern marker, not a domain entity.
+      properties:
+        detection_id:
+          type: string
+        ts:
+          type: string
+          format: date-time
+        label:
+          type: string
+
+    TraceListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TraceListItem'
+        next_cursor:
+          type: string
+          nullable: true
+
+    TraceListItem:
+      type: object
+      properties:
+        trace_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/TraceStatus'
+        confidence:
+          $ref: '#/components/schemas/Confidence'
+        change:
+          type: object
+          nullable: true
+          properties:
+            change_id:
+              type: string
+            title:
+              type: string
+        anomaly_summary:
+          type: string
+        linked_issue_count:
+          type: integer
+        evidence_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    TraceDetailResponse:
+      type: object
+      properties:
+        trace_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/TraceStatus'
+        confidence:
+          $ref: '#/components/schemas/Confidence'
+        change:
+          type: object
+          nullable: true
+          properties:
+            change_id:
+              type: string
+            title:
+              type: string
+            type:
+              $ref: '#/components/schemas/ChangeType'
+            target_service:
+              type: string
+        primary_issue:
+          type: object
+          nullable: true
+          properties:
+            issue_id:
+              type: string
+            issue_family:
+              type: string
+        anomaly:
+          type: object
+          description: Trace-level anomaly summary projection, not a standalone domain entity.
+          properties:
+            type:
+              type: string
+              enum: [volume, error, retry, cohort]
+            metric:
+              type: string
+            window_start:
+              type: string
+              format: date-time
+            window_end:
+              type: string
+              format: date-time
+            detail:
+              type: object
+              additionalProperties: true
+        counts:
+          type: object
+          properties:
+            linked_event_count:
+              type: integer
+            linked_issue_count:
+              type: integer
+            evidence_count:
+              type: integer
+
+    EvidenceListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceItem'
+
+    EvidenceItem:
+      type: object
+      properties:
+        evidence_id:
+          type: string
+        type:
+          type: string
+          enum: [timing, variation, event_spike, rule_match]
+        strength:
+          $ref: '#/components/schemas/Confidence'
+        summary:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+
+    ChangeListResponse:
+      type: object
+      properties:
+        summary:
+          type: object
+          properties:
+            release_count:
+              type: integer
+            flag_count:
+              type: integer
+            rule_count:
+              type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChangeListItem'
+        next_cursor:
+          type: string
+          nullable: true
+
+    ChangeListItem:
+      type: object
+      properties:
+        change_id:
+          type: string
+        type:
+          $ref: '#/components/schemas/ChangeType'
+        title:
+          type: string
+        target_service:
+          type: string
+        variation:
+          type: string
+          nullable: true
+        occurred_at:
+          type: string
+          format: date-time
+        linked_trace_count:
+          type: integer
+        linked_issue_count:
+          type: integer
+        strongest_confidence:
+          $ref: '#/components/schemas/Confidence'
+
+    ChangeDetail:
+      type: object
+      properties:
+        change_id:
+          type: string
+        type:
+          $ref: '#/components/schemas/ChangeType'
+        title:
+          type: string
+        target_service:
+          type: string
+        target_component:
+          type: string
+          nullable: true
+        variation:
+          type: string
+          nullable: true
+        actor:
+          type: string
+          nullable: true
+        source:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+
+    RunOverviewResponse:
+      type: object
+      properties:
+        kpis:
+          type: object
+          properties:
+            pending:
+              type: integer
+            processing:
+              type: integer
+            failed:
+              type: integer
+            dlq:
+              type: integer
+        distribution:
+          type: array
+          items:
+            type: object
+            properties:
+              status:
+                $ref: '#/components/schemas/RunStatus'
+              count:
+                type: integer
+
+    RunFailureGroupsResponse:
+      type: object
+      properties:
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              error_class:
+                type: string
+              count:
+                type: integer
+              latest_occurred_at:
+                type: string
+                format: date-time
+              representative_run_type:
+                type: string
+              retryable:
+                type: boolean
+
+    RunListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunDetail'
+        next_cursor:
+          type: string
+          nullable: true
+
+    RunDetail:
+      type: object
+      properties:
+        run_id:
+          type: string
+        run_type:
+          type: string
+        target_kind:
+          type: string
+        target_ref:
+          type: string
+          nullable: true
+        status:
+          $ref: '#/components/schemas/RunStatus'
+        attempt:
+          type: integer
+        max_attempts:
+          type: integer
+        error_class:
+          type: string
+          nullable: true
+        input_ref:
+          type: object
+          nullable: true
+          additionalProperties: true
+        output_ref:
+          type: object
+          nullable: true
+          additionalProperties: true
+
+    RunStateLogResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              from_status:
+                type: string
+                nullable: true
+              to_status:
+                type: string
+              attempt:
+                type: integer
+              reason:
+                type: string
+                nullable: true
+              occurred_at:
+                type: string
+                format: date-time
+
+    RetryRunRequest:
+      type: object
+      required: [idempotency_key, reason]
+      properties:
+        idempotency_key:
+          type: string
+        reason:
+          type: string
+
+    RetryRunResponse:
+      type: object
+      properties:
+        action:
+          type: string
+          example: retry_requested
+        original_run_id:
+          type: string
+        new_run_id:
+          type: string
+        idempotent_replay:
+          type: boolean
+        status:
+          type: string
+          example: accepted
+
+    ReprocessRequest:
+      type: object
+      required: [idempotency_key, target_kind, target_ref, reason]
+      properties:
+        idempotency_key:
+          type: string
+        target_kind:
+          type: string
+          enum: [dlq_batch, event_batch]
+        target_ref:
+          type: string
+        reason:
+          type: string
+
+    ReprocessResponse:
+      type: object
+      properties:
+        action:
+          type: string
+          example: reprocess_requested
+        new_run_id:
+          type: string
+        idempotent_replay:
+          type: boolean
+        status:
+          type: string
+          example: accepted
+
+    IssueListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/IssueListItem'
+        next_cursor:
+          type: string
+          nullable: true
+
+    IssueListItem:
+      type: object
+      properties:
+        issue_id:
+          type: string
+        issue_family:
+          type: string
+        severity:
+          type: integer
+        status:
+          $ref: '#/components/schemas/IssueStatus'
+        summary:
+          type: string
+          description: >
+            Safe normalized issue summary or classification. Must not contain raw
+            issue title, body, reporter, payload, or raw keywords.
+        source:
+          type: string
+        external_id_present:
+          type: boolean
+          description: Whether a source external identifier exists without exposing it.
+        created_at:
+          type: string
+          format: date-time
+
+    IssueDetail:
+      type: object
+      properties:
+        issue_id:
+          type: string
+        issue_family:
+          type: string
+        severity:
+          type: integer
+        status:
+          $ref: '#/components/schemas/IssueStatus'
+        summary:
+          type: string
+          description: >
+            Safe normalized issue summary or classification. Must not contain raw
+            issue title, body, reporter, payload, or raw keywords.
+        source:
+          type: string
+        external_id_present:
+          type: boolean
+          description: Whether a source external identifier exists without exposing it.
+        created_at:
+          type: string
+          format: date-time
+        reporter_present:
+          type: boolean
+          description: Whether reporter metadata exists without exposing reporter PII.
+        affected_variation_present:
+          type: boolean
+          description: Whether affected variation metadata exists without exposing the raw value.
+        keywords_count:
+          type: integer
+          minimum: 0
+          description: Count of keywords without exposing raw keyword strings.
+        body_present:
+          type: boolean
+          description: Whether issue body exists without exposing body text.
+
+    IssueDetailNullableResponse:
+      type: object
+      nullable: true
+      allOf:
+        - $ref: '#/components/schemas/IssueDetail'
+
+    UpdateIssueStatusRequest:
+      type: object
+      required: [status, expected_version]
+      properties:
+        status:
+          $ref: '#/components/schemas/IssueStatus'
+        expected_version:
+          type: integer
+          minimum: 1
+
+    UpdateIssueStatusResponse:
+      type: object
+      properties:
+        issue_id:
+          type: string
+        previous_status:
+          $ref: '#/components/schemas/IssueStatus'
+        current_status:
+          $ref: '#/components/schemas/IssueStatus'
+        previous_version:
+          type: integer
+        current_version:
+          type: integer
+
+    CdcFailureListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CdcFailureSummary'
+        next_cursor:
+          type: string
+          nullable: true
+
+    CdcFailureSummary:
+      type: object
+      description: Safe CDC failure metadata projection emitted by the CDC recovery DTO mapper.
+      properties:
+        failure_id:
+          type: string
+        failure_type:
+          type: string
+        source_topic:
+          type: string
+        source_table:
+          type: string
+        primary_key:
+          type: string
+        op:
+          type: string
+        ts_ms:
+          type: integer
+          format: int64
+        observed_field_names:
+          type: array
+          items:
+            type: string
+        missing_required_fields:
+          type: array
+          items:
+            type: string
+        unexpected_fields:
+          type: array
+          items:
+            type: string
+        forbidden_field_names_detected:
+          type: array
+          items:
+            type: string
+        parser_error_class:
+          type: string
+          nullable: true
+        parser_error_summary:
+          type: string
+          nullable: true
+          description: Safe diagnostic summary.
+        first_seen_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_seen_at:
+          type: string
+          format: date-time
+          nullable: true
+        attempt_count:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+        owner:
+          type: string
+          nullable: true
+        evidence_report_ref:
+          type: string
+          nullable: true
+        source_run_id:
+          type: string
+          nullable: true
+        latest_replay_request_id:
+          type: string
+          nullable: true
+
+    CdcFailureDetail:
+      allOf:
+        - $ref: '#/components/schemas/CdcFailureSummary'
+
+    CdcFailureStateLogListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CdcFailureStateLogEntry'
+        next_cursor:
+          type: string
+          nullable: true
+
+    CdcFailureStateLogEntry:
+      type: object
+      description: Append-only CDC failure state transition metadata.
+      properties:
+        state_log_id:
+          type: string
+        failure_id:
+          type: string
+        replay_request_id:
+          type: string
+          nullable: true
+        from_status:
+          type: string
+          nullable: true
+        to_status:
+          type: string
+        reason_code:
+          type: string
+        owner:
+          type: string
+          nullable: true
+        safe_metadata:
+          type: object
+          additionalProperties: true
+        evidence_report_ref:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    CdcReplayRequestListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CdcReplayRequestSummary'
+        next_cursor:
+          type: string
+          nullable: true
+
+    CdcReplayRequestSummary:
+      type: object
+      description: Safe CDC replay request metadata projection emitted by the CDC recovery DTO mapper.
+      properties:
+        failure_id:
+          type: string
+        replay_request_id:
+          type: string
+        requested_action:
+          type: string
+          enum: [retry, replay, reprocess]
+        status:
+          type: string
+        idempotency_key:
+          type: string
+        bounded_scope:
+          type: object
+          additionalProperties: true
+        target_topic:
+          type: string
+          nullable: true
+        target_table:
+          type: string
+          nullable: true
+        attempt_count:
+          type: integer
+          minimum: 0
+        owner:
+          type: string
+          nullable: true
+        source_run_id:
+          type: string
+          nullable: true
+        new_run_id:
+          type: string
+          nullable: true
+        cleanup_status:
+          type: string
+          nullable: true
+        evidence_report_ref:
+          type: string
+          nullable: true
+        requested_at:
+          type: string
+          format: date-time
+          nullable: true
+        approved_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    CdcReplayRequestDetail:
+      allOf:
+        - $ref: '#/components/schemas/CdcReplayRequestSummary'
+
+    CreateCdcReplayRequestRequest:
+      type: object
+      required:
+        - idempotency_key
+        - requested_action
+        - bounded_scope
+        - evidence_report_ref
+      additionalProperties: false
+      properties:
+        idempotency_key:
+          type: string
+        requested_action:
+          type: string
+          enum: [retry, replay, reprocess]
+        bounded_scope:
+          type: object
+          additionalProperties: true
+        target_topic:
+          type: string
+          nullable: true
+        target_table:
+          type: string
+          nullable: true
+        attempt_count:
+          type: integer
+          minimum: 0
+        owner:
+          type: string
+          nullable: true
+        requester_ref:
+          type: string
+          nullable: true
+        reason_summary:
+          type: string
+          nullable: true
+          description: Safe operator summary.
+        source_run_id:
+          type: string
+          nullable: true
+        evidence_report_ref:
+          type: string
+
+    CreateCdcReplayRequestResponse:
+      allOf:
+        - $ref: '#/components/schemas/CdcReplayRequestDetail'
+
+    ApproveCdcReplayRequestRequest:
+      type: object
+      required: [evidence_report_ref]
+      additionalProperties: false
+      properties:
+        evidence_report_ref:
+          type: string
+
+    ApproveCdcReplayRequestResponse:
+      allOf:
+        - $ref: '#/components/schemas/CdcReplayRequestDetail'
+
+    CancelCdcReplayRequestRequest:
+      type: object
+      required: [evidence_report_ref]
+      additionalProperties: false
+      properties:
+        evidence_report_ref:
+          type: string
+
+    CancelCdcReplayRequestResponse:
+      allOf:
+        - $ref: '#/components/schemas/CdcReplayRequestDetail'
+
+    CdcErrorBody:
+      type: object
+      description: Redacted CDC error object.
+      required: [code, message, status]
+      properties:
+        code:
+          type: string
+          enum:
+            - validation_error
+            - unauthorized
+            - forbidden
+            - not_found
+            - idempotency_conflict
+            - invalid_state_transition
+            - internal_error
+        message:
+          type: string
+        status:
+          type: integer
+          enum: [400, 401, 403, 404, 409, 500]
+        evidence_report_ref:
+          type: string
+          nullable: true
+
+    CdcErrorResponse:
+      type: object
+      description: Redacted CDC error envelope.
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/CdcErrorBody'
+
+    ErrorBody:
+      type: object
+      description: |
+        Stable machine-readable API error payload. Canonical API errors are
+        returned inside an ErrorResponse envelope so validation, auth,
+        not_found, conflict, and reliability/action failures can be parsed
+        consistently across read and write paths.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          nullable: true
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: array
+              items:
+                type: string
+            - type: string
+
+    ErrorResponse:
+      type: object
+      description: Canonical wrapped API error envelope.
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'

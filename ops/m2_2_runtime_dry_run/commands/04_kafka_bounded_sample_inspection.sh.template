@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# TEMPLATE ONLY - DO NOT RUN DIRECTLY
+# Purpose: prepare a future bounded Kafka sample inspection.
+# This template is echo-only by default.
+#
+# Placeholders only:
+#   KAFKA_BOOTSTRAP="<redacted-bootstrap>"
+#   BOUNDED_SAMPLE_COUNT="5"
+#   MAX_DURATION_SECONDS="120"
+#
+# Safety:
+#   do not print raw values
+#   do not record raw payloads or full message bodies
+#   inspect field-name sets only
+#
+# Stop conditions:
+#   stop immediately if prod_change.payload or prod_change.actor appears
+#   stop immediately if issue.title/body/payload/reporter appears
+#   stop immediately if connector emits __op/__ts_ms instead of op/ts_ms
+#   stop immediately if Debezium envelope fields appear as ClickHouse data columns
+#   stop immediately if unbounded connector execution is required
+
+echo "TEMPLATE ONLY - DO NOT RUN DIRECTLY"
+echo "Topics: cdc.aurora.prod_change cdc.aurora.trace cdc.aurora.issue"
+echo "Future bounded command examples are intentionally commented out and must be adapted to print field names only:"
+echo '# timeout "$MAX_DURATION_SECONDS" kafka-console-consumer --bootstrap-server "$KAFKA_BOOTSTRAP" --topic cdc.aurora.prod_change --max-messages "$BOUNDED_SAMPLE_COUNT"'
+echo '# timeout "$MAX_DURATION_SECONDS" kafka-console-consumer --bootstrap-server "$KAFKA_BOOTSTRAP" --topic cdc.aurora.trace --max-messages "$BOUNDED_SAMPLE_COUNT"'
+echo '# timeout "$MAX_DURATION_SECONDS" kafka-console-consumer --bootstrap-server "$KAFKA_BOOTSTRAP" --topic cdc.aurora.issue --max-messages "$BOUNDED_SAMPLE_COUNT"'

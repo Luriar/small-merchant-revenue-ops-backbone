@@ -1,0 +1,60 @@
+{
+  "purpose": "M2-8E-Prep safe OpenAPI merge gate examples",
+  "examples": {
+    "ownership_model": {
+      "api_contract_owner": "api_contract_owner_ref",
+      "route_implementation_owner": "route_owner_ref",
+      "security_safety_reviewer": "safety_reviewer_ref",
+      "product_ops_reviewer": "ops_reviewer_ref",
+      "final_merge_approver": "merge_approver_ref"
+    },
+    "merge_gate_status": {
+      "proposal_patch_status": "proposal_only",
+      "main_openapi_status": "not_merged",
+      "gate_status": "deferred_until_route_tests"
+    },
+    "read_route_gate": {
+      "route_name": "GET /api/v1/cdc/failures",
+      "gate_class": "read_only_safe_metadata",
+      "required_reviews": [
+        "api_contract_owner",
+        "safety_reviewer"
+      ]
+    },
+    "mutation_route_gate": {
+      "route_name": "POST /api/v1/cdc/replay-requests/{replay_request_id}/approve",
+      "gate_class": "maintainer_only_mutation",
+      "required_reviews": [
+        "api_contract_owner",
+        "safety_reviewer",
+        "product_ops_reviewer",
+        "final_merge_approver"
+      ]
+    },
+    "schema_parity_check": {
+      "schema_name": "CdcReplayRequestDetail",
+      "dto_reference": "toSafeReplayRequestDto",
+      "parity_status": "route_test_required"
+    },
+    "error_schema_redaction_check": {
+      "schema_name": "CdcErrorEnvelope",
+      "redaction_status": "safe_fields_only",
+      "allowed_fields": [
+        "code",
+        "message",
+        "status",
+        "evidence_report_ref"
+      ]
+    },
+    "deferred_merge_decision": {
+      "decision": "defer_main_openapi_merge",
+      "until": [
+        "route_level_tests_pass",
+        "auth_role_mapping_tested",
+        "error_adapter_tested",
+        "stub_repository_tests_pass",
+        "global_safety_scanner_passes"
+      ]
+    }
+  }
+}

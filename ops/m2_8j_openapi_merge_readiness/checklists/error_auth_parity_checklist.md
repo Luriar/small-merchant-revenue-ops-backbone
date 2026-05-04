@@ -1,0 +1,28 @@
+# M2-8J Error/Auth Parity Checklist
+
+- [ ] no main OpenAPI merge in M2-8J
+- [ ] M2-5 OpenAPI patch remains proposal-only
+- [ ] error envelope parity reviewed
+- [ ] auth/role documentation parity reviewed
+- [ ] 400 validation_error remains redacted
+- [ ] 401 unauthorized remains auth-layer safe
+- [ ] 403 forbidden remains auth-layer safe
+- [ ] 404 not_found remains safe
+- [ ] 409 idempotency_conflict remains safe
+- [ ] 409 invalid_state_transition remains safe
+- [ ] 500 internal_error remains redacted
+- [ ] readonly_role read-only behavior documented
+- [ ] operator approve/cancel forbidden documented
+- [ ] maintainer approve/cancel requirement documented
+- [ ] system_worker boundary documented
+- [ ] mutation route stricter review
+- [ ] no raw payloads
+- [ ] no full message bodies
+- [ ] no issue raw values
+- [ ] no prod_change payload/actor values
+- [ ] no stack traces
+- [ ] no SQL details
+- [ ] no persistence internals
+- [ ] no real DB queries
+- [ ] no SQL apply
+- [ ] no external infrastructure commands

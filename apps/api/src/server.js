@@ -1,0 +1,398 @@
+const http = require("node:http");
+
+const { enforceAuthorization } = require("./auth");
+const { handleRouteError } = require("./error-response");
+const { registerGracefulShutdown } = require("./graceful-shutdown");
+const { createNoopMetricsEmitter } = require("./metrics");
+const { attachRequestContext } = require("./request-context");
+const { handleChangeDetail, handleChangeIntake, handleChangeList, handleChangeTraces } = require("./change-handler");
+const { createChangeStoreFromEnv } = require("./change-store-factory");
+const { handleDashboardOverview, handleDashboardTimeline } = require("./dashboard-handler");
+const { handleEventIntake } = require("./event-handler");
+const { createEventStoreFromEnv } = require("./event-store-factory");
+const { handleIssueDetail, handleIssueIntake, handleIssueList, handleIssueStatusUpdate, handleIssueTraces } = require("./issue-handler");
+const { createIssueStoreFromEnv } = require("./issue-store-factory");
+const { handleReadPathSkeleton, isReadPathSkeletonRoute, shouldUseReadPathSkeleton } = require("./read-path-skeleton");
+const { handleRetryRun } = require("./retry-handler");
+const { createRunStoreFromEnv } = require("./run-store-factory");
+const { handleRunDetail, handleRunFailures, handleRunList, handleRunOverview, handleRunStateLog } = require("./run-read-handler");
+const { handleReprocessRun } = require("./reprocess-handler");
+const { getStartupConfig, validateStartupConfig } = require("./startup-config");
+const { handleTraceCreate, handleTraceDetail, handleTraceEvidences, handleTraceList, handleTracePrimaryIssue } = require("./trace-handler");
+const { createTraceStoreFromEnv } = require("./trace-store-factory");
+const { createCdcRecoveryRouteDispatcher } = require("./cdc-recovery/cdc-recovery-routes");
+
+function createLogger() {
+  return {
+    info(event, fields) {
+      process.stdout.write(`${JSON.stringify({ level: "info", event, ...fields })}\n`);
+    },
+  };
+}
+
+function createServer({
+  env = process.env,
+  changeStore,
+  eventStore,
+  issueStore,
+  runStore,
+  traceStore,
+  cdcRecoveryRoutes,
+  readPathSkeleton = false,
+  logger = createLogger(),
+  metrics = createNoopMetricsEmitter(),
+} = {}) {
+  const startupConfig = validateStartupConfig({ env });
+  const useReadPathSkeleton = readPathSkeleton && shouldUseReadPathSkeleton({
+    changeStore,
+    issueStore,
+    runStore,
+    traceStore,
+    startupConfig,
+  });
+  const resolvedChangeStore = changeStore ?? createChangeStoreFromEnv({ env });
+  const resolvedEventStore = eventStore ?? createEventStoreFromEnv({ env });
+  const resolvedIssueStore = issueStore ?? createIssueStoreFromEnv({ env });
+  const resolvedRunStore = runStore ?? createRunStoreFromEnv({ env });
+  const resolvedTraceStore = traceStore ?? createTraceStoreFromEnv({ env });
+  const resolvedCdcRecoveryRoutes = cdcRecoveryRoutes ?? createCdcRecoveryRouteDispatcher({
+    env,
+    authConfig: startupConfig.authConfig,
+  });
+
+  return http.createServer((request, response) => {
+    const requestContext = attachRequestContext({ request, response, logger, metrics });
+
+    Promise.resolve()
+      .then(() => dispatchRequest({
+        request,
+        response,
+        logger: requestContext.logger,
+        changeStore: resolvedChangeStore,
+        eventStore: resolvedEventStore,
+        issueStore: resolvedIssueStore,
+        runStore: resolvedRunStore,
+        traceStore: resolvedTraceStore,
+        cdcRecoveryRoutes: resolvedCdcRecoveryRoutes,
+        startupConfig,
+        useReadPathSkeleton,
+        metrics,
+      }))
+      .catch((error) => {
+        handleRouteError({ request, response, logger: requestContext.logger, metrics, error });
+      });
+  });
+}
+
+function dispatchRequest({
+  request,
+  response,
+  logger,
+  changeStore,
+  eventStore,
+  issueStore,
+  runStore,
+  traceStore,
+  cdcRecoveryRoutes,
+  startupConfig,
+  useReadPathSkeleton,
+  metrics,
+}) {
+    if (request.method === "GET" && request.url === "/healthz") {
+      return writeJson(response, 200, {
+        status: "ok",
+      });
+    }
+
+    if (request.method === "GET" && request.url === "/readyz") {
+      const readiness = getReadiness({ startupConfig });
+      return writeJson(response, readiness.ready ? 200 : 503, readiness.body);
+    }
+
+    enforceAuthorization({
+      request,
+      authConfig: startupConfig.authConfig,
+    });
+
+    if (useReadPathSkeleton && isReadPathSkeletonRoute(request)) {
+      return handleReadPathSkeleton({ request, response });
+    }
+
+    if (cdcRecoveryRoutes?.matches(request)) {
+      return cdcRecoveryRoutes.handle(request, response);
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/dashboard\/overview(?:\?.*)?$/.test(request.url)) {
+      return handleDashboardOverview({
+        response,
+        runStore,
+        traceStore,
+        logger,
+      });
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/dashboard\/timeline(?:\?.*)?$/.test(request.url)) {
+      return handleDashboardTimeline({
+        request,
+        response,
+        changeStore,
+        logger,
+        metrics,
+      });
+    }
+
+    if (request.method === "GET" && request.url.startsWith("/api/v1/runs")) {
+      if (/^\/api\/v1\/runs\/overview(?:\?.*)?$/.test(request.url)) {
+        return handleRunOverview({
+          response,
+          store: runStore,
+          logger,
+        });
+      }
+
+      if (/^\/api\/v1\/runs\/failures(?:\?.*)?$/.test(request.url)) {
+        return handleRunFailures({
+          response,
+          store: runStore,
+          logger,
+        });
+      }
+
+      const runStateLogMatch = request.url.match(/^\/api\/v1\/runs\/([^/?]+)\/state-log(?:\?.*)?$/);
+      if (runStateLogMatch) {
+        return handleRunStateLog({
+          request,
+          response,
+          store: runStore,
+          logger,
+          runId: decodeURIComponent(runStateLogMatch[1]),
+        });
+      }
+
+      const runDetailMatch = request.url.match(/^\/api\/v1\/runs\/([^/?]+)(?:\?.*)?$/);
+      if (runDetailMatch) {
+        return handleRunDetail({
+          request,
+          response,
+          store: runStore,
+          logger,
+          runId: decodeURIComponent(runDetailMatch[1]),
+        });
+      }
+
+      const isRunList = /^\/api\/v1\/runs(?:\?.*)?$/.test(request.url);
+      if (isRunList) {
+        return handleRunList({ request, response, store: runStore, logger, metrics });
+      }
+    }
+
+    const changeTracesMatch = request.method === "GET"
+      ? request.url.match(/^\/api\/v1\/changes\/([^/?]+)\/traces(?:\?.*)?$/)
+      : null;
+    if (changeTracesMatch) {
+      return handleChangeTraces({
+        request,
+        response,
+        changeStore,
+        traceStore,
+        logger,
+        metrics,
+        changeId: decodeURIComponent(changeTracesMatch[1]),
+      });
+    }
+
+    const changeDetailMatch = request.method === "GET"
+      ? request.url.match(/^\/api\/v1\/changes\/([^/?]+)(?:\?.*)?$/)
+      : null;
+    if (changeDetailMatch) {
+      return handleChangeDetail({
+        response,
+        store: changeStore,
+        logger,
+        changeId: decodeURIComponent(changeDetailMatch[1]),
+      });
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/changes(?:\?.*)?$/.test(request.url)) {
+      return handleChangeList({ request, response, store: changeStore, logger, metrics });
+    }
+
+    if (request.method === "POST" && request.url === "/api/v1/changes") {
+      return handleChangeIntake({ request, response, store: changeStore, logger, metrics });
+    }
+
+    if (request.method === "POST" && request.url === "/api/v1/events/intake") {
+      return handleEventIntake({ request, response, store: eventStore, logger, metrics });
+    }
+
+    const issueTracesMatch = request.method === "GET"
+      ? request.url.match(/^\/api\/v1\/issues\/([^/?]+)\/traces(?:\?.*)?$/)
+      : null;
+    if (issueTracesMatch) {
+      return handleIssueTraces({
+        request,
+        response,
+        issueStore,
+        traceStore,
+        logger,
+        metrics,
+        issueId: decodeURIComponent(issueTracesMatch[1]),
+      });
+    }
+
+    const issueDetailMatch = request.method === "GET"
+      ? request.url.match(/^\/api\/v1\/issues\/([^/?]+)(?:\?.*)?$/)
+      : null;
+    if (issueDetailMatch) {
+      return handleIssueDetail({
+        response,
+        store: issueStore,
+        logger,
+        issueId: decodeURIComponent(issueDetailMatch[1]),
+      });
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/issues(?:\?.*)?$/.test(request.url)) {
+      return handleIssueList({ request, response, store: issueStore, logger, metrics });
+    }
+
+    if (request.method === "POST" && request.url === "/api/v1/issues/intake") {
+      return handleIssueIntake({ request, response, store: issueStore, logger, metrics });
+    }
+
+    const issueStatusUpdateMatch = request.method === "PATCH"
+      ? request.url.match(/^\/api\/v1\/issues\/([^/?]+)\/status(?:\?.*)?$/)
+      : null;
+    if (issueStatusUpdateMatch) {
+      return handleIssueStatusUpdate({
+        request,
+        response,
+        store: issueStore,
+        logger,
+        metrics,
+        issueId: decodeURIComponent(issueStatusUpdateMatch[1]),
+      });
+    }
+
+    if (request.method === "POST" && request.url === "/api/v1/reprocess") {
+      return handleReprocessRun({ request, response, store: runStore, logger, metrics });
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/traces(?:\?.*)?$/.test(request.url)) {
+      return handleTraceList({ request, response, store: traceStore, logger, metrics });
+    }
+
+    const traceEvidencesMatch = request.method === "GET"
+      ? request.url.match(/^\/api\/v1\/traces\/([^/?]+)\/evidences(?:\?.*)?$/)
+      : null;
+    if (traceEvidencesMatch) {
+      return handleTraceEvidences({
+        response,
+        store: traceStore,
+        logger,
+        traceId: decodeURIComponent(traceEvidencesMatch[1]),
+      });
+    }
+
+    const tracePrimaryIssueMatch = request.method === "GET"
+      ? request.url.match(/^\/api\/v1\/traces\/([^/?]+)\/primary-issue(?:\?.*)?$/)
+      : null;
+    if (tracePrimaryIssueMatch) {
+      return handleTracePrimaryIssue({
+        response,
+        traceStore,
+        issueStore,
+        logger,
+        traceId: decodeURIComponent(tracePrimaryIssueMatch[1]),
+      });
+    }
+
+    const traceDetailMatch = request.method === "GET"
+      ? request.url.match(/^\/api\/v1\/traces\/([^/?]+)(?:\?.*)?$/)
+      : null;
+    if (traceDetailMatch) {
+      return handleTraceDetail({
+        response,
+        store: traceStore,
+        logger,
+        traceId: decodeURIComponent(traceDetailMatch[1]),
+      });
+    }
+
+    if (request.method === "POST" && request.url === "/api/v1/traces") {
+      return handleTraceCreate({ request, response, store: traceStore, logger, metrics });
+    }
+
+    const retryMatch = request.method === "POST"
+      ? request.url.match(/^\/api\/v1\/runs\/([^/]+)\/retry$/)
+      : null;
+    if (retryMatch) {
+      return handleRetryRun({
+        request,
+        response,
+        store: runStore,
+        logger,
+        metrics,
+        runId: decodeURIComponent(retryMatch[1]),
+      });
+    }
+
+    response.writeHead(404, {
+      "content-type": "application/json; charset=utf-8",
+    });
+    response.end(
+      JSON.stringify({
+        error: {
+          code: "not_found",
+          message: "route not found",
+        },
+      }),
+    );
+  return undefined;
+}
+
+if (require.main === module) {
+  const port = Number.parseInt(process.env.PORT ?? "3000", 10);
+  const logger = createLogger();
+  const metrics = createNoopMetricsEmitter();
+  const server = createServer({ logger, metrics, readPathSkeleton: true });
+  registerGracefulShutdown({
+    server,
+    logger,
+    metrics,
+  });
+
+  server.listen(port, () => {
+    process.stdout.write(`${JSON.stringify({ level: "info", event: "api_server_started", port })}\n`);
+  });
+}
+
+function getReadiness({ startupConfig }) {
+  if (startupConfig.auroraBackends.length > 0 && !startupConfig.hasDatabaseUrl) {
+    return {
+      ready: false,
+      body: {
+        status: "not_ready",
+      },
+    };
+  }
+
+  return {
+    ready: true,
+    body: {
+      status: "ready",
+    },
+  };
+}
+
+function writeJson(response, statusCode, body) {
+  response.writeHead(statusCode, {
+    "content-type": "application/json; charset=utf-8",
+  });
+  response.end(JSON.stringify(body));
+}
+
+module.exports = {
+  createServer,
+  getReadiness,
+};

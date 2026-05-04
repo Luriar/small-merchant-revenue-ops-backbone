@@ -1,0 +1,7 @@
+{
+  "replay_request_id": "replay_req_m2_5_001",
+  "failure_id": "fail_m2_5_delete_001",
+  "status": "cancelled",
+  "cancelled_by": "maintainer-owner",
+  "evidence_report_ref": "m2_5_evidence_report_placeholder"
+}

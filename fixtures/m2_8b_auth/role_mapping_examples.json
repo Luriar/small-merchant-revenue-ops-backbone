@@ -1,0 +1,89 @@
+{
+  "purpose": "M2-8B-Prep safe role mapping examples",
+  "roles": {
+    "readonly_role": {
+      "compatible_current_role": "viewer",
+      "allowed_actions": [
+        "list_cdc_failures",
+        "get_cdc_failure_detail",
+        "list_cdc_failure_state_log",
+        "list_cdc_replay_requests",
+        "get_cdc_replay_request_detail"
+      ],
+      "forbidden_actions": [
+        "create_replay_request",
+        "approve_replay_request",
+        "cancel_replay_request",
+        "link_new_run_id",
+        "mark_replay_runtime_status",
+        "mark_cleanup_complete"
+      ]
+    },
+    "operator": {
+      "compatible_current_role": "operator",
+      "allowed_actions": [
+        "list_cdc_failures",
+        "get_cdc_failure_detail",
+        "list_cdc_failure_state_log",
+        "create_replay_request",
+        "list_cdc_replay_requests",
+        "get_cdc_replay_request_detail"
+      ],
+      "forbidden_actions": [
+        "approve_replay_request",
+        "cancel_replay_request",
+        "link_new_run_id",
+        "mark_replay_runtime_status",
+        "mark_cleanup_complete"
+      ]
+    },
+    "maintainer": {
+      "compatible_current_role": null,
+      "allowed_actions": [
+        "list_cdc_failures",
+        "get_cdc_failure_detail",
+        "list_cdc_failure_state_log",
+        "create_replay_request",
+        "list_cdc_replay_requests",
+        "get_cdc_replay_request_detail",
+        "approve_replay_request",
+        "cancel_replay_request"
+      ],
+      "forbidden_actions": [
+        "link_new_run_id",
+        "mark_replay_runtime_status",
+        "mark_cleanup_complete"
+      ]
+    },
+    "system_worker": {
+      "compatible_current_role": null,
+      "allowed_actions": [
+        "link_new_run_id",
+        "mark_replay_runtime_status",
+        "mark_cleanup_complete"
+      ],
+      "forbidden_actions": [
+        "list_cdc_failures",
+        "get_cdc_failure_detail",
+        "list_cdc_failure_state_log",
+        "create_replay_request",
+        "list_cdc_replay_requests",
+        "get_cdc_replay_request_detail",
+        "approve_replay_request",
+        "cancel_replay_request"
+      ]
+    }
+  },
+  "safe_error_examples": {
+    "401": {
+      "code": "unauthorized",
+      "message": "unauthorized",
+      "status": 401
+    },
+    "403": {
+      "code": "forbidden",
+      "message": "forbidden",
+      "status": 403
+    }
+  }
+}

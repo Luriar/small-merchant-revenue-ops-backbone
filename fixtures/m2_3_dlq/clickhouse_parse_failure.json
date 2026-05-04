@@ -1,0 +1,34 @@
+{
+  "failure_id": "fail_m2_3_parse_001",
+  "failure_type": "clickhouse_json_each_row_parse_failure",
+  "source_topic": "cdc.aurora.trace",
+  "source_table": "public.trace",
+  "primary_key": {
+    "trace_id": "trace_2026_05_04_001"
+  },
+  "op": "c",
+  "ts_ms": 1777891200000,
+  "observed_field_names": [
+    "trace_id",
+    "change_id",
+    "primary_issue_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "op",
+    "ts_ms"
+  ],
+  "missing_required_fields": [
+    "confidence_score"
+  ],
+  "unexpected_fields": [],
+  "forbidden_field_names_detected": [],
+  "parser_error_class": "missing_required_field",
+  "parser_error_summary": "ClickHouse target mapping expected a required field name that was absent; values were not captured.",
+  "first_seen_at": "2026-05-04T00:00:00Z",
+  "last_seen_at": "2026-05-04T00:01:00Z",
+  "attempt_count": 1,
+  "status": "open",
+  "owner": "analytics-owner",
+  "evidence_report_ref": "m2_3_evidence_report_placeholder"
+}

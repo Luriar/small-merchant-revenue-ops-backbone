@@ -1,0 +1,356 @@
+# ============================================================================
+# LEGACY WARNING — NOT M2-1 CONTRACT SOURCE
+# ============================================================================
+# This file is not the M2-1 contract source.
+# Do not apply this file for M2-1.
+# Use infra/sql/aurora/m2_1_traceability_publication.sql and
+# infra/connectors/debezium/m2_1_traceability_connector.json instead.
+# This legacy file may contain broader replication settings such as
+# REPLICA IDENTITY FULL or old publication names.
+# ============================================================================
+
+# ============================================================================
+# Strimzi KafkaConnectors — Aurora CDC 태스크 3개
+# Version: v1.1 (시나리오 검증 반영)
+# ============================================================================
+#
+# v1.0 → v1.1 수정:
+#   - transforms.unwrap.add.fields.prefix: "" 추가 (모든 connector)
+#     Debezium 2.6 기본은 __op, __ts_ms prefix 추가
+#     CH DDL은 op, ts_ms 기준 → prefix 비활성화로 정합성 확보
+#
+# 구성:
+#   1. aurora-prod-change-connector — prod_change 테이블 CDC
+#   2. aurora-trace-connector        — trace 테이블 CDC
+#   3. aurora-issue-connector        — issue 테이블 CDC (PII 필드 제외)
+#
+# 각 connector는 공통으로:
+#   - PostgreSQL Debezium connector 사용
+#   - plugin.name=pgoutput (PostgreSQL 10+ 내장 논리 디코딩)
+#   - SMT 체인: ExtractNewRecordState (unwrap) + RegexRouter (토픽명 단순화)
+#   - snapshot.mode=initial (MVP)
+#
+# Aurora 준비 (connector 배포 전):
+#   - aurora_logical_replication.sql 실행
+#   - Publication 생성 (이 SQL 내 포함)
+#   - Replication slot (Debezium이 자동 생성)
+#
+# 전제 조건:
+#   - Aurora PostgreSQL 15 이상 (publication 컬럼 필터 기능 활용)
+# ============================================================================
+
+# ============================================================================
+# 1. prod_change 테이블 CDC
+# ============================================================================
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: aurora-prod-change-connector
+  namespace: data-platform
+  labels:
+    strimzi.io/cluster: aurora-cdc-connect
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1  # PostgreSQL CDC는 단일 태스크 (순서 보장)
+  config:
+    # ============================================================================
+    # Aurora 연결
+    # ============================================================================
+    database.hostname: ${AURORA_HOST}        # Aurora writer endpoint
+    database.port: 5432
+    database.user: ${AURORA_DB_USER}         # env에서 주입
+    database.password: ${AURORA_DB_PASSWORD}
+    database.dbname: productops               # DB 이름 (실제에 맞게)
+    database.server.name: aurora-productops  # Debezium 내부 식별자
+
+    # ============================================================================
+    # 논리 복제 설정
+    # ============================================================================
+    plugin.name: pgoutput  # PostgreSQL 10+ 내장 (Debezium 권장)
+    slot.name: aurora_prod_change_slot
+    publication.name: aurora_prod_change_pub
+    publication.autocreate.mode: filtered  # 지정한 테이블만 publication에 포함
+
+    # ============================================================================
+    # 대상 테이블 필터
+    # ============================================================================
+    schema.include.list: public
+    table.include.list: public.prod_change
+
+    # ============================================================================
+    # Snapshot 설정
+    # ============================================================================
+    snapshot.mode: initial           # 최초 기동 시 전체 데이터 + 이후 incremental
+    snapshot.locking.mode: none      # 스냅샷 중 테이블 락 없음 (Aurora는 MVCC)
+
+    # ============================================================================
+    # 토픽 설정
+    # ============================================================================
+    topic.prefix: aurora-productops  # Debezium 기본: aurora-productops.public.prod_change
+    # SMT RegexRouter로 최종 토픽명: cdc.aurora.prod_change
+
+    # ============================================================================
+    # SMT (Single Message Transform) 체인
+    # ============================================================================
+    # 1) ExtractNewRecordState: envelope 풀어서 flat 구조 + op/ts_ms 유지
+    # 2) RegexRouter: 토픽명 단순화
+    transforms: unwrap,route
+
+    transforms.unwrap.type: io.debezium.transforms.ExtractNewRecordState
+    transforms.unwrap.drop.tombstones: "false"           # tombstone 유지 (DELETE 이벤트)
+    transforms.unwrap.delete.handling.mode: rewrite      # DELETE도 'd' op 메시지로 rewrite
+    transforms.unwrap.add.fields: op,ts_ms               # op, ts_ms를 메시지에 포함
+    transforms.unwrap.add.fields.prefix: ""              # prefix 비활성화 (기본 __op → op)
+
+    transforms.route.type: org.apache.kafka.connect.transforms.RegexRouter
+    transforms.route.regex: "aurora-productops\\.public\\.(.+)"
+    transforms.route.replacement: "cdc.aurora.$1"
+
+    # ============================================================================
+    # 직렬화
+    # ============================================================================
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: "false"
+    value.converter.schemas.enable: "false"
+
+    # ============================================================================
+    # 데이터 타입 변환
+    # ============================================================================
+    time.precision.mode: connect    # TIMESTAMPTZ → 밀리초 타임스탬프 (CH DateTime64(3) 호환)
+    decimal.handling.mode: double    # NUMERIC/DECIMAL → double
+
+    # ============================================================================
+    # Heartbeat (WAL 진행 확인용)
+    # ============================================================================
+    heartbeat.interval.ms: 10000    # 10초. WAL position 유지에 중요
+    heartbeat.topics.prefix: __debezium-heartbeat
+
+    # ============================================================================
+    # 에러 처리
+    # ============================================================================
+    errors.tolerance: none          # 에러 발생 시 태스크 중단
+    errors.log.enable: "true"
+
+
+---
+# ============================================================================
+# 2. trace 테이블 CDC
+# ============================================================================
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: aurora-trace-connector
+  namespace: data-platform
+  labels:
+    strimzi.io/cluster: aurora-cdc-connect
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  config:
+    database.hostname: ${AURORA_HOST}
+    database.port: 5432
+    database.user: ${AURORA_DB_USER}
+    database.password: ${AURORA_DB_PASSWORD}
+    database.dbname: productops
+    database.server.name: aurora-productops
+
+    plugin.name: pgoutput
+    slot.name: aurora_trace_slot
+    publication.name: aurora_trace_pub
+    publication.autocreate.mode: filtered
+
+    schema.include.list: public
+    table.include.list: public.trace
+
+    snapshot.mode: initial
+    snapshot.locking.mode: none
+
+    topic.prefix: aurora-productops
+
+    transforms: unwrap,route
+
+    transforms.unwrap.type: io.debezium.transforms.ExtractNewRecordState
+    transforms.unwrap.drop.tombstones: "false"
+    transforms.unwrap.delete.handling.mode: rewrite
+    transforms.unwrap.add.fields: op,ts_ms
+    transforms.unwrap.add.fields.prefix: ""              # prefix 비활성화 (CH DDL과 정합)
+
+    transforms.route.type: org.apache.kafka.connect.transforms.RegexRouter
+    transforms.route.regex: "aurora-productops\\.public\\.(.+)"
+    transforms.route.replacement: "cdc.aurora.$1"
+
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: "false"
+    value.converter.schemas.enable: "false"
+
+    time.precision.mode: connect
+    decimal.handling.mode: double
+
+    heartbeat.interval.ms: 10000
+    heartbeat.topics.prefix: __debezium-heartbeat
+
+    errors.tolerance: none
+    errors.log.enable: "true"
+
+
+---
+# ============================================================================
+# 3. issue 테이블 CDC (PII 필드 제외)
+# ============================================================================
+#
+# 중요: column.exclude.list로 PII 원천 차단
+# 제외 컬럼:
+#   - body:     이슈 본문 (고객 정보 포함 가능)
+#   - payload:  외부 시스템 원본 (Zendesk/Intercom 페이로드)
+#   - reporter: 이메일/이름
+#   - title:    이슈 제목 (이름 포함 가능)
+#
+# CH issue_cdc 테이블에도 해당 컬럼 없음. 정합성 유지.
+# ============================================================================
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: aurora-issue-connector
+  namespace: data-platform
+  labels:
+    strimzi.io/cluster: aurora-cdc-connect
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  config:
+    database.hostname: ${AURORA_HOST}
+    database.port: 5432
+    database.user: ${AURORA_DB_USER}
+    database.password: ${AURORA_DB_PASSWORD}
+    database.dbname: productops
+    database.server.name: aurora-productops
+
+    plugin.name: pgoutput
+    slot.name: aurora_issue_slot
+    publication.name: aurora_issue_pub
+    publication.autocreate.mode: filtered
+
+    schema.include.list: public
+    table.include.list: public.issue
+
+    # ============================================================================
+    # PII 차단 — column.exclude.list
+    # ============================================================================
+    column.exclude.list: public.issue.body,public.issue.payload,public.issue.reporter,public.issue.title
+
+    snapshot.mode: initial
+    snapshot.locking.mode: none
+
+    topic.prefix: aurora-productops
+
+    transforms: unwrap,route
+
+    transforms.unwrap.type: io.debezium.transforms.ExtractNewRecordState
+    transforms.unwrap.drop.tombstones: "false"
+    transforms.unwrap.delete.handling.mode: rewrite
+    transforms.unwrap.add.fields: op,ts_ms
+    transforms.unwrap.add.fields.prefix: ""              # prefix 비활성화 (CH DDL과 정합)
+
+    transforms.route.type: org.apache.kafka.connect.transforms.RegexRouter
+    transforms.route.regex: "aurora-productops\\.public\\.(.+)"
+    transforms.route.replacement: "cdc.aurora.$1"
+
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: "false"
+    value.converter.schemas.enable: "false"
+
+    time.precision.mode: connect
+    decimal.handling.mode: double
+
+    heartbeat.interval.ms: 10000
+    heartbeat.topics.prefix: __debezium-heartbeat
+
+    errors.tolerance: none
+    errors.log.enable: "true"
+
+# ============================================================================
+# 배포 순서
+# ============================================================================
+#
+# 1. Aurora 논리 복제 설정 (aurora_logical_replication.sql 실행)
+# 2. MSK 토픽 생성 (연결자가 자동 생성 가능하지만 수동 권장):
+#      cdc.aurora.prod_change (파티션 1, 복제 3)
+#      cdc.aurora.trace       (파티션 1, 복제 3)
+#      cdc.aurora.issue       (파티션 1, 복제 3)
+#      __connect-offsets      (파티션 25, 복제 3, cleanup.policy=compact)
+#      __connect-configs      (파티션 1,  복제 3, cleanup.policy=compact)
+#      __connect-status       (파티션 5,  복제 3, cleanup.policy=compact)
+#      __debezium-heartbeat.* (파티션 1, 복제 3)
+# 3. External Secrets 생성 (aurora-cdc-credentials)
+# 4. KafkaConnect cluster 배포 (strimzi_connect.yaml)
+# 5. KafkaConnector 배포 (이 파일) — 순서대로 1개씩
+# 6. 상태 확인: kubectl get kafkaconnector -n data-platform
+#
+# 디버깅:
+#   - Connector 상태:     kubectl describe kafkaconnector <name>
+#   - Connect 로그:       kubectl logs -l strimzi.io/cluster=aurora-cdc-connect
+#   - Kafka 메시지 확인:  kafka-console-consumer --topic cdc.aurora.prod_change
+#
+# 롤백:
+#   - Connector 중지: kubectl delete kafkaconnector <name>
+#   - Publication / Slot 정리 (옵션): aurora_logical_replication.sql의 DROP 블록
+# ============================================================================
+#
+# ============================================================================
+# 운영 가이드
+# ============================================================================
+#
+# [1] Aurora 테이블 스키마 변경 시 순서
+#   역순으로 변경 시 데이터 유실 가능. 반드시 아래 순서 준수:
+#     1) Aurora에 ALTER TABLE ADD COLUMN (새 컬럼)
+#     2) CH 저장 테이블에 ADD COLUMN (DEFAULT 값 설정)
+#     3) CH Kafka engine 테이블에 ADD COLUMN (또는 DROP/RECREATE)
+#     4) CH MaterializedView 재생성 (새 컬럼 포함 SELECT)
+#        DETACH → DROP MV → ALTER → CREATE MV → ATTACH
+#     5) 이후 Aurora UPDATE 실행해 새 컬럼 전파 확인
+#
+#   역순 시나리오 (나쁜 예):
+#     Aurora ADD COLUMN → Debezium 메시지에 새 필드 포함 → CH Kafka 테이블 모르는 필드 무시
+#     → 과거 데이터는 CH에 안 들어감 (backfill 필요)
+#
+# [2] Issue 테이블 새 컬럼 PII 판단 체크리스트
+#   issue 테이블에 컬럼 추가 시 다음 체크:
+#     □ 이 컬럼이 사용자 개인정보를 포함하는가?
+#       - 이메일, 이름, 전화번호 → 포함
+#       - 내부 ID, 상태값, 타임스탬프 → 비포함
+#     □ 포함 가능성 있으면:
+#       □ strimzi_connectors.yaml의 column.exclude.list에 추가
+#       □ aurora_logical_replication.sql의 publication 컬럼 목록에서 제외
+#       □ CH issue_cdc 테이블에 추가하지 않음
+#     □ 배포 후 감사 쿼리로 확인:
+#       SELECT name FROM system.columns
+#       WHERE database = 'default' AND table = 'issue_cdc'
+#       AND name IN ('new_column');  -- 결과 0이어야 정상
+#
+# [3] CloudWatch 알람 (필수)
+#   Replication slot 관련 (WAL 누적 방지):
+#     OldestReplicationSlotLag > 1GB      → 경고 (1회)
+#     OldestReplicationSlotLag > 10GB     → 심각 (즉시 대응)
+#     TransactionLogsDiskUsage > 80%      → 경고
+#   Connect 상태:
+#     KafkaConnect pod 재시작 횟수 > 3/hour → 경고
+#     Connector task status = FAILED      → 심각
+#   Kafka 토픽:
+#     cdc.aurora.* 메시지 수신 없음 > 1h → 경고 (CDC 정지 감지)
+#
+# [4] Connector 장기 중단 시 복구
+#   - slot이 활성화되지 않으면 WAL 무한 증가
+#   - 긴급: SELECT pg_drop_replication_slot('<slot_name>');
+#   - 이후 재배포 시 Debezium이 새 slot 생성 + initial snapshot 재실행
+#   - 단, initial snapshot 중 Aurora 부하 주의
+#
+# [5] CH ↔ Debezium 필드명 매칭
+#   CH DDL의 Kafka engine 테이블은 op, ts_ms 컬럼 사용
+#   Debezium 2.6 기본은 __op, __ts_ms (double underscore prefix)
+#   → 이 파일에서 transforms.unwrap.add.fields.prefix: "" 설정으로 해결
+#   → prefix 변경 시 CH DDL도 반드시 동기 변경 필요
+#
+# ============================================================================

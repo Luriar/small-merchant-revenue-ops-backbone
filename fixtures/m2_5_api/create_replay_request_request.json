@@ -1,0 +1,16 @@
+{
+  "failure_id": "fail_m2_5_delete_001",
+  "requested_action": "replay",
+  "reason_summary": "DELETE shape mismatch requires bounded metadata replay review.",
+  "target_topic": "cdc.dlq.m2_1_traceability",
+  "target_table": "public.cdc_failure",
+  "bounded_scope": {
+    "failure_id": "fail_m2_5_delete_001",
+    "max_records": 1,
+    "time_window_ref": "bounded_m2_5_review_window"
+  },
+  "attempt_count": 1,
+  "owner": "platform-owner",
+  "idempotency_key": "cdc-replay:fail_m2_5_delete_001:replay:scope_001:1:platform-owner",
+  "evidence_report_ref": "m2_5_evidence_report_placeholder"
+}

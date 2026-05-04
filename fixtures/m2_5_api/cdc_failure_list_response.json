@@ -1,0 +1,22 @@
+{
+  "items": [
+    {
+      "failure_id": "fail_m2_5_parse_001",
+      "failure_type": "clickhouse_json_each_row_parse_failure",
+      "source_topic": "cdc.aurora.trace",
+      "source_table": "public.trace",
+      "primary_key": {
+        "trace_id": "trace_2026_05_04_201"
+      },
+      "op": "c",
+      "ts_ms": 1777891200000,
+      "first_seen_at": "2026-05-04T00:00:00Z",
+      "last_seen_at": "2026-05-04T00:01:00Z",
+      "attempt_count": 1,
+      "status": "open",
+      "owner": "analytics-owner",
+      "evidence_report_ref": "m2_5_evidence_report_placeholder"
+    }
+  ],
+  "next_cursor": null
+}

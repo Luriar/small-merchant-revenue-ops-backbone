@@ -1,0 +1,38 @@
+# M2-8F Auth Error DTO Test Checklist
+
+- [ ] no live route wiring in this step
+- [ ] no server.js modification in this step
+- [ ] no auth.js modification in this step
+- [ ] no error-response.js modification in this step
+- [ ] no cdc-recovery runtime module modification in this step
+- [ ] no OpenAPI main merge in this step
+- [ ] no SQL apply
+- [ ] no external infrastructure commands
+- [ ] test-only harness checks auth before service mutation
+- [ ] in-memory/stub repository behavior is observed through safe DTOs
+- [ ] route-level integration tests cover auth missing safe 401
+- [ ] readonly_role read allowed
+- [ ] readonly_role mutation forbidden
+- [ ] operator create allowed
+- [ ] operator approve/cancel forbidden
+- [ ] maintainer approve/cancel allowed
+- [ ] system_worker cannot create arbitrary replay request
+- [ ] safe 400 validation_error envelope
+- [ ] safe 403 forbidden envelope
+- [ ] safe 404 not_found envelope
+- [ ] safe 409 idempotency_conflict envelope
+- [ ] safe 409 invalid_state_transition envelope
+- [ ] safe 500 internal_error envelope
+- [ ] DTO mapper safety for failure DTOs
+- [ ] DTO mapper safety for replay request DTOs
+- [ ] DTO mapper safety for state log DTOs
+- [ ] schema parity against the proposal patch
+- [ ] success responses contain no forbidden raw keys
+- [ ] error responses contain no forbidden raw keys
+- [ ] no raw payloads
+- [ ] no full message bodies
+- [ ] no issue raw values
+- [ ] no prod_change payload/actor values
+- [ ] no stack traces
+- [ ] no SQL details
+- [ ] no persistence internals

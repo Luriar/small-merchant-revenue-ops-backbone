@@ -1,0 +1,14 @@
+{
+  "decision": "conflict",
+  "http_status": 409,
+  "code": "IDEMPOTENCY_CONFLICT",
+  "failure_id": "cdc_fail_20260504_0001",
+  "replay_request_id": "cdc_replay_req_20260504_0001",
+  "status": "requested",
+  "idempotency_key": "idem_cdc_replay_20260504_0001",
+  "conflicting_fields": [
+    "bounded_scope",
+    "requested_action"
+  ],
+  "evidence_report_ref": "ops/evidence/m2-6/cdc_fail_20260504_0001.md"
+}

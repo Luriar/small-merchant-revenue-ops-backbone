@@ -1,0 +1,8 @@
+{
+  "replay_request_id": "replay_req_m2_5_001",
+  "failure_id": "fail_m2_5_delete_001",
+  "status": "requested",
+  "idempotency_key": "cdc-replay:fail_m2_5_delete_001:replay:scope_001:1:platform-owner",
+  "new_run_id": null,
+  "evidence_report_ref": "m2_5_evidence_report_placeholder"
+}

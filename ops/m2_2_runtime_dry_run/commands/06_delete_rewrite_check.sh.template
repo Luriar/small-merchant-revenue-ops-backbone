@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# TEMPLATE ONLY - DO NOT RUN DIRECTLY
+# Purpose: prepare future DELETE rewrite behavior checks.
+# This template is echo-only by default.
+#
+# Placeholders only:
+#   BOUNDED_SAMPLE_COUNT="3"
+#   MAX_DURATION_SECONDS="180"
+#
+# Safety:
+#   do not print raw values
+#   do not record raw payloads or full message bodies
+#   record DELETE primary-key presence and _deleted mapping only
+#
+# Stop conditions:
+#   stop immediately if DELETE emits __op/__ts_ms instead of op/ts_ms
+#   stop immediately if Debezium envelope fields appear as ClickHouse data columns
+#   stop immediately if anyone proposes REPLICA IDENTITY FULL as a quick fix without review
+
+echo "TEMPLATE ONLY - DO NOT RUN DIRECTLY"
+echo "Verify DELETE op=d, primary key presence, and _deleted=1 mapping in a future bounded dry run."
+echo "Future bounded command examples are intentionally omitted until runtime tooling is approved."

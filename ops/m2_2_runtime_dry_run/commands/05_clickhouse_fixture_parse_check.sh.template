@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# TEMPLATE ONLY - DO NOT RUN DIRECTLY
+# Purpose: prepare future ClickHouse JSONEachRow fixture parsing checks.
+# This template is echo-only by default.
+#
+# Placeholders only:
+#   CLICKHOUSE_CLIENT_TARGET="<redacted-clickhouse-target>"
+#   MAX_DURATION_SECONDS="300"
+#   BOUNDED_SAMPLE_COUNT="6"
+#
+# Safety:
+#   do not print raw values
+#   do not record raw payloads or full message bodies
+#   use fixtures/m2_1_cdc before bounded real samples
+#
+# Stop conditions:
+#   stop immediately if Debezium envelope fields appear as ClickHouse data columns
+#   stop immediately if connector emits __op/__ts_ms instead of op/ts_ms
+#   stop immediately if forbidden fields appear in ClickHouse CDC path
+
+echo "TEMPLATE ONLY - DO NOT RUN DIRECTLY"
+echo "Review fixtures/m2_1_cdc and infra/sql/clickhouse/m2_1_traceability_cdc.sql before approved parse checks."
+echo "Future bounded command examples are intentionally commented out:"
+echo '# timeout "$MAX_DURATION_SECONDS" clickhouse-client --host "$CLICKHOUSE_CLIENT_TARGET" --query "<fixture JSONEachRow parse check>"'

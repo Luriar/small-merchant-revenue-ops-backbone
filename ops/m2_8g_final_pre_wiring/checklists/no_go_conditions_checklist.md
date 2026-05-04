@@ -1,0 +1,35 @@
+# M2-8G No-Go Conditions Checklist
+
+- [ ] no live route wiring in M2-8G
+- [ ] no server.js modification in M2-8G
+- [ ] no auth.js modification in M2-8G
+- [ ] no error-response.js modification in M2-8G
+- [ ] no cdc-recovery runtime module modification in M2-8G
+- [ ] no OpenAPI main merge in M2-8G
+- [ ] no SQL apply
+- [ ] no external infrastructure commands
+- [ ] M2-8A complete
+- [ ] M2-8B-Prep complete
+- [ ] M2-8C-Prep complete
+- [ ] M2-8D-Prep complete
+- [ ] M2-8E-Prep complete
+- [ ] M2-8F-Prep complete
+- [ ] production server.js route wiring remains no-go
+- [ ] main OpenAPI merge remains no-go
+- [ ] real DB queries remain no-go
+- [ ] Aurora connection remains no-go
+- [ ] direct Aurora repository implementation remains no-go
+- [ ] M2-8B next step is test-only harness
+- [ ] in-memory/stub repository required
+- [ ] safe CDC error adapter required
+- [ ] auth role mapping tests required
+- [ ] DTO mapper safety tests required
+- [ ] OpenAPI proposal parity required
+- [ ] global safety scanner required
+- [ ] no raw payloads
+- [ ] no full message bodies
+- [ ] no issue raw values
+- [ ] no prod_change payload/actor values
+- [ ] no stack traces
+- [ ] no SQL details
+- [ ] no persistence internals

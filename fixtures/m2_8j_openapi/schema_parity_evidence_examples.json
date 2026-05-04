@@ -1,0 +1,41 @@
+{
+  "examples": {
+    "route_to_proposal_coverage": {
+      "safe_route_label": "GET cdc failures",
+      "proposal_schema": "CdcFailureSummary",
+      "status": "pass"
+    },
+    "schema_to_dto_parity": {
+      "schema_name": "CdcFailureDetail",
+      "dto_field_set": "FAILURE_RESPONSE_FIELDS",
+      "status": "conditional"
+    },
+    "request_schema_parity": {
+      "schema_name": "CreateCdcReplayRequestRequest",
+      "runtime_reference": "validateCreateReplayRequest",
+      "status": "conditional"
+    },
+    "response_schema_parity": {
+      "schema_name": "CreateCdcReplayRequestResponse",
+      "dto_field_set": "REPLAY_REQUEST_RESPONSE_FIELDS",
+      "status": "conditional"
+    },
+    "error_schema_parity": {
+      "safe_error_code": "idempotency_conflict",
+      "status": "conditional"
+    },
+    "auth_role_documentation_parity": {
+      "role_label": "maintainer",
+      "safe_action_label": "approve_cancel_allowed",
+      "status": "pass"
+    },
+    "merge_gate_status": {
+      "gate_label": "safety_reviewer",
+      "status": "required"
+    },
+    "future_merge_decision": {
+      "decision_label": "conditionally_ready",
+      "next_step": "explicit_openapi_merge_task"
+    }
+  }
+}

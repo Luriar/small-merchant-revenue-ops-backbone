@@ -1,0 +1,49 @@
+{
+  "purpose": "M2-8C-Prep safe CDC error envelope examples",
+  "examples": {
+    "validation_error": {
+      "status": 400,
+      "code": "validation_error",
+      "message": "validation failed",
+      "evidence_report_ref": "ops/evidence/m2-8c-validation.md"
+    },
+    "unauthorized": {
+      "status": 401,
+      "code": "unauthorized",
+      "message": "unauthorized"
+    },
+    "forbidden": {
+      "status": 403,
+      "code": "forbidden",
+      "message": "forbidden"
+    },
+    "not_found": {
+      "status": 404,
+      "code": "not_found",
+      "message": "record not found"
+    },
+    "idempotency_conflict": {
+      "status": 409,
+      "code": "idempotency_conflict",
+      "message": "idempotency conflict",
+      "evidence_report_ref": "ops/evidence/m2-8c-idempotency.md"
+    },
+    "invalid_state_transition": {
+      "status": 409,
+      "code": "invalid_state_transition",
+      "message": "invalid state transition",
+      "evidence_report_ref": "ops/evidence/m2-8c-transition.md"
+    },
+    "worker_boundary_conflict": {
+      "status": 409,
+      "code": "worker_boundary_conflict",
+      "message": "worker action is not allowed for this boundary",
+      "evidence_report_ref": "ops/evidence/m2-8c-worker.md"
+    },
+    "internal_error": {
+      "status": 500,
+      "code": "internal_error",
+      "message": "internal server error"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "failure_id": "fail_m2_3_delete_001",
+  "failure_type": "delete_shape_mismatch",
+  "source_topic": "cdc.aurora.issue",
+  "source_table": "public.issue",
+  "primary_key": {
+    "issue_id": "iss_2026_05_04_001"
+  },
+  "op": "d",
+  "ts_ms": 1777891200000,
+  "observed_field_names": [
+    "issue_id",
+    "op",
+    "ts_ms"
+  ],
+  "missing_required_fields": [
+    "status",
+    "severity"
+  ],
+  "unexpected_fields": [],
+  "forbidden_field_names_detected": [],
+  "parser_error_class": "delete_shape_mismatch",
+  "parser_error_summary": "Runtime DELETE shape under REPLICA IDENTITY DEFAULT was partial; values were not captured.",
+  "first_seen_at": "2026-05-04T00:00:00Z",
+  "last_seen_at": "2026-05-04T00:02:00Z",
+  "attempt_count": 1,
+  "status": "open",
+  "owner": "platform-owner",
+  "evidence_report_ref": "m2_3_evidence_report_placeholder"
+}

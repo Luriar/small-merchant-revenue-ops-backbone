@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# TEMPLATE ONLY - DO NOT RUN DIRECTLY
+# Purpose: prepare a future publication review/apply gate for M2-2 runtime dry run.
+# This template is echo-only by default.
+#
+# Placeholders only:
+#   AURORA_PSQL_TARGET="<redacted-psql-target>"
+#   MAX_DURATION_SECONDS="300"
+#   BOUNDED_SAMPLE_COUNT="0"
+#
+# Safety:
+#   do not print raw values
+#   do not record raw payloads or full message bodies
+#   review column lists before any apply
+#
+# Stop conditions:
+#   stop immediately if publication contains FOR ALL TABLES
+#   stop immediately if publication contains FOR TABLES IN SCHEMA
+#   stop immediately if prod_change.payload or prod_change.actor appears
+#   stop immediately if issue.title/body/payload/reporter appears
+#   stop immediately if anyone proposes REPLICA IDENTITY FULL as a quick fix without review
+
+echo "TEMPLATE ONLY - DO NOT RUN DIRECTLY"
+echo "Review infra/sql/aurora/m2_1_traceability_publication.sql manually before an approved execution."
+echo "Future bounded command example is intentionally commented out:"
+echo '# timeout "$MAX_DURATION_SECONDS" psql "$AURORA_PSQL_TARGET" -f infra/sql/aurora/m2_1_traceability_publication.sql'

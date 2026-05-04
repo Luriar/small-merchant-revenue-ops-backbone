@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# TEMPLATE ONLY - DO NOT RUN DIRECTLY
+# Purpose: prepare a future bounded Debezium connector dry-run start.
+# This template is echo-only by default.
+#
+# Placeholders only:
+#   CONNECT_NAMESPACE="<redacted-namespace>"
+#   CONNECT_CLUSTER="<redacted-connect-cluster>"
+#   MAX_DURATION_SECONDS="600"
+#   BOUNDED_SAMPLE_COUNT="0"
+#
+# Safety:
+#   do not print raw values
+#   do not record raw payloads or full message bodies
+#   do not record connector secrets, endpoints, account IDs, tokens, passwords, or SecretString
+#
+# Stop conditions:
+#   stop immediately if connector uses publication.autocreate.mode=all_tables
+#   stop immediately if unbounded connector execution is required
+#   stop immediately if replication slot lag or WAL pressure grows unexpectedly
+#   stop immediately if prod_change.payload or prod_change.actor appears
+#   stop immediately if issue.title/body/payload/reporter appears
+
+echo "TEMPLATE ONLY - DO NOT RUN DIRECTLY"
+echo "Review infra/connectors/debezium/m2_1_traceability_connector.json before approved bounded connector start."
+echo "Future bounded command examples are intentionally commented out:"
+echo '# kubectl -n "$CONNECT_NAMESPACE" apply -f <approved-generated-connector-manifest>'
+echo '# sleep "$MAX_DURATION_SECONDS" && kubectl -n "$CONNECT_NAMESPACE" delete kafkaconnector m2-1-traceability-connector'

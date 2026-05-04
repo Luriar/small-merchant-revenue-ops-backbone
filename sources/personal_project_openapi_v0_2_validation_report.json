@@ -1,0 +1,21 @@
+{
+  "generated_by": "scripts/validate_openapi.py",
+  "validation_passed": true,
+  "yaml_parse_ok": true,
+  "custom_ref_and_path_validation_ok": true,
+  "openapi_version": "3.0.3",
+  "info_title": "Event-Driven Product Ops Backbone API",
+  "info_version": "0.2.0",
+  "paths_count": 22,
+  "schemas_count": 40,
+  "operation_count": 23,
+  "internal_ref_count": 175,
+  "missing_internal_ref_count": 0,
+  "missing_internal_refs": [],
+  "has_error_body": true,
+  "has_error_response": true,
+  "error_response_wrapped": true,
+  "error_body_required_code_message": true,
+  "error_count": 0,
+  "errors": []
+}

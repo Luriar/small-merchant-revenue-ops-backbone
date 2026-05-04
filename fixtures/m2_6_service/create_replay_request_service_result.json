@@ -1,0 +1,21 @@
+{
+  "decision": "created",
+  "http_status": 201,
+  "failure_id": "cdc_fail_20260504_0001",
+  "replay_request_id": "cdc_replay_req_20260504_0001",
+  "requested_action": "replay",
+  "status": "requested",
+  "idempotency_key": "idem_cdc_replay_20260504_0001",
+  "bounded_scope": {
+    "scope_kind": "single_failure",
+    "source_topic": "cdc.aurora.public.trace",
+    "source_table": "trace",
+    "primary_key_ref": "trace:tr_20260504_0001",
+    "max_records": 1
+  },
+  "source_run_id": "run_20260504_source_0001",
+  "new_run_id": null,
+  "cleanup_status": "not_started",
+  "evidence_report_ref": "ops/evidence/m2-6/cdc_fail_20260504_0001.md",
+  "state_log_appended": true
+}

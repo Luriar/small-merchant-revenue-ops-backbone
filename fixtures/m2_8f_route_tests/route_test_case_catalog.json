@@ -1,0 +1,146 @@
+{
+  "version": "m2-8f-prep",
+  "description": "Safe route-level integration test case catalog for CDC recovery contract planning.",
+  "examples": {
+    "auth_missing_401": {
+      "route_label": "GET cdc failures",
+      "status": 401,
+      "expected_code": "unauthorized",
+      "expected_role": "none",
+      "assertions": ["safe_error_envelope", "no_service_mutation"]
+    },
+    "readonly_read_success": {
+      "route_label": "GET cdc failure detail",
+      "status": 200,
+      "expected_code": "ok",
+      "expected_role": "readonly_role",
+      "assertions": ["safe_failure_dto", "schema_parity"]
+    },
+    "readonly_mutation_403": {
+      "route_label": "POST cdc replay request create",
+      "status": 403,
+      "expected_code": "forbidden",
+      "expected_role": "readonly_role",
+      "assertions": ["safe_error_envelope", "no_service_mutation"]
+    },
+    "operator_create_success": {
+      "route_label": "POST cdc replay request create",
+      "status": 201,
+      "expected_code": "created",
+      "expected_role": "operator",
+      "assertions": ["safe_replay_request_dto", "evidence_ref_present"]
+    },
+    "operator_approve_forbidden_403": {
+      "route_label": "POST cdc replay request approve",
+      "status": 403,
+      "expected_code": "forbidden",
+      "expected_role": "operator",
+      "assertions": ["maintainer_only", "no_service_mutation"]
+    },
+    "maintainer_approve_success": {
+      "route_label": "POST cdc replay request approve",
+      "status": 200,
+      "expected_code": "ok",
+      "expected_role": "maintainer",
+      "assertions": ["safe_replay_request_dto", "state_transition_allowed"]
+    },
+    "system_worker_create_forbidden_403": {
+      "route_label": "POST cdc replay request create",
+      "status": 403,
+      "expected_code": "forbidden",
+      "expected_role": "system_worker",
+      "assertions": ["worker_boundary", "no_human_request_creation"]
+    },
+    "failure_list_success": {
+      "route_label": "GET cdc failures",
+      "status": 200,
+      "expected_code": "ok",
+      "expected_role": "readonly_role",
+      "assertions": ["safe_failure_list", "safe_field_set_only"]
+    },
+    "failure_detail_not_found_404": {
+      "route_label": "GET cdc failure detail",
+      "status": 404,
+      "expected_code": "not_found",
+      "expected_role": "readonly_role",
+      "assertions": ["safe_error_envelope", "safe_identifier_only"]
+    },
+    "state_log_success": {
+      "route_label": "GET cdc failure state log",
+      "status": 200,
+      "expected_code": "ok",
+      "expected_role": "readonly_role",
+      "assertions": ["safe_state_log_list", "append_only_observation"]
+    },
+    "create_validation_error_400": {
+      "route_label": "POST cdc replay request create",
+      "status": 400,
+      "expected_code": "validation_error",
+      "expected_role": "operator",
+      "assertions": ["safe_error_envelope", "safe_field_names_only"]
+    },
+    "create_success_201": {
+      "route_label": "POST cdc replay request create",
+      "status": 201,
+      "expected_code": "created",
+      "expected_role": "operator",
+      "assertions": ["safe_replay_request_dto", "state_log_observed"]
+    },
+    "idempotent_duplicate_200": {
+      "route_label": "POST cdc replay request create",
+      "status": 200,
+      "expected_code": "ok",
+      "expected_role": "operator",
+      "assertions": ["same_safe_result", "no_new_intent"]
+    },
+    "idempotency_conflict_409": {
+      "route_label": "POST cdc replay request create",
+      "status": 409,
+      "expected_code": "idempotency_conflict",
+      "expected_role": "operator",
+      "assertions": ["safe_error_envelope", "no_compared_values"]
+    },
+    "approve_invalid_state_409": {
+      "route_label": "POST cdc replay request approve",
+      "status": 409,
+      "expected_code": "invalid_state_transition",
+      "expected_role": "maintainer",
+      "assertions": ["safe_error_envelope", "no_state_mutation"]
+    },
+    "cancel_invalid_state_409": {
+      "route_label": "POST cdc replay request cancel",
+      "status": 409,
+      "expected_code": "invalid_state_transition",
+      "expected_role": "maintainer",
+      "assertions": ["safe_error_envelope", "no_state_mutation"]
+    },
+    "internal_error_500": {
+      "route_label": "GET cdc replay request detail",
+      "status": 500,
+      "expected_code": "internal_error",
+      "expected_role": "maintainer",
+      "assertions": ["safe_error_envelope", "generic_message"]
+    },
+    "success_no_raw_field_regression": {
+      "route_label": "all success routes",
+      "status": 200,
+      "expected_code": "ok",
+      "expected_role": "maintainer",
+      "assertions": ["forbidden_key_scan", "safe_metadata_only"]
+    },
+    "error_no_raw_field_regression": {
+      "route_label": "all error routes",
+      "status": 409,
+      "expected_code": "safe_error",
+      "expected_role": "operator",
+      "assertions": ["forbidden_key_scan", "redacted_error_only"]
+    },
+    "schema_parity_check": {
+      "route_label": "all cdc proposal routes",
+      "status": 200,
+      "expected_code": "schema_parity",
+      "expected_role": "maintainer",
+      "assertions": ["proposal_patch_reference", "safe_field_level_match"]
+    }
+  }
+}

@@ -1,0 +1,35 @@
+# M2-8F Stub Repository Test Checklist
+
+- [ ] no live route wiring in this step
+- [ ] no server.js modification in this step
+- [ ] no auth.js modification in this step
+- [ ] no error-response.js modification in this step
+- [ ] no cdc-recovery runtime module modification in this step
+- [ ] no OpenAPI main merge in this step
+- [ ] no SQL apply
+- [ ] no external infrastructure commands
+- [ ] test-only harness uses an explicit in-memory/stub repository
+- [ ] route-level integration tests use the stub before live persistence
+- [ ] stub simulates safe list failure results
+- [ ] stub simulates safe failure detail results
+- [ ] stub simulates safe state log results
+- [ ] stub simulates safe replay request results
+- [ ] stub simulates not found safe 404
+- [ ] stub simulates create success safe 201
+- [ ] stub simulates exact idempotent duplicate safe 200
+- [ ] stub simulates idempotency conflict safe 409
+- [ ] stub simulates invalid state transition safe 409
+- [ ] stub simulates unknown internal error safe 500
+- [ ] stub observes state log append-only expectation
+- [ ] stub observes original failure immutable expectation
+- [ ] stub observes original run immutable expectation
+- [ ] system_worker cannot create arbitrary replay request
+- [ ] linkNewRunId remains future worker-only
+- [ ] repository output safe metadata only
+- [ ] no raw payloads
+- [ ] no full message bodies
+- [ ] no issue raw values
+- [ ] no prod_change payload/actor values
+- [ ] no stack traces
+- [ ] no SQL details
+- [ ] no persistence internals

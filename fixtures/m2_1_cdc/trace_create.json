@@ -1,0 +1,20 @@
+{
+  "op": "c",
+  "ts_ms": 1714785600000,
+  "trace_id": "trc_m2_1_demo_checkout_error",
+  "change_id": "chg_m2_1_demo_checkout_release",
+  "primary_issue_id": "iss_m2_1_demo_checkout_timeout",
+  "status": "suspected",
+  "confidence": "strong",
+  "anomaly_window_start": "2026-05-04T01:12:00.000Z",
+  "anomaly_window_end": "2026-05-04T01:17:00.000Z",
+  "anomaly_type": "error",
+  "anomaly_metric": "checkout_submit_error_rate",
+  "anomaly_detail": "{\"baseline\":0.012,\"actual\":0.078,\"delta_pct\":550.0}",
+  "linked_event_count": 42,
+  "linked_issue_count": 1,
+  "evidence_count": 2,
+  "generated_by_run_id": "run_m2_1_demo_trace_generation",
+  "created_at": "2026-05-04T01:18:00.000Z",
+  "updated_at": "2026-05-04T01:18:00.000Z"
+}

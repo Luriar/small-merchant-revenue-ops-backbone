@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# TEMPLATE ONLY - DO NOT RUN DIRECTLY
+# Purpose: prepare future cleanup and replication slot checks.
+# This template is echo-only by default.
+#
+# Placeholders only:
+#   AURORA_PSQL_TARGET="<redacted-psql-target>"
+#   CONNECT_NAMESPACE="<redacted-namespace>"
+#   MAX_DURATION_SECONDS="300"
+#   BOUNDED_SAMPLE_COUNT="0"
+#
+# Safety:
+#   do not print raw values
+#   do not record raw payloads or full message bodies
+#   record slot lag summary and cleanup status only
+#
+# Stop conditions:
+#   stop immediately if replication slot lag or WAL pressure grows unexpectedly
+#   stop immediately if cleanup owner is not assigned
+
+echo "TEMPLATE ONLY - DO NOT RUN DIRECTLY"
+echo "Future cleanup commands must be approved by the dry-run owner and cleanup owner."
+echo "Future bounded command examples are intentionally commented out:"
+echo '# timeout "$MAX_DURATION_SECONDS" psql "$AURORA_PSQL_TARGET" -f infra/sql/aurora/m2_1_logical_replication_prereq_check.sql'
+echo '# kubectl -n "$CONNECT_NAMESPACE" delete kafkaconnector m2-1-traceability-connector'

@@ -1,0 +1,32 @@
+# M2-8B Start Readiness Checklist
+
+- [ ] no live route wiring in M2-8G
+- [ ] no server.js modification in M2-8G
+- [ ] no auth.js modification in M2-8G
+- [ ] no error-response.js modification in M2-8G
+- [ ] no cdc-recovery runtime module modification in M2-8G
+- [ ] no OpenAPI main merge in M2-8G
+- [ ] no SQL apply
+- [ ] no external infrastructure commands
+- [ ] M2-8A complete
+- [ ] M2-8B-Prep complete
+- [ ] M2-8C-Prep complete
+- [ ] M2-8D-Prep complete
+- [ ] M2-8E-Prep complete
+- [ ] M2-8F-Prep complete
+- [ ] M2-8B next step is test-only harness
+- [ ] test-only harness scope is isolated from production server.js
+- [ ] in-memory/stub repository required
+- [ ] safe CDC error adapter required
+- [ ] auth role mapping tests required
+- [ ] DTO mapper safety tests required
+- [ ] OpenAPI proposal parity required
+- [ ] global safety scanner required
+- [ ] route-level integration tests required before production route wiring
+- [ ] no raw payloads
+- [ ] no full message bodies
+- [ ] no issue raw values
+- [ ] no prod_change payload/actor values
+- [ ] no stack traces
+- [ ] no SQL details
+- [ ] no persistence internals

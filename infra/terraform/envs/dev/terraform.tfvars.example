@@ -1,0 +1,21 @@
+# envs/dev — 변수 오버라이드 예시
+#
+# 사용법:
+#   cp terraform.tfvars.example terraform.tfvars
+#   # 필요한 값만 수정
+#   terraform apply
+#
+# terraform.tfvars 자체는 .gitignore 처리할 것.
+
+# aws_region   = "ap-northeast-2"
+# project_name = "productops-dev"
+# vpc_cidr     = "10.0.0.0/20"
+# azs          = ["ap-northeast-2a", "ap-northeast-2c"]
+
+# M1-only is the default. Set true only after the M2 readiness gate passes.
+# enable_m2 = false
+
+# aurora_engine_version      = "15.5"
+# aurora_min_capacity        = 0.5
+# aurora_max_capacity        = 4
+# aurora_deletion_protection = false

@@ -1,0 +1,41 @@
+{
+  "failure_id": "fail_m2_4_replay_001",
+  "failure_type": "delete_shape_mismatch",
+  "source_topic": "cdc.aurora.issue",
+  "source_table": "public.issue",
+  "primary_key": {
+    "issue_id": "iss_2026_05_04_101"
+  },
+  "op": "d",
+  "ts_ms": 1777891200000,
+  "observed_field_names": [
+    "issue_id",
+    "op",
+    "ts_ms"
+  ],
+  "missing_required_fields": [
+    "status",
+    "severity"
+  ],
+  "unexpected_fields": [],
+  "forbidden_field_names_detected": [],
+  "parser_error_class": "delete_shape_mismatch",
+  "parser_error_summary": "Runtime DELETE shape under REPLICA IDENTITY DEFAULT was partial; values were not captured.",
+  "first_seen_at": "2026-05-04T00:00:00Z",
+  "last_seen_at": "2026-05-04T00:02:00Z",
+  "attempt_count": 1,
+  "status": "replay_requested",
+  "owner": "platform-owner",
+  "evidence_report_ref": "m2_4_evidence_report_placeholder",
+  "replay_request_id": "replay_req_m2_4_001",
+  "requested_action": "replay",
+  "idempotency_key": "fail_m2_4_replay_001:replay:attempt_1",
+  "source_run_id": "run_source_placeholder",
+  "new_run_id": null,
+  "bounded_scope": {
+    "failure_id": "fail_m2_4_replay_001",
+    "max_records": 1,
+    "time_window_ref": "bounded_dry_run_window"
+  },
+  "cleanup_status": "pending"
+}

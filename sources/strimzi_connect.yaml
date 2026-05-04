@@ -1,0 +1,148 @@
+# ============================================================================
+# Strimzi KafkaConnect cluster — Aurora CDC용
+# Version: v1.0
+# Namespace: data-platform (운영 시 실제 namespace로 변경)
+# ============================================================================
+#
+# 역할: Debezium PostgreSQL connector가 실행되는 Connect cluster
+#
+# 구성:
+#   - Strimzi가 Kaniko로 Debezium 플러그인 포함된 이미지 자동 빌드 → ECR 푸시
+#   - Connect worker 2개 (HA)
+#   - MSK Serverless 접속 (IAM 인증)
+#   - Prometheus 메트릭 노출
+#
+# 전제 조건:
+#   - EKS 클러스터 + Strimzi Operator 설치됨
+#   - MSK Serverless 클러스터 존재 (bootstrap endpoint)
+#   - ECR 리포지토리 존재 (Connect 이미지 저장용)
+#   - IRSA 설정됨 (Connect pod가 MSK/ECR에 IAM 인증)
+#   - External Secrets Operator 설치됨
+# ============================================================================
+
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnect
+metadata:
+  name: aurora-cdc-connect
+  namespace: data-platform
+  annotations:
+    # 자동 KafkaConnector 리소스 관리 활성화
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: 3.7.0  # Kafka 버전
+  replicas: 2     # HA
+
+  # ============================================================================
+  # Bootstrap / 인증 (MSK Serverless)
+  # ============================================================================
+  bootstrapServers: ${MSK_BOOTSTRAP_SERVERS}  # 예: b-1.xxx.kafka.ap-northeast-2.amazonaws.com:9098
+
+  authentication:
+    type: custom
+    sasl: true
+    config:
+      security.protocol: SASL_SSL
+      sasl.mechanism: AWS_MSK_IAM
+      sasl.jaas.config: |
+        software.amazon.msk.auth.iam.IAMLoginModule required;
+      sasl.client.callback.handler.class: |
+        software.amazon.msk.auth.iam.IAMClientCallbackHandler
+
+  # ============================================================================
+  # Connect 이미지 빌드 (Debezium 플러그인 포함)
+  # ============================================================================
+  build:
+    output:
+      type: docker
+      image: ${ECR_REGISTRY}/aurora-cdc-connect:3.7.0-debezium-2.6
+      pushSecret: ecr-push-secret  # ECR 푸시 권한 (IRSA 또는 docker-registry secret)
+    plugins:
+      - name: debezium-postgres-connector
+        artifacts:
+          - type: tgz
+            url: https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/2.6.2.Final/debezium-connector-postgres-2.6.2.Final-plugin.tar.gz
+            # !!! 배포 전 반드시 교체 !!!
+            # Maven Central에서 공식 체크섬 확인 후 실제 sha512 값으로 교체 필요.
+            # 참조: https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/2.6.2.Final/debezium-connector-postgres-2.6.2.Final-plugin.tar.gz.sha512
+            # placeholder 그대로 두면 Strimzi가 이미지 빌드 실패 (sha512 불일치).
+            sha512sum: REPLACE_WITH_ACTUAL_SHA512
+
+  # ============================================================================
+  # Connect 클러스터 설정
+  # ============================================================================
+  config:
+    # Connect 메타 토픽 (offset/config/status 저장)
+    group.id: aurora-cdc-connect
+    offset.storage.topic: __connect-offsets
+    config.storage.topic: __connect-configs
+    status.storage.topic: __connect-status
+    offset.storage.replication.factor: 3
+    config.storage.replication.factor: 3
+    status.storage.replication.factor: 3
+
+    # Converter (JSONEachRow 형식 일관성)
+    key.converter: org.apache.kafka.connect.json.JsonConverter
+    value.converter: org.apache.kafka.connect.json.JsonConverter
+    key.converter.schemas.enable: false    # 스키마 없이 순수 JSON
+    value.converter.schemas.enable: false  # CH Kafka engine이 JSONEachRow로 파싱
+
+    # 재시도 / 에러 처리
+    errors.retry.timeout: 60000      # 60초 재시도
+    errors.retry.delay.max.ms: 10000
+    errors.tolerance: none            # 에러 발생 시 태스크 중단 (데이터 무결성 우선)
+    errors.log.enable: true
+    errors.log.include.messages: true
+
+  # ============================================================================
+  # 리소스 제한
+  # ============================================================================
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 500m
+    limits:
+      memory: 2Gi
+      cpu: 1000m
+
+  # ============================================================================
+  # JVM 옵션
+  # ============================================================================
+  jvmOptions:
+    "-Xms": "1g"
+    "-Xmx": "1g"
+
+  # ============================================================================
+  # 모니터링 (Prometheus)
+  # ============================================================================
+  metricsConfig:
+    type: jmxPrometheusExporter
+    valueFrom:
+      configMapKeyRef:
+        name: kafka-connect-metrics
+        key: metrics-config.yml
+
+  # ============================================================================
+  # External config (Aurora credential을 환경 변수로 주입)
+  # ============================================================================
+  externalConfiguration:
+    env:
+      - name: AURORA_DB_USER
+        valueFrom:
+          secretKeyRef:
+            name: aurora-cdc-credentials  # External Secrets Operator가 생성
+            key: username
+      - name: AURORA_DB_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: aurora-cdc-credentials
+            key: password
+
+  # ============================================================================
+  # IRSA (Connect pod가 MSK IAM 인증용)
+  # ============================================================================
+  template:
+    pod:
+      metadata:
+        annotations:
+          eks.amazonaws.com/role-arn: ${CONNECT_IAM_ROLE_ARN}
+      serviceAccount: aurora-cdc-connect-sa

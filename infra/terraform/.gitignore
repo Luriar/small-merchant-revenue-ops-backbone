@@ -1,0 +1,26 @@
+# Terraform state
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Terraform 로컬 디렉토리
+.terraform/
+.terraform.lock.hcl
+
+# 사용자별 변수 (secret 가능성)
+terraform.tfvars
+*.auto.tfvars
+
+# 로그
+crash.log
+crash.*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

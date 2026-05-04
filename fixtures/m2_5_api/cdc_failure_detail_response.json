@@ -1,0 +1,37 @@
+{
+  "failure_id": "fail_m2_5_leak_001",
+  "failure_type": "forbidden_field_leakage",
+  "source_topic": "cdc.aurora.prod_change",
+  "source_table": "public.prod_change",
+  "primary_key": {
+    "change_id": "chg_2026_05_04_201"
+  },
+  "op": "c",
+  "ts_ms": 1777891200000,
+  "observed_field_names": [
+    "change_id",
+    "change_type",
+    "target_service",
+    "source",
+    "occurred_at",
+    "created_at",
+    "op",
+    "ts_ms"
+  ],
+  "missing_required_fields": [],
+  "unexpected_fields": [],
+  "forbidden_field_names_detected": [
+    "prod_change.payload",
+    "prod_change.actor"
+  ],
+  "parser_error_class": "forbidden_field_name_detected",
+  "parser_error_summary": "Forbidden field names were detected; values were not captured.",
+  "first_seen_at": "2026-05-04T00:00:00Z",
+  "last_seen_at": "2026-05-04T00:00:30Z",
+  "attempt_count": 1,
+  "status": "open",
+  "owner": "security-owner",
+  "evidence_report_ref": "m2_5_evidence_report_placeholder",
+  "source_run_id": null,
+  "latest_replay_request_id": null
+}

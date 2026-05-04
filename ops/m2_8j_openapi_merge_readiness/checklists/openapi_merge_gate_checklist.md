@@ -1,0 +1,27 @@
+# M2-8J OpenAPI Merge Gate Checklist
+
+- [ ] no main OpenAPI merge in M2-8J
+- [ ] no sources/personal_project_openapi_v0_2.yaml modification in M2-8J
+- [ ] M2-5 OpenAPI patch remains proposal-only
+- [ ] future OpenAPI merge requires explicit task
+- [ ] production route tests must pass
+- [ ] DTO mapper parity reviewed
+- [ ] error envelope parity reviewed
+- [ ] auth/role documentation parity reviewed
+- [ ] versioning/changelog required
+- [ ] API contract owner gate required
+- [ ] safety reviewer gate required
+- [ ] final merge approver gate required
+- [ ] mutation route stricter review
+- [ ] global safety scanner required
+- [ ] no Aurora repository
+- [ ] no real DB queries
+- [ ] no SQL apply
+- [ ] no external infrastructure commands
+- [ ] no raw payloads
+- [ ] no full message bodies
+- [ ] no issue raw values
+- [ ] no prod_change payload/actor values
+- [ ] no stack traces
+- [ ] no SQL details
+- [ ] no persistence internals

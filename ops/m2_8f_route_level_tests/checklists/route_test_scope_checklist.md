@@ -1,0 +1,34 @@
+# M2-8F Route Test Scope Checklist
+
+- [ ] no live route wiring in this step
+- [ ] no server.js modification in this step
+- [ ] no auth.js modification in this step
+- [ ] no error-response.js modification in this step
+- [ ] no cdc-recovery runtime module modification in this step
+- [ ] no OpenAPI main merge in this step
+- [ ] no SQL apply
+- [ ] no external infrastructure commands
+- [ ] test-only harness is the M2-8B route test starting point
+- [ ] in-memory/stub repository is used before live persistence
+- [ ] route-level integration tests cover every M2-5 CDC route
+- [ ] auth missing safe 401 is tested
+- [ ] readonly_role read allowed
+- [ ] readonly_role mutation forbidden
+- [ ] operator create allowed
+- [ ] operator approve/cancel forbidden
+- [ ] maintainer approve/cancel allowed
+- [ ] system_worker cannot create arbitrary replay request
+- [ ] safe 400 is tested
+- [ ] safe 403 is tested
+- [ ] safe 404 is tested
+- [ ] safe 409 is tested
+- [ ] safe 500 is tested
+- [ ] DTO mapper safety is asserted
+- [ ] schema parity against the proposal patch is asserted
+- [ ] no raw payloads
+- [ ] no full message bodies
+- [ ] no issue raw values
+- [ ] no prod_change payload/actor values
+- [ ] no stack traces
+- [ ] no SQL details
+- [ ] no persistence internals
