@@ -1,0 +1,30 @@
+# Revenue Ops small-merchant backend bootstrap tfvars example.
+# Copy to a local, gitignored file before use:
+#   cp terraform.revenue-ops.tfvars.example terraform.revenue-ops.tfvars
+#
+# Do NOT commit the copied .tfvars file.
+# Replace YOURACCOUNTID with your real AWS account ID.
+#
+# Usage (plan only — do not apply without explicit review):
+#   terraform plan \
+#     -state=revenue-ops-bootstrap.tfstate \
+#     -var-file=terraform.revenue-ops.tfvars \
+#     -out=revenue-ops-bootstrap.tfplan
+#
+# This -state flag reads from a separate state file so that the existing
+# productops-* resources tracked in terraform.tfstate are never touched.
+
+aws_region   = "ap-northeast-2"
+project_name = "revenue-ops"
+environment  = "bootstrap"
+
+# S3 bucket name must be globally unique.
+# Convention: revenue-ops-tfstate-<AWS_ACCOUNT_ID>
+state_bucket_name = "revenue-ops-tfstate-YOURACCOUNTID"
+
+tags = {
+  Project   = "revenue-ops"
+  ManagedBy = "terraform"
+  Purpose   = "tf-state-backend"
+  Contact   = "your@email.com"
+}
