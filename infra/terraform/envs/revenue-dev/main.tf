@@ -114,3 +114,91 @@ module "secrets" {
   kms_key_arn = module.data_lake.kms_key_arn
   tags        = local.common_tags
 }
+
+module "artifacts" {
+  source = "../../modules/revenue_artifacts"
+
+  enable_artifacts     = var.enable_artifacts
+  artifact_bucket_name = var.artifact_bucket_name
+  use_kms              = var.use_kms
+  kms_key_arn          = module.data_lake.kms_key_arn
+  name_prefix          = local.name_prefix
+  tags                 = local.common_tags
+}
+
+module "frontend_hosting" {
+  source = "../../modules/revenue_frontend_hosting"
+
+  enable_frontend      = var.enable_frontend
+  frontend_bucket_name = var.frontend_bucket_name
+  domain_aliases       = var.frontend_domain_aliases
+  hosted_zone_id       = var.frontend_hosted_zone_id
+  acm_certificate_arn  = var.frontend_acm_certificate_arn
+  create_dns_records   = var.create_frontend_dns_records
+  artifact_bucket_arn  = module.artifacts.artifact_bucket_arn
+  artifact_bucket_name = module.artifacts.artifact_bucket_name
+  name_prefix          = local.name_prefix
+  tags                 = local.common_tags
+}
+
+module "auth" {
+  source = "../../modules/revenue_cognito"
+
+  enable_auth   = var.enable_auth
+  name_prefix   = local.name_prefix
+  callback_urls = var.cognito_callback_urls
+  logout_urls   = var.cognito_logout_urls
+  domain_prefix = var.cognito_domain_prefix
+  frontend_urls = var.frontend_domain_aliases
+  tags          = local.common_tags
+}
+
+module "aurora" {
+  source = "../../modules/revenue_aurora"
+
+  enable_aurora              = var.enable_aurora
+  name_prefix                = local.name_prefix
+  vpc_id                     = var.aurora_vpc_id
+  private_subnet_ids         = var.aurora_private_subnet_ids
+  allowed_security_group_ids = var.aurora_allowed_security_group_ids
+  database_name              = var.aurora_database_name
+  master_username            = var.aurora_master_username
+  min_acu                    = var.aurora_min_acu
+  max_acu                    = var.aurora_max_acu
+  use_kms                    = var.use_kms
+  kms_key_arn                = module.data_lake.kms_key_arn
+  tags                       = local.common_tags
+}
+
+module "revenue_api" {
+  source = "../../modules/revenue_api_gateway_lambda"
+
+  enable_api                  = var.enable_api
+  name_prefix                 = local.name_prefix
+  lambda_s3_bucket            = var.api_lambda_s3_bucket
+  lambda_s3_key               = var.api_lambda_s3_key
+  artifact_bucket_name        = module.artifacts.artifact_bucket_name
+  artifact_bucket_arn         = module.artifacts.artifact_bucket_arn
+  aurora_secret_arn           = module.aurora.master_secret_arn
+  cognito_user_pool_id        = module.auth.user_pool_id
+  cognito_user_pool_arn       = module.auth.user_pool_arn
+  cognito_user_pool_client_id = module.auth.web_client_id
+  custom_domain_name          = var.api_custom_domain_name
+  acm_certificate_arn         = var.api_acm_certificate_arn
+  hosted_zone_id              = var.api_hosted_zone_id
+  create_dns_record           = var.create_api_dns_record
+  enable_xray                 = var.enable_api_xray
+  tags                        = local.common_tags
+}
+
+module "saas_observability" {
+  source = "../../modules/revenue_saas_observability"
+
+  enable_observability       = var.enable_saas_observability
+  name_prefix                = local.name_prefix
+  api_lambda_function_name   = module.revenue_api.lambda_function_name
+  api_gateway_api_id         = module.revenue_api.api_id
+  cloudfront_distribution_id = module.frontend_hosting.cloudfront_distribution_id
+  alarm_actions              = var.alarm_actions
+  tags                       = local.common_tags
+}

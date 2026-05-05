@@ -42,3 +42,38 @@ output "secrets_parameter_names" {
   description = "List of SSM Parameter Store parameter names for API keys and config."
   value       = module.secrets.secrets_parameter_names
 }
+
+output "artifact_bucket_name" {
+  description = "S3 bucket for export-backed JSON and API/frontend deployment artifacts."
+  value       = module.artifacts.artifact_bucket_name
+}
+
+output "frontend_bucket_name" {
+  description = "S3 bucket used as the private CloudFront origin for the frontend."
+  value       = module.frontend_hosting.frontend_bucket_name
+}
+
+output "frontend_cloudfront_domain_name" {
+  description = "CloudFront domain name for the frontend distribution."
+  value       = module.frontend_hosting.cloudfront_domain_name
+}
+
+output "api_endpoint" {
+  description = "HTTP API endpoint for the Revenue Ops API."
+  value       = module.revenue_api.api_endpoint
+}
+
+output "cognito_user_pool_id" {
+  description = "Cognito user pool ID for small-merchant SaaS auth."
+  value       = module.auth.user_pool_id
+}
+
+output "aurora_cluster_endpoint" {
+  description = "Aurora Serverless v2 writer endpoint."
+  value       = module.aurora.cluster_endpoint
+}
+
+output "aurora_master_secret_arn" {
+  description = "Secrets Manager secret ARN containing Aurora master credentials."
+  value       = module.aurora.master_secret_arn
+}
