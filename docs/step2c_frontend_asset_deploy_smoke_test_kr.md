@@ -313,3 +313,114 @@ Next step:
 Before future frontend deploys:
 
 - add narrowly scoped `cloudfront:CreateInvalidation` permission for distribution `E31KH7PFML1A6N`, or document an alternate cache-control strategy.
+
+## 10. Invalidation Permission Fix and Final Completion
+
+추가 승인:
+
+```text
+Approved to add narrowly scoped CloudFront invalidation permissions for distribution E31KH7PFML1A6N and create a CloudFront invalidation for /* only.
+```
+
+Resource-scoped IAM simulation before mutation:
+
+```text
+cloudfront:CreateInvalidation -> allowed with resource arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N
+cloudfront:GetInvalidation -> allowed with resource arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N
+cloudfront:ListInvalidations -> allowed with resource arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N
+```
+
+IAM statement added to inline policy `RevenueOpsFrontendCloudFrontFoundationAccess` on user `de-ai-12`:
+
+```json
+{
+  "Sid": "RevenueOpsFrontendCloudFrontInvalidation",
+  "Effect": "Allow",
+  "Action": [
+    "cloudfront:CreateInvalidation",
+    "cloudfront:GetInvalidation",
+    "cloudfront:ListInvalidations"
+  ],
+  "Resource": "arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N"
+}
+```
+
+Effective permission simulation after mutation:
+
+```text
+cloudfront:CreateInvalidation -> allowed
+cloudfront:GetInvalidation -> allowed
+cloudfront:ListInvalidations -> allowed
+```
+
+Invalidation command:
+
+```bash
+aws cloudfront create-invalidation \
+  --distribution-id E31KH7PFML1A6N \
+  --paths '/*'
+```
+
+Invalidation result:
+
+```text
+id: IBJ8QTVVEOBWYF4NQREIPCR8JP
+path: /*
+initial status: InProgress
+final status: Completed
+create time: 2026-05-05T16:27:25.197000+00:00
+```
+
+Wait command:
+
+```bash
+aws cloudfront wait invalidation-completed \
+  --distribution-id E31KH7PFML1A6N \
+  --id IBJ8QTVVEOBWYF4NQREIPCR8JP
+```
+
+Final smoke checks after invalidation:
+
+| URL | Result |
+| --- | --- |
+| `https://d1fquuc7vsf9cu.cloudfront.net/` | HTTP 200 HTML |
+| `https://d1fquuc7vsf9cu.cloudfront.net/index.html` | HTTP 200 HTML |
+| `https://d1fquuc7vsf9cu.cloudfront.net/#revenue-cockpit` | HTTP 200 SPA shell |
+| `https://d1fquuc7vsf9cu.cloudfront.net/#revenue-cockpit?data=api` | HTTP 200 SPA shell |
+
+Frontend bucket object list after invalidation remains exactly:
+
+```text
+assets/index-B9P7aV8v.js
+assets/index-BOX0Snck.css
+index.html
+```
+
+Unexpected resource check:
+
+- API Gateway: none
+- Lambda Revenue Ops API: none
+- Cognito: none
+- Aurora/RDS: none
+- Glue/Athena/Step Functions/EventBridge: none
+- SSM external API parameters: none
+- SaaS CloudWatch alarms: none
+
+Final STEP 2-C status:
+
+```text
+complete
+```
+
+STEP 2-C now includes:
+
+- frontend build
+- S3 upload
+- CloudFront invalidation
+- post-invalidation smoke test
+
+Still intentionally disabled:
+
+- API/Auth/Aurora/ETL
+- live collectors
+- POS ingestion
