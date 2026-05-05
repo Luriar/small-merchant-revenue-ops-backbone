@@ -440,3 +440,87 @@ After approval, re-run plan. Expected remaining plan should include only:
 - possible output refresh for `frontend_cloudfront_domain_name`
 
 If any API/Auth/Aurora/ETL resource appears, stop.
+
+## 15. ListTags Permission Fix and Tainted Distribution Blocker
+
+추가 승인 후 `cloudfront:ListTagsForResource` 권한을 distribution `E31KH7PFML1A6N`에 한정해 추가했다.
+
+Added IAM statement:
+
+```json
+{
+  "Sid": "RevenueOpsFrontendCloudFrontReadTags",
+  "Effect": "Allow",
+  "Action": "cloudfront:ListTagsForResource",
+  "Resource": "arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N"
+}
+```
+
+IAM simulation result:
+
+```text
+cloudfront:ListTagsForResource -> allowed
+```
+
+Safe checks:
+
+```bash
+terraform fmt -recursive -check infra/terraform
+terraform -chdir=infra/terraform/envs/revenue-dev validate
+```
+
+Result:
+
+- fmt passed
+- validate passed
+- known `dynamodb_table` deprecation warning only
+
+Re-run plan:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  -out=tfplan.step2b.bucket-policy-only
+```
+
+Plan result:
+
+```text
+Plan: 2 to add, 0 to change, 1 to destroy.
+```
+
+Stop reason:
+
+- 승인 범위는 frontend bucket policy only였다.
+- 그러나 Terraform state에서 CloudFront distribution이 tainted 상태라 plan이 distribution replacement를 포함했다.
+- destroy가 포함되었으므로 apply하지 않았다.
+
+Tainted resource:
+
+```text
+module.frontend_hosting.aws_cloudfront_distribution.frontend[0]: (tainted)
+id: E31KH7PFML1A6N
+domain: d1fquuc7vsf9cu.cloudfront.net
+status: Deployed
+```
+
+현재 상태:
+
+- CloudFront OAC exists
+- CloudFront distribution exists and is Deployed
+- frontend bucket policy still missing
+- frontend bucket remains empty
+- no frontend asset deploy
+- no API/Auth/Aurora/ETL resources created
+
+Recommended next step:
+
+1. Explicitly approve Terraform state untaint for the existing distribution.
+2. Re-run plan.
+3. Proceed only if plan is `1 to add, 0 to change, 0 to destroy` for `module.frontend_hosting.aws_s3_bucket_policy.frontend[0]`.
+
+Required approval:
+
+```text
+Approved to untaint module.frontend_hosting.aws_cloudfront_distribution.frontend[0], rerun the STEP 2-B plan, and apply only if the plan creates the frontend bucket policy with 0 destroy.
+```

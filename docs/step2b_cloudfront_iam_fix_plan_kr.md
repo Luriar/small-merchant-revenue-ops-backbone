@@ -452,3 +452,92 @@ Recommended additional minimal IAM patch:
 ```
 
 This additional permission was not applied. It requires explicit approval.
+
+## 12. ListTags Permission Update and Bucket Policy Plan Blocker
+
+Approval received:
+
+```text
+Approved to add cloudfront:ListTagsForResource for distribution E31KH7PFML1A6N and rerun the remaining STEP 2-B plan/apply for the frontend bucket policy only.
+```
+
+IAM mutation performed:
+
+```bash
+aws iam put-user-policy \
+  --user-name de-ai-12 \
+  --policy-name RevenueOpsFrontendCloudFrontFoundationAccess \
+  --policy-document '<existing CloudFront statement plus scoped ListTagsForResource statement>'
+```
+
+Added statement:
+
+```json
+{
+  "Sid": "RevenueOpsFrontendCloudFrontReadTags",
+  "Effect": "Allow",
+  "Action": "cloudfront:ListTagsForResource",
+  "Resource": "arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N"
+}
+```
+
+IAM after simulation:
+
+```text
+cloudfront:ListTagsForResource on arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N -> allowed
+```
+
+Validation:
+
+```bash
+terraform fmt -recursive -check infra/terraform
+terraform -chdir=infra/terraform/envs/revenue-dev validate
+```
+
+Result:
+
+- fmt passed
+- validate passed
+- known warning remains: backend `dynamodb_table` parameter is deprecated
+
+Plan command:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  -out=tfplan.step2b.bucket-policy-only
+```
+
+Plan result:
+
+```text
+Plan: 2 to add, 0 to change, 1 to destroy.
+```
+
+Reason this was not applied:
+
+- The plan was **not** bucket-policy-only.
+- Terraform marked the existing CloudFront distribution as tainted after the prior failed apply.
+- The plan therefore wanted to replace `module.frontend_hosting.aws_cloudfront_distribution.frontend[0]`.
+
+Tainted state confirmation:
+
+```text
+module.frontend_hosting.aws_cloudfront_distribution.frontend[0]: (tainted)
+id: E31KH7PFML1A6N
+domain: d1fquuc7vsf9cu.cloudfront.net
+status: Deployed
+price_class: PriceClass_100
+```
+
+No apply was run for `tfplan.step2b.bucket-policy-only`.
+
+Current remaining blocker:
+
+- Terraform state taint on the already-created CloudFront distribution.
+
+Recommended next approval:
+
+```text
+Approved to untaint module.frontend_hosting.aws_cloudfront_distribution.frontend[0], rerun the STEP 2-B plan, and apply only if the plan creates the frontend bucket policy with 0 destroy.
+```
