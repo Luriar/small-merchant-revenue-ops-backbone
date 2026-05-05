@@ -25,10 +25,10 @@ resource "aws_glue_catalog_table" "silver_revenue_signal" {
   table_type = "EXTERNAL_TABLE"
 
   parameters = {
-    "classification"              = "parquet"
-    "parquet.compress"            = "SNAPPY"
-    "EXTERNAL"                    = "TRUE"
-    "projection.enabled"          = "false"
+    "classification"     = "parquet"
+    "parquet.compress"   = "SNAPPY"
+    "EXTERNAL"           = "TRUE"
+    "projection.enabled" = "false"
   }
 
   storage_descriptor {
