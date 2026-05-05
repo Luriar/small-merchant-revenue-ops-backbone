@@ -8,7 +8,7 @@ import { RevenueCockpitApp } from "./revenue-cockpit/RevenueCockpitApp";
 import type { AppPage } from "./types/navigation";
 
 function resolvePageFromHash(hash: string): AppPage {
-  const page = hash.replace(/^#/, "").toLowerCase();
+  const page = hash.replace(/^#/, "").split("?")[0].toLowerCase();
 
   if (page === "changes") {
     return "changes";

@@ -33,7 +33,8 @@
     "validate:m2-9b:sql-apply-evidence": "python3 scripts/validate_m2_9b_sql_apply_evidence.py",
     "validate:m2-9c:runtime-dry-run-evidence": "python3 scripts/validate_m2_9c_runtime_dry_run_evidence.py",
     "test:m2-7:cdc-recovery": "node --test apps/api/src/cdc-recovery/cdc-recovery-dto-mapper.test.js apps/api/src/cdc-recovery/cdc-recovery-service.test.js",
-    "validate:m2:global-safety": "python3 scripts/validate_m2_global_safety.py"
+    "validate:m2:global-safety": "python3 scripts/validate_m2_global_safety.py",
+    "validate:m5:engineering": "bash scripts/validate_m5_engineering_closure.sh"
   },
   "dependencies": {
     "pg": "^8.20.0"

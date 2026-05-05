@@ -1,16 +1,16 @@
 import { SCENARIO, tr } from './revenueCockpitCopy';
 import { Icon, Pill } from './revenueCockpitShared';
-import type { RcLang } from './revenueCockpitTypes';
+import type { RcLang, Scenario } from './revenueCockpitTypes';
 
-interface DataReliabilityViewProps { lang: RcLang }
+interface DataReliabilityViewProps { lang: RcLang; scenario?: Scenario }
 
-export function DataReliabilityView({ lang }: DataReliabilityViewProps) {
-  const rel = SCENARIO.reliability;
+export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabilityViewProps) {
+  const rel = scenario.reliability;
 
   const trustCards = [
     {
       icon: 'check', tone: 'good',
-      title: lang === 'ko' ? '5개 데이터 모두 정상' : 'All 5 sources healthy',
+      title: lang === 'ko' ? `${rel.sources.length}개 데이터 상태 확인` : `${rel.sources.length} sources checked`,
       body:  lang === 'ko' ? '예정된 주기로 모두 갱신되었습니다.' : 'Each refreshed on its scheduled cadence.',
     },
     {

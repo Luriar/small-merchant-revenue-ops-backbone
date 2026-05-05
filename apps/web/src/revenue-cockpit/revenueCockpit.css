@@ -126,6 +126,18 @@
   line-break: strict;
 }
 
+.rc-api-notice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 32px;
+  border-bottom: 1px solid var(--rc-rule);
+  background: var(--rc-surface-1);
+  color: var(--rc-fg-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
 /* Screen fill */
 .rc-screen {
   flex: 1;

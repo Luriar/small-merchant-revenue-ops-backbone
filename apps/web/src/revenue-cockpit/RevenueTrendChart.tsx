@@ -1,13 +1,14 @@
 import { SCENARIO } from './revenueCockpitCopy';
-import type { RcLang } from './revenueCockpitTypes';
+import type { RcLang, Scenario } from './revenueCockpitTypes';
 
 interface RevenueTrendChartProps {
   lang: RcLang;
+  scenario?: Scenario;
   height?: number;
 }
 
-export function RevenueTrendChart({ lang, height = 180 }: RevenueTrendChartProps) {
-  const series = SCENARIO.revSeries;
+export function RevenueTrendChart({ lang, scenario = SCENARIO, height = 180 }: RevenueTrendChartProps) {
+  const series = scenario.revSeries;
   const W = 720, H = height;
   const pad = { l: 44, r: 146, t: 20, b: 28 };
   const min = 84, max = 104;
@@ -16,9 +17,9 @@ export function RevenueTrendChart({ lang, height = 180 }: RevenueTrendChartProps
   const linePath = series.map((_, i) => `${i ? 'L' : 'M'} ${xs[i].toFixed(1)} ${ys[i].toFixed(1)}`).join(' ');
   const ticks = [85, 90, 95, 100];
   const annotations = [
-    { id: 'demand',      yFrac: 0.18, label: lang === 'ko' ? '생활인구 −8.4%'  : 'Foot traffic −8.4%' },
-    { id: 'weather',     yFrac: 0.45, label: lang === 'ko' ? '강수일수 +28%'   : 'Rainy days +28%' },
-    { id: 'competition', yFrac: 0.72, label: lang === 'ko' ? '점포수 +6.1%'    : 'Stores +6.1%' },
+    { id: 'demand',      yFrac: 0.18, label: lang === 'ko' ? `생활인구 ${scenario.populationChange.toFixed(1)}%` : `Foot traffic ${scenario.populationChange.toFixed(1)}%` },
+    { id: 'weather',     yFrac: 0.45, label: lang === 'ko' ? `강수일수 +${scenario.rainyDayChange.toFixed(1)}%` : `Rainy days +${scenario.rainyDayChange.toFixed(1)}%` },
+    { id: 'competition', yFrac: 0.72, label: lang === 'ko' ? `점포수 +${scenario.competitorChange.toFixed(1)}%` : `Stores +${scenario.competitorChange.toFixed(1)}%` },
   ];
 
   return (
@@ -67,7 +68,7 @@ export function RevenueTrendChart({ lang, height = 180 }: RevenueTrendChartProps
         x={(xs[6] + xs[7]) / 2} y={(ys[6] + ys[7]) / 2 - 18}
         textAnchor="middle" fontSize="11" fontWeight="700"
         fill="var(--rc-bad-strong)">
-        −12.0%
+        {scenario.revenueChange.toFixed(1)}%
       </text>
 
       {/* cause annotation pins */}

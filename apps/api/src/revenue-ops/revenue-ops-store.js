@@ -16,8 +16,35 @@ function loadExport() {
   return JSON.parse(fs.readFileSync(DATA_PATH, "utf-8"));
 }
 
+function sanitizeGoldFilePath(filePath) {
+  if (typeof filePath !== "string" || filePath.length === 0) {
+    return "";
+  }
+  const normalized = filePath.split(path.sep).join("/");
+  const marker = "/data/gold/";
+  const markerIndex = normalized.indexOf(marker);
+  if (markerIndex >= 0) {
+    return normalized.slice(markerIndex + 1);
+  }
+  return path.basename(filePath);
+}
+
+function sanitizePipelineMeta(pipelineMeta = {}) {
+  const goldFiles = pipelineMeta.gold_files && typeof pipelineMeta.gold_files === "object"
+    ? Object.fromEntries(
+      Object.entries(pipelineMeta.gold_files).map(([key, value]) => [key, sanitizeGoldFilePath(value)])
+    )
+    : {};
+
+  return {
+    ...pipelineMeta,
+    gold_files: goldFiles,
+  };
+}
+
 function createRevenueOpsStore() {
   const exported = loadExport();
+  const pipelineMeta = sanitizePipelineMeta(exported.pipeline_meta);
 
   const actionStatusMap = new Map(
     exported.actions.map((a) => [a.action_id, a.status || "recommended"])
@@ -73,7 +100,7 @@ function createRevenueOpsStore() {
     },
 
     getPipelineMeta() {
-      return exported.pipeline_meta;
+      return pipelineMeta;
     },
   };
 }

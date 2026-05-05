@@ -1,10 +1,10 @@
 import { SCENARIO, tr, fmtPct } from './revenueCockpitCopy';
 import { Icon, Pill, StatePill, StateMenu, DotMeter, STATES, stateTone } from './revenueCockpitShared';
-import type { RcLang, ActionStatuses, ActionStatus, RcAction } from './revenueCockpitTypes';
+import type { RcLang, ActionStatuses, ActionStatus, RcAction, Scenario } from './revenueCockpitTypes';
 
-function ActionCard({ a, lang, state, setState }: { a: RcAction; lang: RcLang; state: ActionStatus; setState: (s: ActionStatus) => void }) {
+function ActionCard({ a, lang, scenario, state, setState }: { a: RcAction; lang: RcLang; scenario: Scenario; state: ActionStatus; setState: (s: ActionStatus) => void }) {
   const tone = stateTone[state];
-  const tiedCauses = a.tied.map(id => SCENARIO.causes.find(c => c.id === id)).filter(Boolean) as typeof SCENARIO.causes;
+  const tiedCauses = a.tied.map(id => scenario.causes.find(c => c.id === id)).filter(Boolean) as typeof scenario.causes;
   const diffN = a.effort === 'low' ? 1 : a.effort === 'medium' ? 2 : 3;
   const impN  = a.impact === 'low' ? 1 : a.impact === 'medium' ? 2 : 3;
 
@@ -69,14 +69,15 @@ function ActionCard({ a, lang, state, setState }: { a: RcAction; lang: RcLang; s
 
 interface ActionPlannerViewProps {
   lang: RcLang;
+  scenario?: Scenario;
   statuses: ActionStatuses;
   onSetStatus: (id: string, status: ActionStatus) => void;
 }
 
-export function ActionPlannerView({ lang, statuses, onSetStatus }: ActionPlannerViewProps) {
+export function ActionPlannerView({ lang, scenario = SCENARIO, statuses, onSetStatus }: ActionPlannerViewProps) {
   const groups = STATES.map(s => ({
     key: s,
-    items: SCENARIO.actions.filter(a => (statuses[a.id] ?? 'recommended') === s),
+    items: scenario.actions.filter(a => (statuses[a.id] ?? 'recommended') === s),
   }));
 
   return (
@@ -88,11 +89,11 @@ export function ActionPlannerView({ lang, statuses, onSetStatus }: ActionPlanner
           </h1>
           <p style={{ fontSize: 13.5, color: 'var(--rc-fg-muted)', marginTop: 6, maxWidth: 600, lineHeight: 1.6 }}>
             {lang === 'ko'
-              ? '근거 후보에 연결된 6개의 추천 액션입니다. 매출 회복을 보장하지 않습니다 — 검토하고 본인 매장에 맞춰 결정해주세요.'
-              : "Six actions tied to the cause candidates. None guarantees revenue recovery — review and decide what fits your shop."}
+              ? `근거 후보에 연결된 ${scenario.actions.length}개의 추천 액션입니다. 매출 회복을 보장하지 않습니다 — 검토하고 본인 매장에 맞춰 결정해주세요.`
+              : `${scenario.actions.length} actions tied to the cause candidates. None guarantees revenue recovery — review and decide what fits your shop.`}
           </p>
         </div>
-        <Pill tone="warm">{lang === 'ko' ? '6개 추천' : '6 recommended'}</Pill>
+        <Pill tone="warm">{lang === 'ko' ? `${scenario.actions.length}개 추천` : `${scenario.actions.length} recommended`}</Pill>
       </div>
 
       {/* status flow legend */}
@@ -129,7 +130,7 @@ export function ActionPlannerView({ lang, statuses, onSetStatus }: ActionPlanner
               </div>
             )}
             {g.items.map(a => (
-              <ActionCard key={a.id} a={a} lang={lang}
+              <ActionCard key={a.id} a={a} lang={lang} scenario={scenario}
                 state={statuses[a.id] ?? 'recommended'}
                 setState={st => onSetStatus(a.id, st)}/>
             ))}

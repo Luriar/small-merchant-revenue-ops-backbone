@@ -51,6 +51,7 @@ function createServer({
   runStore,
   traceStore,
   cdcRecoveryRoutes,
+  revenueOpsStore,
   readPathSkeleton = false,
   logger = createLogger(),
   metrics = createNoopMetricsEmitter(),
@@ -72,6 +73,7 @@ function createServer({
     env,
     authConfig: startupConfig.authConfig,
   });
+  const resolvedRevenueOpsStore = revenueOpsStore ?? _revenueOpsStore;
 
   return http.createServer((request, response) => {
     const requestContext = attachRequestContext({ request, response, logger, metrics });
@@ -87,6 +89,7 @@ function createServer({
         runStore: resolvedRunStore,
         traceStore: resolvedTraceStore,
         cdcRecoveryRoutes: resolvedCdcRecoveryRoutes,
+        revenueOpsStore: resolvedRevenueOpsStore,
         startupConfig,
         useReadPathSkeleton,
         metrics,
@@ -107,6 +110,7 @@ function dispatchRequest({
   runStore,
   traceStore,
   cdcRecoveryRoutes,
+  revenueOpsStore,
   startupConfig,
   useReadPathSkeleton,
   metrics,
@@ -356,44 +360,44 @@ function dispatchRequest({
     }
 
     if (request.method === "GET" && /^\/api\/v1\/revenue\/briefs(?:\?.*)?$/.test(request.url)) {
-      return handleGetBriefs({ response, store: _revenueOpsStore });
+      return handleGetBriefs({ response, store: revenueOpsStore });
     }
 
     const revBriefMatch = request.method === "GET"
       ? request.url.match(/^\/api\/v1\/revenue\/briefs\/([^/?]+)(?:\?.*)?$/)
       : null;
     if (revBriefMatch) {
-      return handleGetBriefById({ response, store: _revenueOpsStore, briefId: decodeURIComponent(revBriefMatch[1]) });
+      return handleGetBriefById({ response, store: revenueOpsStore, briefId: decodeURIComponent(revBriefMatch[1]) });
     }
 
     if (request.method === "GET" && /^\/api\/v1\/revenue\/anomalies(?:\?.*)?$/.test(request.url)) {
-      return handleGetAnomalies({ response, store: _revenueOpsStore });
+      return handleGetAnomalies({ response, store: revenueOpsStore });
     }
 
     const revEvidenceMatch = request.method === "GET"
       ? request.url.match(/^\/api\/v1\/revenue\/anomalies\/([^/?]+)\/evidence(?:\?.*)?$/)
       : null;
     if (revEvidenceMatch) {
-      return handleGetEvidenceForAnomaly({ response, store: _revenueOpsStore, anomalyId: decodeURIComponent(revEvidenceMatch[1]) });
+      return handleGetEvidenceForAnomaly({ response, store: revenueOpsStore, anomalyId: decodeURIComponent(revEvidenceMatch[1]) });
     }
 
     if (request.method === "GET" && /^\/api\/v1\/revenue\/actions(?:\?.*)?$/.test(request.url)) {
-      return handleGetActions({ response, store: _revenueOpsStore });
+      return handleGetActions({ response, store: revenueOpsStore });
     }
 
     const revActionStatusMatch = request.method === "PATCH"
       ? request.url.match(/^\/api\/v1\/revenue\/actions\/([^/?]+)\/status(?:\?.*)?$/)
       : null;
     if (revActionStatusMatch) {
-      return handleUpdateActionStatus({ request, response, store: _revenueOpsStore, actionId: decodeURIComponent(revActionStatusMatch[1]) });
+      return handleUpdateActionStatus({ request, response, store: revenueOpsStore, actionId: decodeURIComponent(revActionStatusMatch[1]) });
     }
 
     if (request.method === "GET" && /^\/api\/v1\/revenue\/context(?:\?.*)?$/.test(request.url)) {
-      return handleGetContext({ response, store: _revenueOpsStore });
+      return handleGetContext({ response, store: revenueOpsStore });
     }
 
     if (request.method === "GET" && /^\/api\/v1\/revenue\/pipeline-meta(?:\?.*)?$/.test(request.url)) {
-      return handleGetPipelineMeta({ response, store: _revenueOpsStore });
+      return handleGetPipelineMeta({ response, store: revenueOpsStore });
     }
 
     response.writeHead(404, {

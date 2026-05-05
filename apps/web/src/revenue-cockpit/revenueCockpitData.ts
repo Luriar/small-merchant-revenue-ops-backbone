@@ -1,9 +1,232 @@
 import { SCENARIO, DEFAULT_STATUSES } from './revenueCockpitCopy';
-import type { Scenario, ActionStatuses } from './revenueCockpitTypes';
+import type {
+  Scenario,
+  ActionStatuses,
+  ActionStatus,
+  CauseCandidate,
+  RcAction,
+  SignalStrength,
+} from './revenueCockpitTypes';
 
-export const USE_API =
-  typeof window !== 'undefined' &&
-  new URLSearchParams(window.location.search).get('data') === 'api';
+export interface RevenueApiPayload {
+  briefs?: unknown[];
+  anomalies?: unknown[];
+  actions?: unknown[];
+  context?: unknown[];
+  pipelineMeta?: Record<string, unknown>;
+}
+
+type ApiRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is ApiRecord {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asRecordList(value: unknown): ApiRecord[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function str(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() ? value : fallback;
+}
+
+function num(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function fmtQuarter(period: string, lang: 'ko' | 'en'): string {
+  const match = period.match(/^(\d{4})Q([1-4])$/);
+  if (!match) return period;
+  return lang === 'ko' ? `${match[1]}년 ${match[2]}분기` : `${match[1]} Q${match[2]}`;
+}
+
+function metricOf(anomalies: ApiRecord[], metric: string): ApiRecord | undefined {
+  return anomalies.find(item => item.metric === metric);
+}
+
+function metricDelta(anomalies: ApiRecord[], metric: string, fallback: number): number {
+  return num(metricOf(anomalies, metric)?.delta_pct, fallback);
+}
+
+function sourceName(id: string): { ko: string; en: string } {
+  const names: Record<string, { ko: string; en: string }> = {
+    revenue_brief_view: { ko: '매출 브리프 Gold', en: 'Revenue Brief Gold' },
+    revenue_anomaly_results: { ko: '매출 이상 신호 Gold', en: 'Revenue Anomaly Gold' },
+    cause_evidence_candidates: { ko: '원인 근거 후보 Gold', en: 'Cause Evidence Gold' },
+    action_recommendation_candidates: { ko: '액션 추천 후보 Gold', en: 'Action Recommendation Gold' },
+    revenue_context_mart: { ko: '매출 컨텍스트 Mart', en: 'Revenue Context Mart' },
+  };
+  return names[id] ?? { ko: id, en: id };
+}
+
+function inferCause(candidate: ApiRecord, index: number, fallback: CauseCandidate): CauseCandidate {
+  const rawType = `${candidate.evidence_type ?? candidate.cause_type ?? candidate.metric_name ?? candidate.summary ?? ''}`.toLowerCase();
+  const rawText = `${candidate.summary ?? candidate.title ?? candidate.description ?? ''}`;
+  const id = rawType.includes('weather') || rawText.includes('강수') || rawText.includes('비')
+    ? 'weather'
+    : rawType.includes('compet') || rawText.includes('점포') || rawText.includes('경쟁')
+      ? 'competition'
+      : rawType.includes('population') || rawType.includes('demand') || rawText.includes('생활인구')
+        ? 'demand'
+        : `context-${index + 1}`;
+
+  const title = id === 'weather'
+    ? { ko: '강수일수 증가', en: 'More rainy days' }
+    : id === 'competition'
+      ? { ko: '동종 점포수 증가', en: 'More nearby competitors' }
+      : id === 'demand'
+        ? { ko: '생활인구·수요 약화', en: 'Foot traffic / demand softened' }
+        : { ko: '컨텍스트 변화', en: 'Context shift' };
+
+  const strengthValue = str(candidate.evidence_strength, str(candidate.strength, fallback.strength));
+  const strength: SignalStrength =
+    strengthValue === 'strong' || strengthValue === 'medium' || strengthValue === 'weak'
+      ? strengthValue
+      : fallback.strength;
+  const headline = rawText || fallback.headline.ko;
+
+  return {
+    ...fallback,
+    id,
+    icon: id.startsWith('context') ? 'context' : id,
+    strength,
+    title,
+    headline: { ko: headline, en: headline },
+    body: {
+      ko: rawText || fallback.body.ko,
+      en: rawText || fallback.body.en,
+    },
+    delta: num(candidate.delta_pct, fallback.delta),
+    sources: [str(candidate.source_ref, 'gold_export')],
+  };
+}
+
+function buildCauses(brief: ApiRecord | undefined, anomalies: ApiRecord[]): CauseCandidate[] {
+  const candidates = asRecordList(brief?.top_cause_candidates);
+  const source = candidates.length > 0 ? candidates : anomalies.slice(0, 4);
+  if (source.length === 0) return SCENARIO.causes;
+
+  return source.slice(0, 4).map((item, index) => inferCause(item, index, SCENARIO.causes[index] ?? SCENARIO.causes[0]));
+}
+
+function buildActions(actions: ApiRecord[], causes: CauseCandidate[]): RcAction[] {
+  if (actions.length === 0) return SCENARIO.actions;
+
+  return actions.map((action, index) => {
+    const description = str(action.description, str(action.why_this_action, SCENARIO.actions[index % SCENARIO.actions.length].summary.ko));
+    const expected = str(action.expected_effect, '');
+    const risk = str(action.risk_note, '');
+    const fallback = SCENARIO.actions[index % SCENARIO.actions.length];
+    return {
+      id: str(action.action_id, fallback.id),
+      effort: index % 3 === 0 ? 'low' : index % 3 === 1 ? 'medium' : 'high',
+      impact: index % 3 === 1 ? 'high' : 'medium',
+      timeframe: index < 3 ? 'this-week' : index < 5 ? 'next-2-weeks' : 'next-month',
+      type: str(action.action_type, fallback.type),
+      title: {
+        ko: str(action.title, fallback.title.ko),
+        en: str(action.title, fallback.title.en),
+      },
+      summary: { ko: description, en: description },
+      tied: causes.length ? [causes[index % causes.length].id] : fallback.tied,
+      steps: [
+        { ko: description, en: description },
+        { ko: expected || '실행 후 지표 변화를 확인합니다.', en: expected || 'Review the metric movement after launch.' },
+        { ko: risk || '매출 회복을 보장하지 않는 액션 후보입니다.', en: risk || 'This action does not guarantee revenue recovery.' },
+      ],
+    };
+  });
+}
+
+function buildReliability(brief: ApiRecord | undefined, context: ApiRecord | undefined, pipelineMeta: Record<string, unknown> | undefined): Scenario['reliability'] {
+  const goldFiles = isRecord(pipelineMeta?.gold_files) ? pipelineMeta.gold_files : {};
+  const freshness = str(brief?.generated_at, SCENARIO.reliability.sources[0].freshness).slice(0, 10);
+  const coverage = Math.round(num(context?.source_coverage_score, 1) * 100);
+  const sources = Object.keys(goldFiles).length
+    ? Object.keys(goldFiles).map(id => ({
+      id,
+      name: sourceName(id),
+      freshness,
+      cadence: { ko: '배치', en: 'Batch' },
+      status: str(goldFiles[id]) ? 'ok' as const : 'partial' as const,
+      coverage: str(goldFiles[id]) ? coverage : 0,
+    }))
+    : SCENARIO.reliability.sources;
+
+  return {
+    overall: 'healthy',
+    sources,
+    runs: SCENARIO.reliability.runs,
+    failures: 0,
+    lastRun: { ko: freshness, en: freshness },
+  };
+}
+
+function buildStatuses(actions: ApiRecord[]): ActionStatuses {
+  const statuses: ActionStatuses = { ...DEFAULT_STATUSES };
+  actions.forEach(action => {
+    const id = str(action.action_id);
+    const status = str(action.status) as ActionStatus;
+    if (id && ['recommended', 'selected', 'planned', 'done', 'dismissed'].includes(status)) {
+      statuses[id] = status;
+    }
+  });
+  return statuses;
+}
+
+export function wantsApiData(): boolean {
+  if (typeof window === 'undefined') return false;
+  const search = new URLSearchParams(window.location.search);
+  if (search.get('data') === 'api') return true;
+  const [, hashQuery = ''] = window.location.hash.split('?');
+  return new URLSearchParams(hashQuery).get('data') === 'api';
+}
+
+export function buildScenarioFromApi(payload: RevenueApiPayload): { scenario: Scenario; defaultStatuses: ActionStatuses } {
+  const briefs = asRecordList(payload.briefs);
+  const anomalies = asRecordList(payload.anomalies);
+  const actions = asRecordList(payload.actions);
+  const contextRows = asRecordList(payload.context);
+  const brief = briefs[0];
+  const context = contextRows[0];
+  const revenueAnomaly = metricOf(anomalies, 'revenue_amount');
+  const causes = buildCauses(brief, anomalies);
+  const revenueChange = metricDelta(anomalies, 'revenue_amount', SCENARIO.revenueChange);
+
+  const scenario: Scenario = {
+    ...SCENARIO,
+    area: {
+      ko: str(brief?.trade_area_name, str(context?.trade_area_name, SCENARIO.area.ko)),
+      en: str(brief?.trade_area_name, SCENARIO.area.en),
+    },
+    category: {
+      ko: str(brief?.service_category_name, str(context?.service_category_name, SCENARIO.category.ko)),
+      en: str(brief?.service_category_name, SCENARIO.category.en),
+    },
+    base: {
+      ko: fmtQuarter(str(revenueAnomaly?.baseline_period, '2024Q3'), 'ko'),
+      en: fmtQuarter(str(revenueAnomaly?.baseline_period, '2024Q3'), 'en'),
+    },
+    compare: {
+      ko: fmtQuarter(str(revenueAnomaly?.compare_period, str(brief?.period_label, '2024Q4')), 'ko'),
+      en: fmtQuarter(str(revenueAnomaly?.compare_period, str(brief?.period_label, '2024Q4')), 'en'),
+    },
+    revenueChange,
+    txnChange: metricDelta(anomalies, 'transaction_count', SCENARIO.txnChange),
+    ticketChange: metricDelta(anomalies, 'avg_ticket_size', SCENARIO.ticketChange),
+    populationChange: num(context?.population_change_pct, SCENARIO.populationChange),
+    competitorChange: num(context?.store_count_change, SCENARIO.competitorChange),
+    rainyDayChange: num(context?.rain_day_count, SCENARIO.rainyDayChange),
+    revSeries: SCENARIO.revSeries.map((point, index, series) => (
+      index === series.length - 1 ? { ...point, v: 100 + revenueChange } : point
+    )),
+    causes,
+    actions: buildActions(actions, causes),
+    reliability: buildReliability(brief, context, payload.pipelineMeta),
+  };
+
+  return { scenario, defaultStatuses: buildStatuses(actions) };
+}
 
 export function getMockData(): { scenario: Scenario; defaultStatuses: ActionStatuses } {
   return { scenario: SCENARIO, defaultStatuses: DEFAULT_STATUSES };

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { SCENARIO, tr, fmtPct } from './revenueCockpitCopy';
 import { Icon, Pill, StrengthDots } from './revenueCockpitShared';
-import type { RcLang } from './revenueCockpitTypes';
+import type { RcLang, CauseCandidate, Scenario } from './revenueCockpitTypes';
 
 interface CompareBlock {
   primary: {
@@ -82,12 +82,36 @@ const compareBlocks: Record<string, CompareBlock> = {
   },
 };
 
-interface CauseEvidenceViewProps { lang: RcLang }
+function fallbackCompareBlock(cause: CauseCandidate, scenario: Scenario): CompareBlock {
+  return {
+    primary: {
+      label: cause.title,
+      base: { v: '100', sub: scenario.base },
+      comp: { v: (100 + cause.delta).toFixed(1), sub: scenario.compare },
+      delta: cause.delta,
+      unit: { ko: '지수', en: 'index' },
+    },
+    linked: [
+      { label: { ko: '추정매출', en: 'Revenue' }, delta: scenario.revenueChange, hint: { ko: '함께 관측', en: 'observed together' } },
+      { label: { ko: '거래건수', en: 'Transactions' }, delta: scenario.txnChange, hint: { ko: '함께 관측', en: 'observed together' } },
+    ],
+    sources: cause.sources.map(source => ({
+      name: { ko: source, en: source },
+      plain: { ko: 'Gold export 기반 신호', en: 'Signal from Gold export' },
+    })),
+  };
+}
 
-export function CauseEvidenceView({ lang }: CauseEvidenceViewProps) {
-  const [activeId, setActiveId] = useState(SCENARIO.causes[0].id);
-  const cause = SCENARIO.causes.find(x => x.id === activeId)!;
-  const block = compareBlocks[cause.id];
+interface CauseEvidenceViewProps { lang: RcLang; scenario?: Scenario }
+
+export function CauseEvidenceView({ lang, scenario = SCENARIO }: CauseEvidenceViewProps) {
+  const [activeId, setActiveId] = useState(scenario.causes[0].id);
+  const cause = scenario.causes.find(x => x.id === activeId) ?? scenario.causes[0];
+  const block = compareBlocks[cause.id] ?? fallbackCompareBlock(cause, scenario);
+
+  useEffect(() => {
+    setActiveId(scenario.causes[0].id);
+  }, [scenario]);
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', minHeight: '100%' }}>
@@ -101,7 +125,7 @@ export function CauseEvidenceView({ lang }: CauseEvidenceViewProps) {
             {lang === 'ko' ? '신호 강도 순서로 정렬했어요.' : 'Sorted by signal strength.'}
           </p>
         </div>
-        {SCENARIO.causes.map((cs, i) => (
+        {scenario.causes.map((cs, i) => (
           <button key={cs.id} onClick={() => setActiveId(cs.id)} style={{
             all: 'unset', cursor: 'pointer', display: 'grid',
             gridTemplateColumns: 'auto 1fr auto', gap: 12, alignItems: 'center',

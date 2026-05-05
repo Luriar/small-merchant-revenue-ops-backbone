@@ -18,6 +18,12 @@ export async function apiFetchActions() {
   return res.json();
 }
 
+export async function apiFetchContext() {
+  const res = await fetch(`${BASE}/context`);
+  if (!res.ok) throw new Error(`context ${res.status}`);
+  return res.json();
+}
+
 export async function apiUpdateActionStatus(id: string, status: string) {
   const res = await fetch(`${BASE}/actions/${id}/status`, {
     method: 'PATCH',

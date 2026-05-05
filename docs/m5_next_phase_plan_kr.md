@@ -4,6 +4,19 @@
 
 M5는 새로운 엔지니어링 마일스톤이 아니라, M4 Revenue Cockpit을 발표/포트폴리오/시연 가능한 형태로 정리하는 closure/presentation/polish 단계다.
 
+## 1-1. M5 engineering hardening first, packaging last
+
+M5의 실제 순서는 먼저 엔지니어링 검증 가능성을 정리하고, 그 다음 발표/포트폴리오 패키징으로 넘어간다.
+
+수정된 우선순위:
+
+1. deterministic validation/export hygiene
+2. API-connected cockpit mode
+3. Revenue Ops API tests
+4. validation script
+5. AWS readiness doc
+6. 이후에 demo guide / screenshot checklist / README / portfolio packaging
+
 ## 2. M5 원칙
 
 - 무거운 신규 인프라 작업을 만들지 않는다.

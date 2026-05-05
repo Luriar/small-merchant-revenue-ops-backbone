@@ -1,7 +1,7 @@
 import { SCENARIO, tr, fmtPct } from './revenueCockpitCopy';
 import { Icon, Pill, StrengthDots, Sparkline, StatePill, StateMenu, stateTone } from './revenueCockpitShared';
 import { RevenueTrendChart } from './RevenueTrendChart';
-import type { RcLang, RcScreen, ActionStatuses, ActionStatus, RcAction, CauseCandidate } from './revenueCockpitTypes';
+import type { RcLang, RcScreen, ActionStatuses, ActionStatus, RcAction, CauseCandidate, Scenario } from './revenueCockpitTypes';
 
 // ─── cause rail (compact row for right rail) ──────────────────────────────────
 
@@ -78,7 +78,7 @@ function WeeklyPlan({ lang, actions, statuses, onSetStatus }: { lang: RcLang; ac
     ? [{k:'mon',d:'월'},{k:'tue',d:'화'},{k:'wed',d:'수'},{k:'thu',d:'목'},{k:'fri',d:'금'}]
     : [{k:'mon',d:'Mon'},{k:'tue',d:'Tue'},{k:'wed',d:'Wed'},{k:'thu',d:'Thu'},{k:'fri',d:'Fri'}];
   const dayFor: Record<string, number> = { 'rain-coupon': 0, 'stamp-card': 2, 'delivery-push': 4, 'instagram': 1, 'winter-set': 3, 'staff-rebalance': 0 };
-  const byDay = days.map((_, i) => actions.filter(a => (dayFor[a.id] ?? 0) === i));
+  const byDay = days.map((_, i) => actions.filter((a, index) => (dayFor[a.id] ?? index % days.length) === i));
   const todayIdx = 0;
 
   return (
@@ -159,7 +159,7 @@ function ShortlistRow({ a, lang, state, setState }: { a: RcAction; lang: RcLang;
 
 // ─── reliability compact (right rail bottom) ──────────────────────────────────
 
-function ReliabilityCompact({ lang, onOpen }: { lang: RcLang; onOpen: () => void }) {
+function ReliabilityCompact({ lang, scenario, onOpen }: { lang: RcLang; scenario: Scenario; onOpen: () => void }) {
   return (
     <button onClick={onOpen} className="rc-card" style={{
       all: 'unset', cursor: 'pointer', display: 'block', boxSizing: 'border-box',
@@ -183,7 +183,7 @@ function ReliabilityCompact({ lang, onOpen }: { lang: RcLang; onOpen: () => void
         <Icon name="arrow-right" size={13}/>
       </div>
       <div style={{ display: 'flex', gap: 4 }}>
-        {SCENARIO.reliability.sources.map(src => (
+        {scenario.reliability.sources.map(src => (
           <div key={src.id} title={src.name[lang]} style={{
             flex: 1, height: 4, borderRadius: 2,
             background: src.status === 'ok' ? 'var(--rc-good)' : 'var(--rc-accent)',
@@ -192,7 +192,7 @@ function ReliabilityCompact({ lang, onOpen }: { lang: RcLang; onOpen: () => void
         ))}
       </div>
       <div style={{ marginTop: 6, fontSize: 10, color: 'var(--rc-fg-dim)', fontFamily: 'var(--rc-mono)' }}>
-        {tr('freshAsOf', lang)} {SCENARIO.reliability.lastRun[lang]} · {lang === 'ko' ? '상권/업종 단위 추정치' : 'Trade-area estimate'}
+        {tr('freshAsOf', lang)} {scenario.reliability.lastRun[lang]} · {lang === 'ko' ? '상권/업종 단위 추정치' : 'Trade-area estimate'}
       </div>
     </button>
   );
@@ -202,17 +202,18 @@ function ReliabilityCompact({ lang, onOpen }: { lang: RcLang; onOpen: () => void
 
 interface RevenueBriefViewProps {
   lang: RcLang;
+  scenario?: Scenario;
   onNavigate: (screen: RcScreen) => void;
   statuses: ActionStatuses;
   onSetStatus: (id: string, status: ActionStatus) => void;
 }
 
-export function RevenueBriefView({ lang, onNavigate, statuses, onSetStatus }: RevenueBriefViewProps) {
-  const thisWeekActions = SCENARIO.actions.filter(a => a.timeframe === 'this-week');
+export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, statuses, onSetStatus }: RevenueBriefViewProps) {
+  const thisWeekActions = scenario.actions.filter(a => a.timeframe === 'this-week');
   const secondaryMetrics = [
-    { lab: lang === 'ko' ? '거래건수'  : 'Transactions', v: '11.9k',  d: SCENARIO.txnChange,        spark: [{v:100},{v:101},{v:99},{v:102},{v:104},{v:103},{v:100},{v:90}] },
-    { lab: lang === 'ko' ? '객단가'    : 'Avg. ticket',  v: '₩6,450', d: SCENARIO.ticketChange,     spark: [{v:100},{v:99},{v:101},{v:102},{v:101},{v:100},{v:100},{v:98}] },
-    { lab: lang === 'ko' ? '생활인구'  : 'Foot traffic', v: '142k',   d: SCENARIO.populationChange, spark: [{v:104},{v:103},{v:102},{v:101},{v:101},{v:100},{v:100},{v:91.6}] },
+    { lab: lang === 'ko' ? '거래건수'  : 'Transactions', v: '11.9k',  d: scenario.txnChange,        spark: [{v:100},{v:101},{v:99},{v:102},{v:104},{v:103},{v:100},{v:90}] },
+    { lab: lang === 'ko' ? '객단가'    : 'Avg. ticket',  v: '₩6,450', d: scenario.ticketChange,     spark: [{v:100},{v:99},{v:101},{v:102},{v:101},{v:100},{v:100},{v:98}] },
+    { lab: lang === 'ko' ? '생활인구'  : 'Foot traffic', v: '142k',   d: scenario.populationChange, spark: [{v:104},{v:103},{v:102},{v:101},{v:101},{v:100},{v:100},{v:91.6}] },
   ];
 
   return (
@@ -233,14 +234,14 @@ export function RevenueBriefView({ lang, onNavigate, statuses, onSetStatus }: Re
           maxWidth: 760,
         }}>
           {lang === 'ko'
-            ? <>2024년 4분기 추정매출이 직전 분기 대비 <span style={{ color: 'var(--rc-accent-strong)' }}>12.0%</span> 줄었습니다.</>
-            : <>Estimated revenue fell <span style={{ color: 'var(--rc-accent-strong)' }}>12.0%</span> from the prior quarter.</>}
+            ? <>{scenario.compare.ko} 추정매출이 직전 분기 대비 <span style={{ color: 'var(--rc-accent-strong)' }}>{Math.abs(scenario.revenueChange).toFixed(1)}%</span> 줄었습니다.</>
+            : <>Estimated revenue fell <span style={{ color: 'var(--rc-accent-strong)' }}>{Math.abs(scenario.revenueChange).toFixed(1)}%</span> from the prior quarter.</>}
         </h1>
 
         <p className="rc-keep-words" style={{ fontSize: 14.5, color: 'var(--rc-fg-muted)', maxWidth: 620, margin: '0 0 18px', lineHeight: 1.66 }}>
           {lang === 'ko'
-            ? '거래건수 감소와 함께 관측되었습니다. 같은 기간 생활인구가 줄고 강수일수와 인근 점포수가 늘었습니다. 가능성 높은 원인 후보 4건과 이번 주 액션을 아래에서 확인해주세요.'
-            : "Transaction count fell alongside revenue. Foot traffic softened, rainy days rose, and nearby café count grew. Four likely cause candidates and this week's actions are below."}
+            ? `거래건수 감소와 함께 관측되었습니다. 같은 기간 생활인구가 줄고 강수일수와 인근 점포수가 늘었습니다. 가능성 높은 원인 후보 ${scenario.causes.length}건과 이번 주 액션을 아래에서 확인해주세요.`
+            : `Transaction count fell alongside revenue. Foot traffic softened, rainy days rose, and nearby café count grew. ${scenario.causes.length} likely cause candidates and this week's actions are below.`}
         </p>
 
         {/* chart card */}
@@ -256,7 +257,7 @@ export function RevenueBriefView({ lang, onNavigate, statuses, onSetStatus }: Re
                 </span>
                 <span className="rc-num" style={{ fontSize: 13, color: 'var(--rc-bad-strong)', fontWeight: 600,
                   display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  <Icon name="arrow-down" size={12}/> {fmtPct(SCENARIO.revenueChange)} {tr('vsBaseline', lang)}
+                  <Icon name="arrow-down" size={12}/> {fmtPct(scenario.revenueChange)} {tr('vsBaseline', lang)}
                 </span>
               </div>
             </div>
@@ -272,7 +273,7 @@ export function RevenueBriefView({ lang, onNavigate, statuses, onSetStatus }: Re
               ))}
             </div>
           </div>
-          <RevenueTrendChart lang={lang} height={174}/>
+          <RevenueTrendChart lang={lang} scenario={scenario} height={174}/>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, paddingTop: 8,
             borderTop: '1px dashed var(--rc-rule)', fontSize: 11.5, color: 'var(--rc-fg-muted)', lineHeight: 1.45 }}>
             <span style={{ color: 'var(--rc-accent-strong)', display: 'inline-flex', marginTop: 3 }}>
@@ -333,10 +334,10 @@ export function RevenueBriefView({ lang, onNavigate, statuses, onSetStatus }: Re
             }}>{tr('seeEvidence', lang)} <Icon name="arrow-right" size={11}/></button>
           </div>
           <p style={{ fontSize: 11.5, color: 'var(--rc-fg-muted)', margin: '0 0 10px' }}>
-            {lang === 'ko' ? '4개 후보 · 신호 강함 순' : 'Four candidates · sorted by signal strength'}
+            {lang === 'ko' ? `${scenario.causes.length}개 후보 · 신호 강함 순` : `${scenario.causes.length} candidates · sorted by signal strength`}
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {SCENARIO.causes.map((c, i) => (
+            {scenario.causes.map((c, i) => (
               <CauseRail key={c.id} c={c} lang={lang} rank={i+1} onOpen={() => onNavigate('evidence')}/>
             ))}
           </div>
@@ -351,10 +352,10 @@ export function RevenueBriefView({ lang, onNavigate, statuses, onSetStatus }: Re
             <h2 className="rc-serif" style={{ fontSize: 18, fontWeight: 500, margin: 0, color: 'var(--rc-accent-strong)' }}>
               {tr('thisWeek', lang)}
             </h2>
-            <Pill tone="warm" size="sm">3 / 6</Pill>
+            <Pill tone="warm" size="sm">{Math.min(thisWeekActions.length, 3)} / {scenario.actions.length}</Pill>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {SCENARIO.actions.filter(a => a.timeframe === 'this-week').slice(0, 3).map(a => (
+            {scenario.actions.filter(a => a.timeframe === 'this-week').slice(0, 3).map(a => (
               <ShortlistRow key={a.id} a={a} lang={lang}
                 state={statuses[a.id] ?? 'recommended'}
                 setState={st => onSetStatus(a.id, st)}/>
@@ -362,7 +363,7 @@ export function RevenueBriefView({ lang, onNavigate, statuses, onSetStatus }: Re
           </div>
         </div>
 
-        <ReliabilityCompact lang={lang} onOpen={() => onNavigate('reliability')}/>
+        <ReliabilityCompact lang={lang} scenario={scenario} onOpen={() => onNavigate('reliability')}/>
       </aside>
     </div>
   );
