@@ -280,7 +280,7 @@ Expected:
 
 ## 9. Current Decision
 
-IAM mutation was not performed in this preparation step.
+Initial preparation step: IAM mutation was not performed.
 
 Required approval to continue:
 
@@ -289,3 +289,102 @@ Approved to add the RevenueOpsFrontendCloudFrontFoundationAccess inline IAM poli
 ```
 
 Separate approval is still required before applying the remaining Terraform plan.
+
+## 10. Execution Update After IAM Approval
+
+Approval received:
+
+```text
+Approved to add the RevenueOpsFrontendCloudFrontFoundationAccess inline IAM policy to de-ai-12 and then rerun the remaining STEP 2-B frontend foundation plan.
+```
+
+IAM mutation performed:
+
+```bash
+aws iam put-user-policy \
+  --user-name de-ai-12 \
+  --policy-name RevenueOpsFrontendCloudFrontFoundationAccess \
+  --policy-document '<approved narrow CloudFront policy>'
+```
+
+Policy attached to `de-ai-12`:
+
+```text
+RevenueOpsFrontendCloudFrontFoundationAccess
+```
+
+IAM after simulation:
+
+| Action | Decision |
+| --- | --- |
+| `cloudfront:CreateOriginAccessControl` | `allowed` |
+| `cloudfront:GetOriginAccessControl` | `allowed` |
+| `cloudfront:ListOriginAccessControls` | `allowed` |
+| `cloudfront:CreateDistribution` | `allowed` |
+| `cloudfront:GetDistribution` | `allowed` |
+| `cloudfront:ListDistributions` | `allowed` |
+| `cloudfront:TagResource` | `allowed` |
+
+Validation:
+
+```bash
+terraform fmt -recursive -check infra/terraform
+terraform -chdir=infra/terraform/envs/revenue-dev validate
+```
+
+Result:
+
+- fmt passed
+- validate passed
+- known warning remains: backend `dynamodb_table` parameter is deprecated
+
+Remaining plan command:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  -out=tfplan.step2b.remaining-cloudfront
+```
+
+Remaining plan summary:
+
+```text
+Plan: 3 to add, 0 to change, 0 to destroy.
+```
+
+Plan creates only:
+
+```text
+module.frontend_hosting.aws_cloudfront_distribution.frontend[0]
+module.frontend_hosting.aws_cloudfront_origin_access_control.frontend[0]
+module.frontend_hosting.aws_s3_bucket_policy.frontend[0]
+```
+
+Unexpected resource check:
+
+- API Gateway: none
+- Lambda Revenue Ops API: none
+- Cognito: none
+- Aurora/RDS: none
+- Glue/Athena/Step Functions/EventBridge: none
+- SSM external API parameters: none
+- CloudWatch SaaS alarms: none
+- frontend asset upload/deploy: none
+
+Frontend bucket object check:
+
+```text
+revenue-ops-frontend-dev-827913617635 is still empty.
+```
+
+Current stop point:
+
+- IAM fix is complete.
+- Remaining Terraform plan is clean.
+- Remaining Terraform apply was not run because no separate apply approval has been provided.
+
+Required approval to finish STEP 2-B:
+
+```text
+Approved to apply tfplan.step2b.remaining-cloudfront for the remaining STEP 2-B CloudFront OAC, CloudFront distribution, and frontend bucket policy only.
+```
