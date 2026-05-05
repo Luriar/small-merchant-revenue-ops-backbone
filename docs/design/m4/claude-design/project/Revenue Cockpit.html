@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Revenue Brief — 3 directions</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+  html, body { margin: 0; padding: 0; background: #f0eee9; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+  /* Each artboard scrolls vertically internally; horizontal is fixed by the canvas */
+  .artboard-wrap { overflow: auto; }
+  .artboard-wrap::-webkit-scrollbar { width: 0; height: 0; }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="direction-a.jsx"></script>
+<script type="text/babel" src="direction-b.jsx"></script>
+<script type="text/babel" src="direction-c.jsx"></script>
+<script type="text/babel" src="direction-a-plus.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="env,react">
+const { useState } = React;
+
+// Wrapper for an artboard that fills the inner canvas frame and lets the
+// embedded prototype scroll vertically. Width/height match the DCArtboard
+// dimensions exactly so the scaled focus mode looks right.
+function Artboard({ children, w, h }) {
+  return (
+    <div className="artboard-wrap" style={{ width: w, height: h, background: '#f0eee9', position: 'relative' }}>
+      {children}
+    </div>
+  );
+}
+
+// Rationale post-it style note next to each artboard
+function Rationale({ title, body, swatches }) {
+  return (
+    <div style={{
+      width: 280,
+      background: '#fff8d6',
+      border: '1px solid rgba(60,50,20,0.12)',
+      boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
+      borderRadius: 6,
+      padding: '18px 20px',
+      fontFamily: '"Source Serif 4", Georgia, serif',
+      color: '#3a3324',
+      transform: 'rotate(-0.6deg)',
+    }}>
+      <div style={{ fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase',
+        fontFamily: 'Inter, sans-serif', color: '#7a6a3a', marginBottom: 8 }}>
+        Design rationale
+      </div>
+      <div style={{ fontSize: 16, lineHeight: 1.3, fontWeight: 600, marginBottom: 8 }}>{title}</div>
+      <div style={{ fontSize: 13, lineHeight: 1.55 }}>{body}</div>
+      {swatches && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 14 }}>
+          {swatches.map((s, i) => (
+            <span key={i} title={s.label} style={{
+              width: 22, height: 22, borderRadius: '50%', background: s.color,
+              border: '1px solid rgba(0,0,0,0.08)',
+            }}/>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ART_W = 1440;
+const ART_H = 980;
+
+function App() {
+  return (
+    <DesignCanvas>
+      <DCSection
+        id="refined"
+        title="Refined direction — A+ · Evidence-backed Action Brief"
+        subtitle="A's editorial split + B's annotated chart + C's weekly plan idea · Action workflow: Recommended → Selected → Planned → Done / Dismissed">
+
+        <DCArtboard id="dirAP-light" label="A+ · Revenue Brief · Light · KO" width={ART_W} height={ART_H}>
+          <Artboard w={ART_W} h={ART_H}>
+            <window.DirectionAPlus initialLang="ko" initialTheme="light" initialScreen="brief"/>
+          </Artboard>
+        </DCArtboard>
+
+        <DCArtboard id="dirAP-dark" label="A+ · Revenue Brief · Dark · EN" width={ART_W} height={ART_H}>
+          <Artboard w={ART_W} h={ART_H}>
+            <window.DirectionAPlus initialLang="en" initialTheme="dark" initialScreen="brief"/>
+          </Artboard>
+        </DCArtboard>
+
+        <DCArtboard id="dirAP-actions" label="A+ · Action Planner · 5 statuses" width={ART_W} height={ART_H}>
+          <Artboard w={ART_W} h={ART_H}>
+            <window.DirectionAPlus initialLang="ko" initialTheme="light" initialScreen="actions"/>
+          </Artboard>
+        </DCArtboard>
+
+        <DCArtboard id="dirAP-evidence" label="A+ · Cause Evidence" width={ART_W} height={ART_H}>
+          <Artboard w={ART_W} h={ART_H}>
+            <window.DirectionAPlus initialLang="ko" initialTheme="light" initialScreen="evidence"/>
+          </Artboard>
+        </DCArtboard>
+
+        <DCArtboard id="dirAP-reliability" label="A+ · Data Reliability" width={ART_W} height={ART_H}>
+          <Artboard w={ART_W} h={ART_H}>
+            <window.DirectionAPlus initialLang="ko" initialTheme="light" initialScreen="reliability"/>
+          </Artboard>
+        </DCArtboard>
+
+        <DCArtboard id="dirAP-rationale" label="Rationale · A+" width={320} height={ART_H} kind="postit">
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}>
+            <Rationale
+              title="Editorial brief, evidence-on-chart, week mapped out"
+              body={
+                <>
+                  Combines what worked in each direction: A's narrative split-pane and headline; B's annotated chart with cause pins drawn directly onto the Q3→Q4 drop so the "why" lives next to the "what"; C's calendar idea — but as an actual five-day execution plan, not an empty motivational circle. Actions move through five clear states (Recommended → Selected → Planned → Done / Dismissed), visible both inline on the brief and as a kanban on the planner. Headline scaled down to 40px. Warm paper + amber accent throughout, dark mode tuned to the same palette.
+                </>
+              }
+              swatches={[
+                { label: 'paper', color: '#f4efe7' },
+                { label: 'ink',   color: '#1f1b16' },
+                { label: 'amber', color: '#b8542a' },
+                { label: 'forest',color: '#2f6b48' },
+                { label: 'slate', color: '#4a5a78' },
+              ]}
+            />
+          </div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection
+        id="overview"
+        title="Original explorations — A · B · C"
+        subtitle="Earlier directions for reference. AI Revenue Ops OS · Seongsu coffee/drinks · 2024 Q4 vs Q3 · KO/EN · Light/Dark/System">
+
+        <DCArtboard id="dirA" label="A · Merchant Revenue Cockpit" width={ART_W} height={ART_H}>
+          <Artboard w={ART_W} h={ART_H}>
+            <window.DirectionA/>
+          </Artboard>
+        </DCArtboard>
+
+        <DCArtboard id="dirA-rationale" label="Rationale · A" width={320} height={ART_H} kind="postit">
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}>
+            <Rationale
+              title="Editorial split: story left, modules right"
+              body={
+                <>
+                  Reads as a written briefing. The headline is the conclusion in plain language; numbers sit in a single quiet block, not a wall of KPIs. Top-3 cause candidates and this-week actions occupy the right rail, with everything else one click away. Warm paper + amber accent signals "calm authority," not BI-tool. Source serif for narrative voice; Inter for UI; tabular-nums for figures. Progressive disclosure: detail lives behind chevrons, not on the surface.
+                </>
+              }
+              swatches={[
+                { label: 'paper', color: '#f4efe7' },
+                { label: 'ink',   color: '#1f1b16' },
+                { label: 'amber', color: '#b8542a' },
+                { label: 'forest',color: '#2f6b48' },
+              ]}
+            />
+          </div>
+        </DCArtboard>
+
+        <DCArtboard id="dirB" label="B · Evidence-backed Premium Dashboard" width={ART_W} height={ART_H}>
+          <Artboard w={ART_W} h={ART_H}>
+            <window.DirectionB/>
+          </Artboard>
+        </DCArtboard>
+
+        <DCArtboard id="dirB-rationale" label="Rationale · B" width={320} height={ART_H} kind="postit">
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}>
+            <Rationale
+              title="The chart is the argument"
+              body={
+                <>
+                  For merchants who want to see the evidence before reading the conclusion. Hero is one annotated chart with cause pins drawn directly onto the Q3→Q4 drop, so the "why" is co-located with the "what." Compact KPI rail + attribution-style cause stack mirrors how analysts read variance. Cool slate + emerald accent feels measured and trustworthy without going full Bloomberg. Denser, but still spacious; no metric without a sparkline; every chart has a plain-language one-liner.
+                </>
+              }
+              swatches={[
+                { label: 'paper', color: '#f5f5f1' },
+                { label: 'ink',   color: '#0a0c0b' },
+                { label: 'forest',color: '#0e6b50' },
+                { label: 'rust',  color: '#b94a30' },
+              ]}
+            />
+          </div>
+        </DCArtboard>
+
+        <DCArtboard id="dirC" label="C · Action-first Small Business Assistant" width={ART_W} height={ART_H}>
+          <Artboard w={ART_W} h={ART_H}>
+            <window.DirectionC/>
+          </Artboard>
+        </DCArtboard>
+
+        <DCArtboard id="dirC-rationale" label="Rationale · C" width={320} height={ART_H} kind="postit">
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}>
+            <Rationale
+              title="Briefing letter + a week, mapped out"
+              body={
+                <>
+                  For the merchant who opens the app once a week and wants a plan, not a dashboard. The brief reads as a short briefing letter; the hero module is the week itself — Mon/Wed/Fri actions tied to specific cause icons. The "why" lives in a calm side rail with strength dots; the chart is reduced to a single sparkline so the conversation stays about what to do. Cream + sage; serif headlines; rounded but never cute. No emoji, no illustration, no condescension.
+                </>
+              }
+              swatches={[
+                { label: 'cream', color: '#efeae0' },
+                { label: 'ink',   color: '#0a0908' },
+                { label: 'sage',  color: '#4a6a3f' },
+                { label: 'rust',  color: '#a64a2a' },
+              ]}
+            />
+          </div>
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
