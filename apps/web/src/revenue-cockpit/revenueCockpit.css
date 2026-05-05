@@ -1,0 +1,133 @@
+/* Revenue Cockpit — scoped to .rc-root; no global :root pollution */
+
+.rc-root {
+  /* LIGHT — premium SaaS warm */
+  --rc-bg: #f6f2ea;
+  --rc-surface-0: #fbf8f1;
+  --rc-surface-1: #ffffff;
+  --rc-surface-2: #f0eadf;
+  --rc-surface-3: #e6dfd2;
+  --rc-fg: #1f1b16;
+  --rc-fg-strong: #0d0b08;
+  --rc-fg-muted: #6b6258;
+  --rc-fg-dim: #9a9087;
+  --rc-rule: rgba(40,30,20,0.09);
+  --rc-rule-strong: rgba(40,30,20,0.18);
+  --rc-shadow-sm: 0 1px 2px rgba(40,30,20,0.04), 0 1px 1px rgba(40,30,20,0.03);
+  --rc-shadow-md: 0 4px 14px rgba(40,30,20,0.06), 0 1px 3px rgba(40,30,20,0.04);
+  --rc-shadow-lg: 0 12px 32px rgba(40,30,20,0.08), 0 2px 6px rgba(40,30,20,0.04);
+  --rc-accent: #b8542a;
+  --rc-accent-strong: #8a3a18;
+  --rc-accent-soft: #fbe9dc;
+  --rc-accent-soft-bd: rgba(184,84,42,0.18);
+  --rc-good: #2f6b48;
+  --rc-good-strong: #234f36;
+  --rc-good-soft: #e3eee5;
+  --rc-good-soft-bd: rgba(47,107,72,0.18);
+  --rc-bad: #a23d2a;
+  --rc-bad-strong: #7d2c1e;
+  --rc-bad-soft: #f7e3dd;
+  --rc-bad-soft-bd: rgba(162,61,42,0.20);
+  --rc-info: #4a5a78;
+  --rc-info-soft: #e3e8f0;
+  --rc-info-soft-bd: rgba(74,90,120,0.20);
+  --rc-chip-bg: #efe9dd;
+  --rc-chip-fg: #4a4239;
+  --rc-chip-bd: rgba(40,30,20,0.10);
+  --rc-serif: 'Source Serif 4', 'Iowan Old Style', Georgia, serif;
+  --rc-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --rc-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.rc-root[data-theme="dark"] {
+  --rc-bg: #14110d;
+  --rc-surface-0: #1b1814;
+  --rc-surface-1: #221e19;
+  --rc-surface-2: #2a251f;
+  --rc-surface-3: #332d25;
+  --rc-fg: #ece6db;
+  --rc-fg-strong: #fbf6ec;
+  --rc-fg-muted: #a39686;
+  --rc-fg-dim: #6e6357;
+  --rc-rule: rgba(255,240,220,0.10);
+  --rc-rule-strong: rgba(255,240,220,0.18);
+  --rc-shadow-sm: 0 1px 2px rgba(0,0,0,0.30);
+  --rc-shadow-md: 0 4px 14px rgba(0,0,0,0.32), 0 1px 3px rgba(0,0,0,0.20);
+  --rc-shadow-lg: 0 12px 32px rgba(0,0,0,0.40), 0 2px 6px rgba(0,0,0,0.24);
+  --rc-accent: #e08a5f;
+  --rc-accent-strong: #f0a37a;
+  --rc-accent-soft: rgba(224,138,95,0.14);
+  --rc-accent-soft-bd: rgba(224,138,95,0.28);
+  --rc-good: #6fa882;
+  --rc-good-strong: #8cc09e;
+  --rc-good-soft: rgba(111,168,130,0.14);
+  --rc-good-soft-bd: rgba(111,168,130,0.30);
+  --rc-bad: #d97560;
+  --rc-bad-strong: #ea8c79;
+  --rc-bad-soft: rgba(217,117,96,0.14);
+  --rc-bad-soft-bd: rgba(217,117,96,0.28);
+  --rc-info: #8fa1c2;
+  --rc-info-soft: rgba(143,161,194,0.14);
+  --rc-info-soft-bd: rgba(143,161,194,0.30);
+  --rc-chip-bg: #2a251f;
+  --rc-chip-fg: #c8bca9;
+  --rc-chip-bd: rgba(255,240,220,0.12);
+}
+
+.rc-root {
+  background: var(--rc-bg);
+  color: var(--rc-fg);
+  font-family: var(--rc-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.rc-root * {
+  box-sizing: border-box;
+}
+
+.rc-root button {
+  font-family: inherit;
+}
+
+.rc-serif {
+  font-family: var(--rc-serif);
+  font-feature-settings: "ss01";
+}
+
+.rc-mono {
+  font-family: var(--rc-mono);
+  font-feature-settings: "tnum";
+}
+
+.rc-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.rc-card {
+  background: var(--rc-surface-1);
+  border: 1px solid var(--rc-rule);
+  border-radius: 12px;
+  box-shadow: var(--rc-shadow-sm);
+}
+
+.rc-keep-words {
+  word-break: keep-all;
+  line-break: strict;
+  overflow-wrap: break-word;
+}
+
+.rc-no-wrap {
+  white-space: nowrap;
+  word-break: keep-all;
+  line-break: strict;
+}
+
+/* Screen fill */
+.rc-screen {
+  flex: 1;
+  overflow-y: auto;
+}

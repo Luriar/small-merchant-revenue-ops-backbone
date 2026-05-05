@@ -1,1 +1,1 @@
-export type AppPage = "traceability" | "changes" | "issues" | "runs";
+export type AppPage = "traceability" | "changes" | "issues" | "runs" | "revenue-cockpit";

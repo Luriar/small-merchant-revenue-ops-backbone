@@ -1,0 +1,35 @@
+const BASE = '/api/v1/revenue';
+
+export async function apiFetchBriefs() {
+  const res = await fetch(`${BASE}/briefs`);
+  if (!res.ok) throw new Error(`briefs ${res.status}`);
+  return res.json();
+}
+
+export async function apiFetchAnomalies() {
+  const res = await fetch(`${BASE}/anomalies`);
+  if (!res.ok) throw new Error(`anomalies ${res.status}`);
+  return res.json();
+}
+
+export async function apiFetchActions() {
+  const res = await fetch(`${BASE}/actions`);
+  if (!res.ok) throw new Error(`actions ${res.status}`);
+  return res.json();
+}
+
+export async function apiUpdateActionStatus(id: string, status: string) {
+  const res = await fetch(`${BASE}/actions/${id}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) throw new Error(`update ${id} ${res.status}`);
+  return res.json();
+}
+
+export async function apiFetchPipelineMeta() {
+  const res = await fetch(`${BASE}/pipeline-meta`);
+  if (!res.ok) throw new Error(`pipeline-meta ${res.status}`);
+  return res.json();
+}

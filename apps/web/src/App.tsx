@@ -4,6 +4,7 @@ import { ChangeTimelinePage } from "./pages/ChangeTimelinePage";
 import { LinkedIssueViewPage } from "./pages/LinkedIssueViewPage";
 import { ReliabilityPanelPage } from "./pages/ReliabilityPanelPage";
 import { TraceabilityOverviewPage } from "./pages/TraceabilityOverviewPage";
+import { RevenueCockpitApp } from "./revenue-cockpit/RevenueCockpitApp";
 import type { AppPage } from "./types/navigation";
 
 function resolvePageFromHash(hash: string): AppPage {
@@ -19,6 +20,10 @@ function resolvePageFromHash(hash: string): AppPage {
 
   if (page === "runs") {
     return "runs";
+  }
+
+  if (page === "revenue-cockpit") {
+    return "revenue-cockpit";
   }
 
   return "traceability";
@@ -57,6 +62,10 @@ export function App() {
     window.history.pushState(null, "", nextUrl);
     setActivePage(page);
   };
+
+  if (activePage === "revenue-cockpit") {
+    return <RevenueCockpitApp />;
+  }
 
   if (activePage === "changes") {
     return (
