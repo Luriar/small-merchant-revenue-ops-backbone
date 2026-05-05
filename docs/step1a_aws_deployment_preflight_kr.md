@@ -2,7 +2,7 @@
 
 ## 1. 목적
 
-STEP 1-A의 목적은 AWS 배포를 수행하는 것이 아니라, 현재 repo의 AWS/Terraform 배포 준비 상태를 점검하고 가장 안전한 STEP 1 배포 경로를 정리하는 것이다.
+STEP 1-A의 목적은 AWS 배포를 수행하는 것이 아니라, M5에서 완성한 local/static/export-backed MVP를 M6 production-grade minimal AWS architecture로 옮기기 위한 repo/AWS/Terraform 준비 상태를 점검하고 가장 안전한 STEP 1 배포 경로를 정리하는 것이다.
 
 Hard stop:
 
@@ -47,53 +47,66 @@ beeff2b chore: initialize small merchant revenue ops backbone
 
 ## 3. 현재 Repo 배포 준비 상태
 
-현재 repo는 두 가지 배포 축이 섞여 있다.
+현재 repo는 small-merchant Revenue Ops SaaS의 productionization 출발점이다. M5의 완료 기준은 local/static/export-backed MVP였고, M6의 목표는 이를 real-service-grade minimal AWS architecture로 전환하는 것이다.
+
+현재 repo에는 두 가지 구현 축이 있다.
 
 1. M3 Terraform: serverless batch ETL foundation
-2. M4/M5/M6 Revenue Cockpit: local portfolio frontend/API demo
+2. M4/M5 Revenue Cockpit: local/static/export-backed frontend/API MVP
 
-현재 Terraform은 웹 호스팅이나 Revenue Ops API hosting을 직접 배포하지 않는다. `infra/terraform/envs/revenue-dev`는 S3 data lake, Glue Catalog/Jobs, Athena, Lambda extractors, Step Functions, EventBridge Scheduler, CloudWatch, SSM Parameter Store를 배포하는 ETL stack이다.
+현재 Terraform은 웹 호스팅, Revenue Ops API hosting, Cognito, Aurora Serverless v2를 아직 직접 배포하지 않는다. `infra/terraform/envs/revenue-dev`는 S3 data lake, Glue Catalog/Jobs, Athena, Lambda extractors, Step Functions, EventBridge Scheduler, CloudWatch, SSM Parameter Store를 배포하는 ETL stack이다.
 
-Revenue Cockpit frontend는 `apps/web` Vite app이며, API는 `apps/api/src/server.js` Node entrypoint다. API는 현재 `apps/api/src/revenue-ops/data/revenue_ops_export.json`을 읽는 local/export-backed API foundation이고, real Aurora persistence나 live external collector는 아직 연결하지 않는다.
+Revenue Cockpit frontend는 `apps/web` Vite app이며, API는 `apps/api/src/server.js` Node entrypoint다. API는 현재 `apps/api/src/revenue-ops/data/revenue_ops_export.json`을 읽는 export-backed API foundation이고, Aurora persistence나 live external collector는 아직 연결하지 않는다. M6에서는 이 경계를 유지한 채, 서비스 운영에 필요한 AWS hosting/API/auth/persistence 기반을 단계적으로 추가한다.
 
 ## 4. STEP 1에서 가장 안전한 AWS 배포 아키텍처
 
-STEP 1의 권장 아키텍처는 "공개 데모 안정성 우선"이다.
+STEP 1의 권장 아키텍처는 small-merchant SaaS production-min target을 기준으로 한다. 다만 첫 배포 increment에서는 export-backed data와 fallback behavior를 유지해 운영 리스크를 낮춘다.
 
 ```text
-Local Gold/export artifact
-  -> static revenue_ops_export.json
-  -> static frontend build
-  -> S3 + CloudFront or Amplify Hosting
-  -> optional later: API Gateway + Lambda read-only Revenue Ops API
-  -> later: M3 serverless ETL stack
-  -> later: Aurora action persistence
+React/Vite frontend
+  -> S3 + CloudFront + Route 53
+  -> API Gateway + Lambda Revenue Ops API
+  -> S3 data/artifact bucket for export-backed JSON
+  -> Cognito for auth
+  -> Aurora Serverless v2 for action status, merchant/store/user/account, pipeline metadata
+  -> Glue/Athena/Step Functions/EventBridge/Lambda extractors pipeline
+  -> SSM Parameter Store / Secrets Manager
+  -> CloudWatch logs/alarms and X-Ray where useful
+  -> Terraform IaC
 ```
 
 STEP 1-B에서 가장 안전한 첫 배포 후보:
 
 - frontend: `apps/web/dist` 정적 build
-- hosting: Amplify Hosting 또는 S3 + CloudFront
-- data: bundled demo/static data 유지
-- API mode: 처음에는 fallback 유지, API hosting은 별도 단계로 분리
+- hosting: S3 + CloudFront + Route 53 설계/계획
+- API: API Gateway + Lambda Revenue Ops API 설계/계획
+- data: export-backed JSON artifact를 S3에 두는 경로 설계
+- auth/persistence: Cognito/Aurora Serverless v2는 schema와 Terraform 경계를 먼저 설계하고, apply는 별도 승인 후 진행
+- fallback: M5 fallback behavior는 초기 운영 안정성 장치로 유지
 
-기존 Terraform ETL stack은 비용과 리소스 수가 더 크므로, 최초 공개 포트폴리오 URL 확보와 분리해서 진행하는 것이 안전하다.
+기존 Terraform ETL stack은 pipeline foundation으로 유지한다. 다만 STEP 1-B에서는 웹/API/auth/persistence 배포 경계와 ETL stack 배포 경계를 분리해 plan을 검토하는 것이 안전하다.
 
 ## 5. 지금 배포 가능한 것과 나중으로 미뤄야 할 것
 
 지금 준비 가능한 것:
 
 - `apps/web` production build 검증
-- static frontend 배포 계획 수립
+- S3 + CloudFront + Route 53 frontend 배포 계획 수립
+- API Gateway + Lambda Revenue Ops API 배포 계획 수립
+- Cognito/Aurora Serverless v2 배포 범위와 Terraform module 경계 정의
 - Terraform formatting 정리
 - Terraform bootstrap validate
 - Terraform backend/tfvars 준비 목록화
-- API/static JSON hosting 설계
+- S3 artifact/static JSON hosting 설계
 
 다음 단계 전까지 대기해야 하는 것:
 
 - Terraform bootstrap apply
 - `revenue-dev` Terraform apply
+- S3 + CloudFront + Route 53 apply
+- API Gateway + Lambda apply/deploy
+- Cognito user pool/client/domain apply
+- Aurora Serverless v2 cluster/schema apply
 - AWS SSM secret update
 - Lambda code upload/update
 - Step Functions execution
@@ -119,11 +132,27 @@ Terraform backend:
 - `use_kms` 선택
 - optional schedule policy: `enable_schedule`은 초기에는 반드시 `false` 권장
 
+M6 production-min stack 추가 변수:
+
+- frontend bucket name
+- CloudFront distribution aliases
+- Route 53 hosted zone ID/domain
+- ACM certificate ARN 또는 certificate 생성 경로
+- API Gateway domain/base path
+- Lambda package/build artifact path
+- Cognito user pool/client/domain 설정
+- Aurora Serverless v2 engine/version, min/max ACU, subnet/security group, database name
+- Secrets Manager 또는 SSM parameter naming convention
+- X-Ray enablement 여부
+
 Secrets:
 
 - `/revenue-ops-revenue-dev/SEOUL_OPENAPI_KEY`
 - `/revenue-ops-revenue-dev/DATA_GO_KR_SERVICE_KEY`
 - `/revenue-ops-revenue-dev/KMA_ASOS_STATION_ID`는 기본 `108`이지만 운영 대상에 맞게 확인 필요
+- Aurora master/user credential secret
+- Cognito callback/logout URL values
+- API runtime environment variables
 
 AWS environment:
 
@@ -136,7 +165,7 @@ AWS environment:
 
 낮은 비용 리스크:
 
-- static frontend hosting
+- S3 + CloudFront frontend hosting
 - S3 hosted JSON
 - S3 data lake idle storage
 - SSM standard parameters
@@ -146,6 +175,9 @@ AWS environment:
 - Glue Python Shell jobs가 반복 실행될 경우 누적 비용 발생
 - Athena query는 scan volume 기준 과금
 - CloudWatch logs/metrics는 장기 보존과 로그량에 따라 증가
+- API Gateway/Lambda는 트래픽 증가 시 요청량 기반 과금
+- Aurora Serverless v2는 min ACU 설정이 지속 비용을 만든다
+- Route 53 hosted zone과 CloudFront/ACM 운영 비용이 발생한다
 
 제어 장치:
 
@@ -154,6 +186,8 @@ AWS environment:
 - S3 lifecycle policy 존재
 - CloudWatch log retention 30일
 - Lambda/Glue는 수동 검증 전 자동 실행 금지
+- Aurora Serverless v2는 초기 min ACU를 낮게 잡고 pause/scale 정책을 검토
+- CloudFront cache policy와 log retention을 비용 기준으로 제한
 
 ## 8. 보안 리스크
 
@@ -172,7 +206,9 @@ AWS environment:
 - Glue role은 data lake bucket read/write/delete 권한을 가진다.
 - 일부 Glue Catalog IAM resource가 `*`로 열려 있어 production 최소 권한 점검이 필요하다.
 - Terraform state backend 설정 전에는 state 저장 위치와 접근 권한이 확정되지 않았다.
-- API hosting을 붙일 경우 CORS, auth, rate limit, safe error response를 별도 점검해야 한다.
+- API Gateway/Lambda에는 Cognito authorizer, CORS, throttling/rate limit, safe error response를 별도 점검해야 한다.
+- Aurora Serverless v2는 private subnet/security group, credential rotation, migration role/runtime role 분리가 필요하다.
+- CloudFront/S3 frontend는 public bucket이 아니라 OAC/OAI 기반 private origin으로 구성해야 한다.
 
 ## 9. 실행한 명령과 결과
 
@@ -249,9 +285,9 @@ This is the correct stop point for STEP 1-A. Running `terraform plan` before bac
 
 ## 11. STEP 1-B Recommended Next Commands
 
-STEP 1-B should still stop before `apply` unless explicitly approved.
+STEP 1-B should still stop before `apply` unless explicitly approved. STEP 1-B의 우선순위는 M6 production-min target을 Terraform 설계/계획으로 구체화하는 것이다.
 
-Recommended first command sequence:
+Recommended first command sequence for existing ETL stack planning prep:
 
 ```bash
 cd infra/terraform/envs/revenue-dev
@@ -259,6 +295,15 @@ cp terraform.tfvars.example terraform.tfvars
 ```
 
 Then edit `terraform.tfvars` with account-specific bucket names and contact tags.
+
+Recommended STEP 1-B design direction:
+
+- add or design Terraform modules for S3 + CloudFront + Route 53 frontend hosting
+- add or design Terraform modules for API Gateway + Lambda Revenue Ops API
+- add or design Cognito auth boundary
+- add or design Aurora Serverless v2 persistence boundary for Action Planner, merchant/store/user/account, and pipeline metadata
+- keep ETL stack schedule disabled until pipeline run approval
+- keep M5 export-backed/fallback behavior as an initial rollout safety mechanism
 
 After backend values are known from an approved bootstrap path:
 
@@ -296,6 +341,7 @@ Current readiness:
 
 Recommended STEP 1 architecture:
 
-- first public deployment: static frontend hosting with demo/fallback behavior
-- second: optional static JSON/API read path
-- third: ETL Terraform stack after backend, tfvars, IAM, secrets, and cost controls are approved
+- first M6 deployment increment: S3 + CloudFront + Route 53 frontend hosting with M5 fallback retained
+- second increment: API Gateway + Lambda Revenue Ops API over export-backed S3/JSON data
+- third increment: Cognito + Aurora Serverless v2 persistence for SaaS account/action state
+- fourth increment: ETL Terraform stack after backend, tfvars, IAM, secrets, and cost controls are approved
