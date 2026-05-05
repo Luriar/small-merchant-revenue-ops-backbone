@@ -21,6 +21,19 @@ const { getStartupConfig, validateStartupConfig } = require("./startup-config");
 const { handleTraceCreate, handleTraceDetail, handleTraceEvidences, handleTraceList, handleTracePrimaryIssue } = require("./trace-handler");
 const { createTraceStoreFromEnv } = require("./trace-store-factory");
 const { createCdcRecoveryRouteDispatcher } = require("./cdc-recovery/cdc-recovery-routes");
+const { createRevenueOpsStore } = require("./revenue-ops/revenue-ops-store");
+const {
+  handleGetBriefs,
+  handleGetBriefById,
+  handleGetAnomalies,
+  handleGetEvidenceForAnomaly,
+  handleGetActions,
+  handleUpdateActionStatus,
+  handleGetContext,
+  handleGetPipelineMeta,
+} = require("./revenue-ops/revenue-ops-handler");
+
+const _revenueOpsStore = createRevenueOpsStore();
 
 function createLogger() {
   return {
@@ -335,6 +348,52 @@ function dispatchRequest({
         metrics,
         runId: decodeURIComponent(retryMatch[1]),
       });
+    }
+
+    if (request.method === "OPTIONS" && request.url.startsWith("/api/v1/revenue")) {
+      response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,PATCH", "access-control-allow-headers": "content-type" });
+      return response.end();
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/revenue\/briefs(?:\?.*)?$/.test(request.url)) {
+      return handleGetBriefs({ response, store: _revenueOpsStore });
+    }
+
+    const revBriefMatch = request.method === "GET"
+      ? request.url.match(/^\/api\/v1\/revenue\/briefs\/([^/?]+)(?:\?.*)?$/)
+      : null;
+    if (revBriefMatch) {
+      return handleGetBriefById({ response, store: _revenueOpsStore, briefId: decodeURIComponent(revBriefMatch[1]) });
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/revenue\/anomalies(?:\?.*)?$/.test(request.url)) {
+      return handleGetAnomalies({ response, store: _revenueOpsStore });
+    }
+
+    const revEvidenceMatch = request.method === "GET"
+      ? request.url.match(/^\/api\/v1\/revenue\/anomalies\/([^/?]+)\/evidence(?:\?.*)?$/)
+      : null;
+    if (revEvidenceMatch) {
+      return handleGetEvidenceForAnomaly({ response, store: _revenueOpsStore, anomalyId: decodeURIComponent(revEvidenceMatch[1]) });
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/revenue\/actions(?:\?.*)?$/.test(request.url)) {
+      return handleGetActions({ response, store: _revenueOpsStore });
+    }
+
+    const revActionStatusMatch = request.method === "PATCH"
+      ? request.url.match(/^\/api\/v1\/revenue\/actions\/([^/?]+)\/status(?:\?.*)?$/)
+      : null;
+    if (revActionStatusMatch) {
+      return handleUpdateActionStatus({ request, response, store: _revenueOpsStore, actionId: decodeURIComponent(revActionStatusMatch[1]) });
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/revenue\/context(?:\?.*)?$/.test(request.url)) {
+      return handleGetContext({ response, store: _revenueOpsStore });
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/revenue\/pipeline-meta(?:\?.*)?$/.test(request.url)) {
+      return handleGetPipelineMeta({ response, store: _revenueOpsStore });
     }
 
     response.writeHead(404, {

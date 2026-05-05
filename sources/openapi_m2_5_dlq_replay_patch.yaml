@@ -1,0 +1,617 @@
+# PROPOSAL ONLY - DO NOT MERGE AUTOMATICALLY
+openapi: 3.0.3
+info:
+  title: M2-5 DLQ Replay API Patch Proposal
+  version: 0.0.0-proposal
+  description: |
+    PROPOSAL ONLY - DO NOT MERGE AUTOMATICALLY.
+    Adds metadata-only DLQ failure inspection and replay request APIs.
+    Safe metadata only. Do not include raw payloads, full message bodies,
+    forbidden issue raw values, prod_change sensitive values, secrets, or credentials.
+
+tags:
+  - name: CDC Recovery
+
+paths:
+  /api/v1/cdc/failures:
+    get:
+      tags: [CDC Recovery]
+      summary: List CDC failure summaries
+      description: |
+        Security: readonly_role or higher.
+        Returns metadata-only failure summaries.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: failure_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: source_topic
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: owner
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: CDC failure list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CdcFailureSummary'
+                  next_cursor:
+                    type: string
+                    nullable: true
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+
+  /api/v1/cdc/failures/{failure_id}:
+    get:
+      tags: [CDC Recovery]
+      summary: Get CDC failure detail
+      description: |
+        Security: readonly_role or higher.
+        Returns safe metadata only.
+      parameters:
+        - $ref: '#/components/parameters/FailureIdPath'
+      responses:
+        '200':
+          description: CDC failure detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CdcFailureDetail'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Failure not found
+
+  /api/v1/cdc/failures/{failure_id}/state-log:
+    get:
+      tags: [CDC Recovery]
+      summary: List CDC failure state log entries
+      description: |
+        Security: readonly_role or higher.
+        State metadata must remain safe metadata only.
+      parameters:
+        - $ref: '#/components/parameters/FailureIdPath'
+      responses:
+        '200':
+          description: CDC failure state log
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CdcFailureStateLogEntry'
+                  next_cursor:
+                    type: string
+                    nullable: true
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Failure not found
+
+  /api/v1/cdc/failures/{failure_id}/replay-requests:
+    post:
+      tags: [CDC Recovery]
+      summary: Create an idempotent CDC replay request
+      description: |
+        Security: operator or higher.
+        Replay is not raw message replay by default.
+        Same idempotency key and same request returns the existing request.
+        Same idempotency key with different target or scope returns 409.
+      parameters:
+        - $ref: '#/components/parameters/FailureIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCdcReplayRequestRequest'
+      responses:
+        '201':
+          description: Replay request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCdcReplayRequestResponse'
+        '200':
+          description: Existing replay request returned for idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCdcReplayRequestResponse'
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '409':
+          description: Idempotency conflict or invalid active duplicate request
+
+  /api/v1/cdc/replay-requests:
+    get:
+      tags: [CDC Recovery]
+      summary: List CDC replay request summaries
+      description: |
+        Security: readonly_role or higher.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: failure_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: owner
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: CDC replay request list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CdcReplayRequestSummary'
+                  next_cursor:
+                    type: string
+                    nullable: true
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+
+  /api/v1/cdc/replay-requests/{replay_request_id}:
+    get:
+      tags: [CDC Recovery]
+      summary: Get CDC replay request detail
+      description: |
+        Security: readonly_role or higher.
+      parameters:
+        - $ref: '#/components/parameters/ReplayRequestIdPath'
+      responses:
+        '200':
+          description: CDC replay request detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CdcReplayRequestDetail'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Replay request not found
+
+  /api/v1/cdc/replay-requests/{replay_request_id}/approve:
+    post:
+      tags: [CDC Recovery]
+      summary: Approve a CDC replay request
+      description: |
+        Security: maintainer.
+        Invalid state transitions return 409.
+      parameters:
+        - $ref: '#/components/parameters/ReplayRequestIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveCdcReplayRequestRequest'
+      responses:
+        '200':
+          description: Replay request approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApproveCdcReplayRequestResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Replay request not found
+        '409':
+          description: Invalid state transition
+
+  /api/v1/cdc/replay-requests/{replay_request_id}/cancel:
+    post:
+      tags: [CDC Recovery]
+      summary: Cancel a CDC replay request
+      description: |
+        Security: maintainer.
+        Invalid state transitions return 409.
+      parameters:
+        - $ref: '#/components/parameters/ReplayRequestIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelCdcReplayRequestRequest'
+      responses:
+        '200':
+          description: Replay request cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelCdcReplayRequestResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Replay request not found
+        '409':
+          description: Invalid state transition
+
+components:
+  parameters:
+    FailureIdPath:
+      name: failure_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ReplayRequestIdPath:
+      name: replay_request_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    CdcFailureSummary:
+      type: object
+      required:
+        - failure_id
+        - failure_type
+        - source_topic
+        - source_table
+        - op
+        - ts_ms
+        - status
+        - owner
+        - evidence_report_ref
+      properties:
+        failure_id:
+          type: string
+        failure_type:
+          type: string
+        source_topic:
+          type: string
+        source_table:
+          type: string
+        primary_key:
+          type: object
+          additionalProperties:
+            type: string
+        op:
+          type: string
+        ts_ms:
+          type: integer
+          format: int64
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        attempt_count:
+          type: integer
+        status:
+          type: string
+        owner:
+          type: string
+        evidence_report_ref:
+          type: string
+
+    CdcFailureDetail:
+      allOf:
+        - $ref: '#/components/schemas/CdcFailureSummary'
+        - type: object
+          required:
+            - observed_field_names
+            - missing_required_fields
+            - unexpected_fields
+            - forbidden_field_names_detected
+            - parser_error_class
+            - parser_error_summary
+          properties:
+            observed_field_names:
+              type: array
+              items:
+                type: string
+            missing_required_fields:
+              type: array
+              items:
+                type: string
+            unexpected_fields:
+              type: array
+              items:
+                type: string
+            forbidden_field_names_detected:
+              type: array
+              items:
+                type: string
+            parser_error_class:
+              type: string
+            parser_error_summary:
+              type: string
+              description: Summary without raw values. Do not include raw payloads or full message bodies.
+            source_run_id:
+              type: string
+              nullable: true
+            latest_replay_request_id:
+              type: string
+              nullable: true
+
+    CdcFailureStateLogEntry:
+      type: object
+      required:
+        - state_log_id
+        - failure_id
+        - to_status
+        - reason_code
+        - owner
+        - created_at
+      properties:
+        state_log_id:
+          type: string
+        failure_id:
+          type: string
+        replay_request_id:
+          type: string
+          nullable: true
+        from_status:
+          type: string
+          nullable: true
+        to_status:
+          type: string
+        reason_code:
+          type: string
+        owner:
+          type: string
+        safe_metadata:
+          type: object
+          additionalProperties: true
+        evidence_report_ref:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    CdcReplayRequestSummary:
+      type: object
+      required:
+        - replay_request_id
+        - failure_id
+        - requested_action
+        - owner
+        - idempotency_key
+        - status
+        - evidence_report_ref
+      properties:
+        replay_request_id:
+          type: string
+        failure_id:
+          type: string
+        requested_action:
+          type: string
+          enum: [retry, replay, reprocess]
+        owner:
+          type: string
+        idempotency_key:
+          type: string
+        attempt_count:
+          type: integer
+        status:
+          type: string
+        new_run_id:
+          type: string
+          nullable: true
+        evidence_report_ref:
+          type: string
+        cleanup_status:
+          type: string
+
+    CdcReplayRequestDetail:
+      allOf:
+        - $ref: '#/components/schemas/CdcReplayRequestSummary'
+        - type: object
+          required:
+            - requested_by
+            - bounded_scope
+            - reason_summary
+          properties:
+            requested_by:
+              type: string
+            reason_summary:
+              type: string
+              description: Safe summary only. Must not include forbidden field values.
+            target_topic:
+              type: string
+              nullable: true
+            target_table:
+              type: string
+              nullable: true
+            bounded_scope:
+              type: object
+              additionalProperties: true
+            source_run_id:
+              type: string
+              nullable: true
+            requested_at:
+              type: string
+              format: date-time
+            approved_at:
+              type: string
+              format: date-time
+              nullable: true
+            completed_at:
+              type: string
+              format: date-time
+              nullable: true
+
+    CreateCdcReplayRequestRequest:
+      type: object
+      required:
+        - requested_action
+        - reason_summary
+        - bounded_scope
+        - attempt_count
+        - owner
+        - idempotency_key
+        - evidence_report_ref
+      properties:
+        requested_action:
+          type: string
+          enum: [retry, replay, reprocess]
+        reason_summary:
+          type: string
+          description: Safe summary only. Must not include raw values.
+        target_topic:
+          type: string
+          nullable: true
+        target_table:
+          type: string
+          nullable: true
+        bounded_scope:
+          type: object
+          additionalProperties: true
+        attempt_count:
+          type: integer
+          minimum: 0
+        owner:
+          type: string
+        idempotency_key:
+          type: string
+        evidence_report_ref:
+          type: string
+
+    CreateCdcReplayRequestResponse:
+      type: object
+      required:
+        - replay_request_id
+        - failure_id
+        - status
+        - idempotency_key
+        - evidence_report_ref
+      properties:
+        replay_request_id:
+          type: string
+        failure_id:
+          type: string
+        status:
+          type: string
+        idempotency_key:
+          type: string
+        new_run_id:
+          type: string
+          nullable: true
+          description: Populated only when a future worker creates the new run row.
+        evidence_report_ref:
+          type: string
+
+    ApproveCdcReplayRequestRequest:
+      type: object
+      required: [approved_by, approval_note, evidence_report_ref]
+      properties:
+        approved_by:
+          type: string
+        approval_note:
+          type: string
+          description: Safe approval summary only. Must not include forbidden field values.
+        evidence_report_ref:
+          type: string
+
+    ApproveCdcReplayRequestResponse:
+      type: object
+      required: [replay_request_id, failure_id, status, approved_by, evidence_report_ref]
+      properties:
+        replay_request_id:
+          type: string
+        failure_id:
+          type: string
+        status:
+          type: string
+        approved_by:
+          type: string
+        new_run_id:
+          type: string
+          nullable: true
+        evidence_report_ref:
+          type: string
+
+    CancelCdcReplayRequestRequest:
+      type: object
+      required: [cancelled_by, cancel_reason, evidence_report_ref]
+      properties:
+        cancelled_by:
+          type: string
+        cancel_reason:
+          type: string
+          description: Safe cancel summary only. Must not include forbidden field values.
+        evidence_report_ref:
+          type: string
+
+    CancelCdcReplayRequestResponse:
+      type: object
+      required: [replay_request_id, failure_id, status, cancelled_by, evidence_report_ref]
+      properties:
+        replay_request_id:
+          type: string
+        failure_id:
+          type: string
+        status:
+          type: string
+        cancelled_by:
+          type: string
+        evidence_report_ref:
+          type: string
