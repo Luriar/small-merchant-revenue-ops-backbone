@@ -1,6 +1,7 @@
 project_name               = "revenue-ops"
 environment                = "revenue-dev"
 aws_region                 = "ap-northeast-2"
+enable_pipeline_foundation = false
 enable_schedule            = false
 enable_frontend            = false
 enable_api                 = false

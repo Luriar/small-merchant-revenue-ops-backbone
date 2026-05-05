@@ -16,10 +16,34 @@ variable "aws_region" {
   description = "AWS region for all resources."
 }
 
+variable "enable_pipeline_foundation" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    Enable the Medallion ETL pipeline foundation:
+      - S3 data lake (bronze/silver/gold) + Athena results bucket
+      - Glue Data Catalog (database + tables)
+      - Athena workgroup
+      - ETL IAM roles (Lambda, Glue, Step Functions, EventBridge)
+      - Lambda extractor functions (weather, holidays, local events)
+      - Glue ETL jobs (bronze→silver, gold)
+      - Step Functions state machine
+      - EventBridge Scheduler schedule resource (DISABLED by default; see enable_schedule)
+      - CloudWatch log groups / ETL observability
+      - SSM Parameter Store secrets (API keys)
+    Set to false (default) to plan only the SaaS surface
+    (artifacts, frontend, api, auth, aurora) without planning any pipeline
+    backend resources. This keeps the first-plan blast radius minimal.
+    Note: data_lake_bucket_name and athena_results_bucket_name are still
+    required variable inputs even when false; they are simply not used for
+    resource creation.
+  EOT
+}
+
 variable "enable_schedule" {
   type        = bool
   default     = false
-  description = "Enable the EventBridge Scheduler that triggers the daily pipeline. Set to true only when ready for automated runs."
+  description = "Enable the EventBridge Scheduler that triggers the daily pipeline. Set to true only when ready for automated runs. Has no effect when enable_pipeline_foundation is false."
 }
 
 variable "enable_frontend" {

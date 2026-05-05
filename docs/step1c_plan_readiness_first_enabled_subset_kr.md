@@ -47,9 +47,13 @@ enable_schedule           = false
 
 ## 4. 중요한 Plan Scope 주의점
 
-현재 `infra/terraform/envs/revenue-dev`는 기존 ETL foundation modules를 unconditional로 포함한다.
+> **✅ STEP 1-D에서 해소됨.** 아래에 기술된 ETL unconditional 포함 문제는 `enable_pipeline_foundation` flag 추가(STEP 1-D)로 해결되었다. 이제 `enable_pipeline_foundation = false`(기본값)이면 ETL foundation 리소스 0개가 plan에 포함된다. 자세한 내용은 `docs/step1d_gate_pipeline_foundation_kr.md` 참조.
 
-따라서 정상적인 full `terraform plan`은 아래도 함께 계획할 수 있다.
+~~현재 `infra/terraform/envs/revenue-dev`는 기존 ETL foundation modules를 unconditional로 포함한다.~~
+
+~~따라서 정상적인 full `terraform plan`은 아래도 함께 계획할 수 있다.~~
+
+STEP 1-D 이전 상황(참고용):
 
 - S3 data lake
 - Athena results bucket
@@ -62,11 +66,11 @@ enable_schedule           = false
 - CloudWatch ETL logs/alarms
 - SSM parameters
 
-즉, `enable_artifacts=true`와 `enable_frontend=true`만 켜도, 현재 코드 구조상 full plan은 "frontend/artifacts only"가 아닐 수 있다. 진짜 최소 blast radius plan을 원하면 다음 중 하나가 필요하다.
+위 10개 ETL module은 STEP 1-D에서 `count = var.enable_pipeline_foundation ? 1 : 0`로 activation-gate되었다. 아래 네 가지 옵션 중 **옵션 3이 이미 구현**되었다.
 
 1. 기존 ETL foundation도 이번 plan에 포함되는 것을 명시적으로 승인한다.
 2. 별도 frontend-first environment를 만든다.
-3. 기존 ETL foundation에 `enable_pipeline`류의 gating을 추가하는 별도 Terraform refactor를 먼저 수행한다.
+3. ~~기존 ETL foundation에 `enable_pipeline`류의 gating을 추가하는 별도 Terraform refactor를 먼저 수행한다.~~ → **STEP 1-D에서 완료.** `enable_pipeline_foundation = false`(기본값)로 ETL 전체 gate됨.
 4. `terraform plan -target=module.artifacts -target=module.frontend_hosting`을 사용한다. 단, target plan은 의존성/전체 일관성 검증이 약하므로 최종 apply 전 full plan 검토가 필요하다.
 
 STEP 1-C 판단: backend/tfvars/profile이 아직 명시되지 않았고 bootstrap backend도 small-merchant용으로 확인되지 않았으므로 지금 plan은 실행하지 않는다.

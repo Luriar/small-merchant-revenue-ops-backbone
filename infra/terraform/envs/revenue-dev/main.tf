@@ -1,14 +1,42 @@
 ################################################################################
-# Revenue Ops — Serverless Batch ETL
+# Revenue Ops — Serverless Batch ETL + SaaS Surface
 # Environment: revenue-dev
 #
 # Stack: S3 (data lake), Glue (jobs + catalog), Athena, Step Functions,
-#        EventBridge Scheduler, Lambda (extractors), CloudWatch, SSM
+#        EventBridge Scheduler, Lambda (extractors), CloudWatch, SSM,
+#        S3 (artifacts + frontend), CloudFront, Cognito, Aurora, API GW + Lambda
 #
 # NOT the old Product Ops streaming/CDC/EKS stack.
+#
+# Activation gates
+# ─────────────────────────────────────────────────────────────────────────────
+# enable_pipeline_foundation — gates all 10 ETL foundation modules (default: false)
+# enable_schedule            — gates the EventBridge schedule run state (default: false)
+# enable_artifacts           — gates the S3 artifact bucket (default: false)
+# enable_frontend            — gates the CloudFront + S3 frontend (default: false)
+# enable_api                 — gates the API Gateway + Lambda (default: false)
+# enable_auth                — gates Cognito (default: false)
+# enable_aurora              — gates Aurora Serverless v2 (default: false)
+# enable_saas_observability  — gates the SaaS CloudWatch alarms (default: false)
+#
+# First safe plan (STEP 1-C / STEP 1-D):
+#   enable_pipeline_foundation = false
+#   enable_artifacts           = true
+#   enable_frontend            = true
+#   (all others false)
 ################################################################################
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ETL PIPELINE FOUNDATION — gated by enable_pipeline_foundation
+#
+# All 10 modules below use count = var.enable_pipeline_foundation ? 1 : 0.
+# When the gate is false, none of these resources are planned.
+# Intra-ETL module output references use module.X[0].output syntax.
+# Cross-tier callers (artifacts, aurora) use try(module.data_lake[0].kms_key_arn, "").
+# ─────────────────────────────────────────────────────────────────────────────
+
 module "data_lake" {
+  count  = var.enable_pipeline_foundation ? 1 : 0
   source = "../../modules/revenue_data_lake"
 
   data_lake_bucket_name      = var.data_lake_bucket_name
@@ -19,101 +47,117 @@ module "data_lake" {
 }
 
 module "glue_catalog" {
+  count  = var.enable_pipeline_foundation ? 1 : 0
   source = "../../modules/revenue_glue_catalog"
 
   glue_database_name   = var.glue_database_name
-  data_lake_bucket_id  = module.data_lake.data_lake_bucket_id
-  data_lake_bucket_arn = module.data_lake.data_lake_bucket_arn
+  data_lake_bucket_id  = module.data_lake[0].data_lake_bucket_id
+  data_lake_bucket_arn = module.data_lake[0].data_lake_bucket_arn
   name_prefix          = local.name_prefix
   tags                 = local.common_tags
 }
 
 module "athena" {
+  count  = var.enable_pipeline_foundation ? 1 : 0
   source = "../../modules/revenue_athena"
 
   workgroup_name            = "${local.name_prefix}-workgroup"
-  athena_results_bucket_id  = module.data_lake.athena_results_bucket_id
-  athena_results_bucket_arn = module.data_lake.athena_results_bucket_arn
+  athena_results_bucket_id  = module.data_lake[0].athena_results_bucket_id
+  athena_results_bucket_arn = module.data_lake[0].athena_results_bucket_arn
   name_prefix               = local.name_prefix
   tags                      = local.common_tags
 }
 
 module "iam" {
+  count  = var.enable_pipeline_foundation ? 1 : 0
   source = "../../modules/revenue_etl_iam"
 
   name_prefix          = local.name_prefix
-  data_lake_bucket_arn = module.data_lake.data_lake_bucket_arn
+  data_lake_bucket_arn = module.data_lake[0].data_lake_bucket_arn
   use_kms              = var.use_kms
-  kms_key_arn          = module.data_lake.kms_key_arn
+  kms_key_arn          = module.data_lake[0].kms_key_arn
   tags                 = local.common_tags
 }
 
 module "lambda_extractors" {
+  count  = var.enable_pipeline_foundation ? 1 : 0
   source = "../../modules/revenue_lambda_extractors"
 
   name_prefix          = local.name_prefix
-  lambda_role_arn      = module.iam.lambda_role_arn
-  data_lake_bucket_id  = module.data_lake.data_lake_bucket_id
-  data_lake_bucket_arn = module.data_lake.data_lake_bucket_arn
+  lambda_role_arn      = module.iam[0].lambda_role_arn
+  data_lake_bucket_id  = module.data_lake[0].data_lake_bucket_id
+  data_lake_bucket_arn = module.data_lake[0].data_lake_bucket_arn
   environment_name     = var.environment
   tags                 = local.common_tags
 }
 
 module "glue_jobs" {
+  count  = var.enable_pipeline_foundation ? 1 : 0
   source = "../../modules/revenue_glue_jobs"
 
   name_prefix         = local.name_prefix
-  glue_role_arn       = module.iam.glue_role_arn
-  data_lake_bucket_id = module.data_lake.data_lake_bucket_id
+  glue_role_arn       = module.iam[0].glue_role_arn
+  data_lake_bucket_id = module.data_lake[0].data_lake_bucket_id
   glue_database_name  = var.glue_database_name
   environment_name    = var.environment
   tags                = local.common_tags
 }
 
 module "step_functions" {
+  count  = var.enable_pipeline_foundation ? 1 : 0
   source = "../../modules/revenue_step_functions"
 
   name_prefix             = local.name_prefix
-  step_functions_role_arn = module.iam.step_functions_role_arn
-  weather_lambda_arn      = module.lambda_extractors.weather_lambda_arn
-  holidays_lambda_arn     = module.lambda_extractors.holidays_lambda_arn
-  local_events_lambda_arn = module.lambda_extractors.local_events_lambda_arn
-  glue_job_names          = module.glue_jobs.job_names
+  step_functions_role_arn = module.iam[0].step_functions_role_arn
+  weather_lambda_arn      = module.lambda_extractors[0].weather_lambda_arn
+  holidays_lambda_arn     = module.lambda_extractors[0].holidays_lambda_arn
+  local_events_lambda_arn = module.lambda_extractors[0].local_events_lambda_arn
+  glue_job_names          = module.glue_jobs[0].job_names
   tags                    = local.common_tags
 }
 
 module "eventbridge" {
+  count  = var.enable_pipeline_foundation ? 1 : 0
   source = "../../modules/revenue_eventbridge"
 
   name_prefix          = local.name_prefix
   enable_schedule      = var.enable_schedule
   schedule_expression  = var.schedule_expression
-  state_machine_arn    = module.step_functions.state_machine_arn
-  eventbridge_role_arn = module.iam.eventbridge_role_arn
+  state_machine_arn    = module.step_functions[0].state_machine_arn
+  eventbridge_role_arn = module.iam[0].eventbridge_role_arn
   tags                 = local.common_tags
 }
 
 module "observability" {
+  count  = var.enable_pipeline_foundation ? 1 : 0
   source = "../../modules/revenue_observability"
 
   name_prefix       = local.name_prefix
-  state_machine_arn = module.step_functions.state_machine_arn
+  state_machine_arn = module.step_functions[0].state_machine_arn
   lambda_function_names = [
-    module.lambda_extractors.weather_lambda_name,
-    module.lambda_extractors.holidays_lambda_name,
-    module.lambda_extractors.local_events_lambda_name,
+    module.lambda_extractors[0].weather_lambda_name,
+    module.lambda_extractors[0].holidays_lambda_name,
+    module.lambda_extractors[0].local_events_lambda_name,
   ]
   tags = local.common_tags
 }
 
 module "secrets" {
+  count  = var.enable_pipeline_foundation ? 1 : 0
   source = "../../modules/revenue_secrets"
 
   name_prefix = local.name_prefix
   use_kms     = var.use_kms
-  kms_key_arn = module.data_lake.kms_key_arn
+  kms_key_arn = module.data_lake[0].kms_key_arn
   tags        = local.common_tags
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SAAS SURFACE — individually gated; no dependency on enable_pipeline_foundation
+#
+# kms_key_arn for artifacts and aurora falls back to "" when the pipeline
+# foundation is disabled (use_kms defaults to false; KMS is unused in that path).
+# ─────────────────────────────────────────────────────────────────────────────
 
 module "artifacts" {
   source = "../../modules/revenue_artifacts"
@@ -121,7 +165,7 @@ module "artifacts" {
   enable_artifacts     = var.enable_artifacts
   artifact_bucket_name = var.artifact_bucket_name
   use_kms              = var.use_kms
-  kms_key_arn          = module.data_lake.kms_key_arn
+  kms_key_arn          = try(module.data_lake[0].kms_key_arn, "")
   name_prefix          = local.name_prefix
   tags                 = local.common_tags
 }
@@ -166,7 +210,7 @@ module "aurora" {
   min_acu                    = var.aurora_min_acu
   max_acu                    = var.aurora_max_acu
   use_kms                    = var.use_kms
-  kms_key_arn                = module.data_lake.kms_key_arn
+  kms_key_arn                = try(module.data_lake[0].kms_key_arn, "")
   tags                       = local.common_tags
 }
 

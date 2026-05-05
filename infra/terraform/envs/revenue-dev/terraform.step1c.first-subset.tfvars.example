@@ -1,15 +1,24 @@
-# STEP 1-C first enabled subset template.
-# Copy to a local, ignored tfvars file before use:
+# STEP 1-C / STEP 1-D first enabled subset template.
+# Copy to a local, gitignored tfvars file before use:
 #   cp terraform.step1c.first-subset.tfvars.example terraform.step1c.first-subset.tfvars
 #
 # Do not commit the copied .tfvars file. Replace YOURACCOUNTID and optional
 # domain values with account-specific values before terraform plan.
+#
+# STEP 1-D change: enable_pipeline_foundation = false now genuinely limits the
+# first plan to only the SaaS surface resources listed below. The ETL pipeline
+# foundation (data lake, Glue, Athena, IAM, Lambda extractors, Step Functions,
+# EventBridge, CloudWatch, SSM) is not planned at all.
 
 project_name = "revenue-ops"
 environment  = "revenue-dev"
 aws_region   = "ap-northeast-2"
 
-# First enabled subset.
+# Pipeline foundation gate — false keeps the first plan focused.
+# Increment to true in a later step when the ETL pipeline is ready to deploy.
+enable_pipeline_foundation = false
+
+# First enabled subset: artifacts + frontend only.
 enable_artifacts          = true
 enable_frontend           = true
 enable_api                = false
@@ -18,8 +27,9 @@ enable_aurora             = false
 enable_saas_observability = false
 enable_schedule           = false
 
-# Existing ETL foundation variables are still required because the current
-# revenue-dev environment includes the ETL modules unconditionally.
+# ETL foundation bucket/database names are still required variable inputs even
+# though the pipeline modules are not created when enable_pipeline_foundation=false.
+# Provide real values for future readiness; they will not cause resource creation.
 data_lake_bucket_name      = "revenue-ops-data-lake-dev-YOURACCOUNTID"
 athena_results_bucket_name = "revenue-ops-athena-results-dev-YOURACCOUNTID"
 glue_database_name         = "revenue_ops_dev"
@@ -36,7 +46,7 @@ frontend_hosted_zone_id      = null
 frontend_acm_certificate_arn = null
 create_frontend_dns_records  = false
 
-# API/Auth/Aurora remain disabled in STEP 1-C.
+# API/Auth/Aurora remain disabled.
 api_lambda_s3_bucket    = null
 api_lambda_s3_key       = null
 api_custom_domain_name  = null
@@ -62,5 +72,5 @@ alarm_actions = []
 tags = {
   Team    = "revenue-ops"
   Contact = "your@email.com"
-  Phase   = "step-1c-plan-readiness"
+  Phase   = "step-1d-pipeline-gate"
 }
