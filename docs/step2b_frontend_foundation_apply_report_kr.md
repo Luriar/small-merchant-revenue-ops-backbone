@@ -287,3 +287,156 @@ Only after CloudFront foundation is complete should STEP 2-C proceed:
 - CloudFront smoke test
 - `/#revenue-cockpit` route check
 - `/#revenue-cockpit?data=api` fallback check
+
+## 12. Continuation Apply After CloudFront IAM Fix
+
+추가 승인 후 `de-ai-12`에 narrow inline IAM policy가 추가되었다.
+
+Policy:
+
+```text
+RevenueOpsFrontendCloudFrontFoundationAccess
+```
+
+처음 추가된 CloudFront actions:
+
+```text
+cloudfront:CreateOriginAccessControl
+cloudfront:GetOriginAccessControl
+cloudfront:ListOriginAccessControls
+cloudfront:CreateDistribution
+cloudfront:GetDistribution
+cloudfront:ListDistributions
+cloudfront:TagResource
+```
+
+Remaining plan:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  -out=tfplan.step2b.remaining-cloudfront
+```
+
+Plan result:
+
+```text
+Plan: 3 to add, 0 to change, 0 to destroy.
+```
+
+Plan에 포함된 resource:
+
+```text
+module.frontend_hosting.aws_cloudfront_distribution.frontend[0]
+module.frontend_hosting.aws_cloudfront_origin_access_control.frontend[0]
+module.frontend_hosting.aws_s3_bucket_policy.frontend[0]
+```
+
+API/Auth/Aurora/ETL resource는 없었다.
+
+Apply command:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev apply tfplan.step2b.remaining-cloudfront
+```
+
+Result: **second partial apply 후 실패**
+
+새 실패 원인:
+
+```text
+AccessDenied: User arn:aws:iam::827913617635:user/de-ai-12 is not authorized
+to perform cloudfront:ListTagsForResource on resource
+arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N
+```
+
+Terraform AWS provider가 CloudFront distribution create 이후 tag를 읽으면서 `cloudfront:ListTagsForResource`가 추가로 필요하다는 점이 확인되었다.
+
+## 13. Continuation Verification Results
+
+새로 생성됨:
+
+- CloudFront OAC
+  - id: `E1QCCCHHP0LCLE`
+  - name: `revenue-ops-revenue-dev-frontend-oac`
+  - signing protocol: `sigv4`
+  - signing behavior: `always`
+- CloudFront distribution
+  - id: `E31KH7PFML1A6N`
+  - domain: `d1fquuc7vsf9cu.cloudfront.net`
+  - status: `Deployed`
+  - origin: `revenue-ops-frontend-dev-827913617635.s3.ap-northeast-2.amazonaws.com`
+  - OAC id: `E1QCCCHHP0LCLE`
+  - viewer protocol policy: `redirect-to-https`
+  - price class: `PriceClass_100`
+  - SPA fallback: 403/404 -> `/index.html`
+
+아직 생성되지 않음:
+
+- frontend bucket policy
+  - AWS S3 result: `NoSuchBucketPolicy`
+
+Frontend bucket 상태:
+
+- public access block: all true
+- server-side encryption: AES256
+- versioning: Enabled
+- object list: empty
+- frontend asset upload/deploy: not performed
+
+Unexpected resource check:
+
+- API Gateway: none
+- Lambda Revenue Ops API: none
+- Cognito: none
+- Aurora/RDS: none
+- Glue/Athena/Step Functions/EventBridge: none
+- SSM external API parameters: none
+- SaaS CloudWatch alarms: none
+
+Productops backend resources:
+
+- `productops-tfstate-b68d831a` still exists
+- `productops-tflock` status: `ACTIVE`
+- not targeted or modified by this continuation apply
+
+## 14. Current STEP 2-B Status
+
+STEP 2-B is still not fully complete.
+
+Completed:
+
+- artifacts S3 foundation
+- frontend S3 foundation
+- CloudFront OAC
+- CloudFront distribution
+
+Remaining:
+
+- frontend bucket policy
+- Terraform output refresh for `frontend_cloudfront_domain_name`
+
+Current IAM blocker:
+
+```text
+cloudfront:ListTagsForResource
+```
+
+Recommended next minimal IAM patch:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "cloudfront:ListTagsForResource",
+  "Resource": "arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N"
+}
+```
+
+Do not add this permission or re-apply without explicit approval.
+
+After approval, re-run plan. Expected remaining plan should include only:
+
+- `module.frontend_hosting.aws_s3_bucket_policy.frontend[0]`
+- possible output refresh for `frontend_cloudfront_domain_name`
+
+If any API/Auth/Aurora/ETL resource appears, stop.

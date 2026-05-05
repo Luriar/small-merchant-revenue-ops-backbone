@@ -388,3 +388,67 @@ Required approval to finish STEP 2-B:
 ```text
 Approved to apply tfplan.step2b.remaining-cloudfront for the remaining STEP 2-B CloudFront OAC, CloudFront distribution, and frontend bucket policy only.
 ```
+
+## 11. Apply Update After Remaining Plan Approval
+
+Approval received:
+
+```text
+Approved to apply tfplan.step2b.remaining-cloudfront for the remaining STEP 2-B CloudFront OAC, CloudFront distribution, and frontend bucket policy only.
+```
+
+Apply command:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev apply tfplan.step2b.remaining-cloudfront
+```
+
+Result: **partial apply**
+
+Created:
+
+- CloudFront OAC: `E1QCCCHHP0LCLE`
+- CloudFront distribution: `E31KH7PFML1A6N`
+
+Distribution verification:
+
+```text
+domain: d1fquuc7vsf9cu.cloudfront.net
+status: Deployed
+origin: revenue-ops-frontend-dev-827913617635.s3.ap-northeast-2.amazonaws.com
+OAC: E1QCCCHHP0LCLE
+viewer protocol policy: redirect-to-https
+price class: PriceClass_100
+```
+
+Still missing:
+
+- frontend bucket policy
+
+New IAM blocker:
+
+```text
+cloudfront:ListTagsForResource
+```
+
+The Terraform AWS provider created the CloudFront distribution, then failed while listing tags for the distribution:
+
+```text
+AccessDenied: cloudfront:ListTagsForResource on
+arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N
+```
+
+IAM simulation confirms `cloudfront:ListTagsForResource` is currently `implicitDeny`.
+
+Recommended additional minimal IAM patch:
+
+```json
+{
+  "Sid": "RevenueOpsFrontendCloudFrontReadTags",
+  "Effect": "Allow",
+  "Action": "cloudfront:ListTagsForResource",
+  "Resource": "arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N"
+}
+```
+
+This additional permission was not applied. It requires explicit approval.
