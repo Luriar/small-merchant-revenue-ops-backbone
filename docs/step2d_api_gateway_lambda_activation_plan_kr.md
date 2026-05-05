@@ -4,6 +4,12 @@
 
 STEP 2-D의 목적은 기존 small-merchant Revenue Ops API를 AWS API Gateway + Lambda로 활성화하기 전, API 전용 Terraform plan을 검토 가능한 상태로 준비하는 것이다.
 
+2026-05-06 업데이트:
+
+- 이 문서는 apply 전 plan 문서다.
+- 이후 승인된 apply는 IAM/Lambda까지 부분 성공했고 API Gateway 생성 권한 부족으로 중단되었다.
+- 적용 결과와 남은 권한 게이트는 `docs/step2d_api_gateway_lambda_apply_report_kr.md`를 기준으로 본다.
+
 이번 단계는 적용 전 단계다. `terraform apply`는 실행하지 않았다.
 
 ## 2. 유지한 범위와 비활성 범위
