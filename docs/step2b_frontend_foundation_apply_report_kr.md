@@ -524,3 +524,157 @@ Required approval:
 ```text
 Approved to untaint module.frontend_hosting.aws_cloudfront_distribution.frontend[0], rerun the STEP 2-B plan, and apply only if the plan creates the frontend bucket policy with 0 destroy.
 ```
+
+## 16. Final Untaint and Bucket Policy Completion
+
+Approval received:
+
+```text
+Approved to untaint module.frontend_hosting.aws_cloudfront_distribution.frontend[0], rerun the STEP 2-B plan, and apply only if the plan creates the frontend bucket policy with 0 destroy.
+```
+
+State action:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev untaint \
+  'module.frontend_hosting.aws_cloudfront_distribution.frontend[0]'
+```
+
+Result:
+
+```text
+Resource instance module.frontend_hosting.aws_cloudfront_distribution.frontend[0] has been successfully untainted.
+```
+
+Post-untaint plan:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  -out=tfplan.step2b.bucket-policy-final
+```
+
+Plan result:
+
+```text
+Plan: 1 to add, 0 to change, 0 to destroy.
+```
+
+Plan contained only:
+
+```text
+module.frontend_hosting.aws_s3_bucket_policy.frontend[0]
+```
+
+Apply command:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev apply tfplan.step2b.bucket-policy-final
+```
+
+Apply result:
+
+```text
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+```
+
+## 17. Final STEP 2-B Verification
+
+Terraform outputs:
+
+```json
+{
+  "artifact_bucket_name": "revenue-ops-artifacts-dev-827913617635",
+  "frontend_bucket_name": "revenue-ops-frontend-dev-827913617635",
+  "frontend_cloudfront_domain_name": "d1fquuc7vsf9cu.cloudfront.net",
+  "secrets_parameter_names": []
+}
+```
+
+Created/verified CloudFront OAC:
+
+- id: `E1QCCCHHP0LCLE`
+- name: `revenue-ops-revenue-dev-frontend-oac`
+- signing protocol: `sigv4`
+- signing behavior: `always`
+- origin type: `s3`
+
+Created/verified CloudFront distribution:
+
+- id: `E31KH7PFML1A6N`
+- domain: `d1fquuc7vsf9cu.cloudfront.net`
+- status: `Deployed`
+- origin: `revenue-ops-frontend-dev-827913617635.s3.ap-northeast-2.amazonaws.com`
+- OAC id: `E1QCCCHHP0LCLE`
+- viewer protocol policy: `redirect-to-https`
+- price class: `PriceClass_100`
+- default root object: `index.html`
+- SPA fallback: 403/404 -> `/index.html`
+
+Created/verified frontend bucket policy:
+
+```json
+{
+  "Sid": "AllowCloudFrontRead",
+  "Effect": "Allow",
+  "Principal": {
+    "Service": "cloudfront.amazonaws.com"
+  },
+  "Action": "s3:GetObject",
+  "Resource": "arn:aws:s3:::revenue-ops-frontend-dev-827913617635/*",
+  "Condition": {
+    "StringEquals": {
+      "AWS:SourceArn": "arn:aws:cloudfront::827913617635:distribution/E31KH7PFML1A6N"
+    }
+  }
+}
+```
+
+Frontend bucket final state:
+
+- bucket: `revenue-ops-frontend-dev-827913617635`
+- public access block: all true
+- server-side encryption: AES256
+- versioning: Enabled
+- object list: empty
+- frontend asset upload/deploy: not performed
+
+Unexpected resource check:
+
+- API Gateway: none
+- Lambda Revenue Ops API: none
+- Cognito: none
+- Aurora/RDS: none
+- Glue/Athena/Step Functions/EventBridge: none
+- SSM external API parameters: none
+- SaaS CloudWatch alarms: none
+
+Productops backend resources:
+
+- `productops-tfstate-b68d831a` still exists
+- `productops-tflock` status: `ACTIVE`
+- not targeted or modified by STEP 2-B
+
+## 18. Final STEP 2-B Status
+
+STEP 2-B frontend foundation apply is complete.
+
+Completed:
+
+- artifacts S3 foundation
+- frontend S3 foundation
+- CloudFront OAC
+- CloudFront distribution
+- frontend bucket policy scoped to CloudFront distribution
+
+Still intentionally not done:
+
+- frontend asset deploy/upload
+- API/Auth/Aurora/Pipeline enablement
+- live collector execution
+- POS ingestion
+- EventBridge schedule enablement
+
+Next step:
+
+- STEP 2-C frontend asset deploy + smoke test

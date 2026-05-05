@@ -541,3 +541,64 @@ Recommended next approval:
 ```text
 Approved to untaint module.frontend_hosting.aws_cloudfront_distribution.frontend[0], rerun the STEP 2-B plan, and apply only if the plan creates the frontend bucket policy with 0 destroy.
 ```
+
+## 13. Final Untaint and Bucket Policy Apply
+
+Approval received:
+
+```text
+Approved to untaint module.frontend_hosting.aws_cloudfront_distribution.frontend[0], rerun the STEP 2-B plan, and apply only if the plan creates the frontend bucket policy with 0 destroy.
+```
+
+Untaint command:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev untaint \
+  'module.frontend_hosting.aws_cloudfront_distribution.frontend[0]'
+```
+
+Result:
+
+```text
+successfully untainted
+```
+
+Guarded plan:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  -out=tfplan.step2b.bucket-policy-final
+```
+
+Plan result:
+
+```text
+Plan: 1 to add, 0 to change, 0 to destroy.
+```
+
+Plan included only:
+
+```text
+module.frontend_hosting.aws_s3_bucket_policy.frontend[0]
+```
+
+Apply command:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev apply tfplan.step2b.bucket-policy-final
+```
+
+Apply result:
+
+```text
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+```
+
+Final result:
+
+- CloudFront IAM fix is complete.
+- CloudFront OAC exists.
+- CloudFront distribution exists and is `Deployed`.
+- Frontend bucket policy exists and is scoped to distribution `E31KH7PFML1A6N`.
+- STEP 2-B frontend foundation is complete.
