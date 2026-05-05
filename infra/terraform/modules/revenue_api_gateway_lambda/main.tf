@@ -102,11 +102,11 @@ resource "aws_lambda_function" "api" {
   s3_key        = var.lambda_s3_key
 
   environment {
-    variables = {
-      ARTIFACT_BUCKET   = coalesce(var.artifact_bucket_name, "")
-      AURORA_SECRET_ARN = coalesce(var.aurora_secret_arn, "")
-      COGNITO_POOL_ID   = coalesce(var.cognito_user_pool_id, "")
-    }
+    variables = merge(
+      var.artifact_bucket_name != null ? { ARTIFACT_BUCKET = var.artifact_bucket_name } : {},
+      var.aurora_secret_arn != null ? { AURORA_SECRET_ARN = var.aurora_secret_arn } : {},
+      var.cognito_user_pool_id != null ? { COGNITO_POOL_ID = var.cognito_user_pool_id } : {},
+    )
   }
 
   tracing_config {
