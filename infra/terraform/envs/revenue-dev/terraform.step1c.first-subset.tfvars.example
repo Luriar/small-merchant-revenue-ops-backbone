@@ -1,0 +1,66 @@
+# STEP 1-C first enabled subset template.
+# Copy to a local, ignored tfvars file before use:
+#   cp terraform.step1c.first-subset.tfvars.example terraform.step1c.first-subset.tfvars
+#
+# Do not commit the copied .tfvars file. Replace YOURACCOUNTID and optional
+# domain values with account-specific values before terraform plan.
+
+project_name = "revenue-ops"
+environment  = "revenue-dev"
+aws_region   = "ap-northeast-2"
+
+# First enabled subset.
+enable_artifacts          = true
+enable_frontend           = true
+enable_api                = false
+enable_auth               = false
+enable_aurora             = false
+enable_saas_observability = false
+enable_schedule           = false
+
+# Existing ETL foundation variables are still required because the current
+# revenue-dev environment includes the ETL modules unconditionally.
+data_lake_bucket_name      = "revenue-ops-data-lake-dev-YOURACCOUNTID"
+athena_results_bucket_name = "revenue-ops-athena-results-dev-YOURACCOUNTID"
+glue_database_name         = "revenue_ops_dev"
+use_kms                    = false
+
+# First subset resources.
+artifact_bucket_name = "revenue-ops-artifacts-dev-YOURACCOUNTID"
+frontend_bucket_name = "revenue-ops-frontend-dev-YOURACCOUNTID"
+
+# Keep DNS/custom domain disabled for the first low-blast-radius plan unless
+# Route 53 hosted zone and us-east-1 ACM certificate are already approved.
+frontend_domain_aliases      = []
+frontend_hosted_zone_id      = null
+frontend_acm_certificate_arn = null
+create_frontend_dns_records  = false
+
+# API/Auth/Aurora remain disabled in STEP 1-C.
+api_lambda_s3_bucket    = null
+api_lambda_s3_key       = null
+api_custom_domain_name  = null
+api_acm_certificate_arn = null
+api_hosted_zone_id      = null
+create_api_dns_record   = false
+enable_api_xray         = true
+
+cognito_callback_urls = []
+cognito_logout_urls   = []
+cognito_domain_prefix = null
+
+aurora_vpc_id                     = null
+aurora_private_subnet_ids         = []
+aurora_allowed_security_group_ids = []
+aurora_database_name              = "revenue_ops"
+aurora_master_username            = "revenue_ops_admin"
+aurora_min_acu                    = 0.5
+aurora_max_acu                    = 1
+
+alarm_actions = []
+
+tags = {
+  Team    = "revenue-ops"
+  Contact = "your@email.com"
+  Phase   = "step-1c-plan-readiness"
+}
