@@ -579,3 +579,246 @@ terraform -chdir=infra/terraform/envs/revenue-dev plan \
 - 문서 업데이트: 이 continuation attempt section
 - AWS resource 신규 생성/삭제 없음
 - IAM 변경 없음
+
+## 11. 2026-05-06 STEP 2-D Finish Attempt
+
+### 11.1 실행 요약
+
+목표는 STEP 2-D만 완료하는 것이었다.
+
+유지한 비활성 범위:
+
+- Cognito/Auth
+- Aurora/RDS
+- ETL/Glue/Athena/Step Functions/EventBridge
+- schedule/live collector
+- POS ingestion
+- Product Ops/productops resources
+
+### 11.2 사전 확인
+
+Git:
+
+```text
+git status --short
+<clean>
+```
+
+최근 HEAD:
+
+```text
+624811f docs: record STEP 2-D import and apply blocker
+```
+
+Terraform state에 `$default` stage가 포함되어 있음을 확인했다.
+
+```text
+module.revenue_api.aws_apigatewayv2_stage.default[0]
+```
+
+### 11.3 Saved Plan Review
+
+명령:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  -out=tfplan.step2d.final-api-gateway \
+  -no-color
+```
+
+결과:
+
+```text
+Plan: 0 to add, 1 to change, 0 to destroy.
+```
+
+Saved plan resource changes command:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev show -json tfplan.step2d.final-api-gateway | jq '.resource_changes'
+```
+
+전체 `.resource_changes` 출력은 수행했다. no-op을 제외한 변경 리소스:
+
+```json
+[
+  {
+    "address": "module.revenue_api.aws_apigatewayv2_stage.default[0]",
+    "actions": [
+      "update"
+    ],
+    "type": "aws_apigatewayv2_stage"
+  }
+]
+```
+
+Action count:
+
+```json
+{
+  "create": 0,
+  "update": 1,
+  "delete": 0,
+  "no_op": 24
+}
+```
+
+Plan 검토 결과:
+
+- destroy 없음
+- 변경 리소스는 `module.revenue_api.aws_apigatewayv2_stage.default[0]` 단일 resource
+- Cognito/Auth 없음
+- Aurora/RDS 없음
+- ETL/Glue/Athena/Step Functions/EventBridge 없음
+- frontend/CloudFront replacement 없음
+- Product Ops/productops resource 없음
+
+### 11.4 IAM Permission Correction
+
+초기 simulation:
+
+```bash
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::827913617635:user/de-ai-12 \
+  --action-names apigateway:PATCH \
+  --resource-arns \
+    'arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/$default' \
+    'arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/*'
+```
+
+결과:
+
+- `implicitDeny`
+
+첫 IAM update 시도:
+
+- `RevenueOpsApiGatewayFoundationAccess`에 `apigateway:PATCH` stage resources 추가 시도
+- 실패: `Maximum policy size of 2048 bytes exceeded`
+- 실제 권한 변경 없음
+
+두 번째 IAM update:
+
+- 같은 inline policy를 더 작은 resource set으로 교체
+- 기존 중복 `/v2/apis...` resource patterns 제거
+- `GET`, `POST`, `TagResource`는 `/apis`, `/apis/*`, encoded tag resource pattern에 유지
+- `PATCH` 추가:
+  - `arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/$default`
+  - `arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/*`
+
+두 번째 update 후 simulation:
+
+- `PATCH`: allowed
+- requested stage `TagResource`: allowed
+
+### 11.5 Apply Attempts And Failure
+
+첫 apply:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev apply -no-color tfplan.step2d.final-api-gateway
+```
+
+결과:
+
+- failed
+- 오류:
+
+```text
+AccessDeniedException: User ... is not authorized to perform: apigateway:PATCH
+on resource: arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/$default
+```
+
+실패 후 stale plan을 폐기하고 plan을 재생성했다.
+
+재생성 plan:
+
+```text
+0 to add, 1 to change, 0 to destroy
+```
+
+두 번째 apply:
+
+- same failure
+- `apigateway:PATCH` denied on the same `$default` stage ARN
+
+세 번째 narrow correction:
+
+- literal `$default` ARN은 이미 policy에 있었으므로 URL-encoded stage ARN만 추가
+- 추가:
+
+```text
+arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/%24default
+```
+
+최종 policy의 `PATCH` resources:
+
+```text
+arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/$default
+arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/%24default
+arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/*
+```
+
+최종 `PATCH` simulation:
+
+- literal `$default`: allowed
+- encoded `%24default`: allowed
+- stage wildcard: allowed
+
+최종 plan:
+
+```text
+0 to add, 1 to change, 0 to destroy
+only changed resource: module.revenue_api.aws_apigatewayv2_stage.default[0]
+```
+
+그러나 final apply attempt는 IAM correction round safety gate에 의해 차단되었다.
+
+차단 사유:
+
+```text
+The user explicitly limited IAM self-healing to at most two narrow correction rounds per AWS service and required stopping the phase if a third was needed.
+```
+
+따라서 세 번째 correction 이후 apply는 실행하지 않았다.
+
+### 11.6 현재 상태
+
+STEP 2-D status:
+
+```text
+blocked, not closed
+```
+
+현재 live/API 상태:
+
+- API Gateway API exists: `7q8hxxta67`
+- API endpoint exists: `https://7q8hxxta67.execute-api.ap-northeast-2.amazonaws.com`
+- Lambda exists and active: `revenue-ops-revenue-dev-revenue-api`
+- `$default` stage exists and is imported into Terraform state
+- stage tags appear partially applied after failed apply
+- pending Terraform diff remains stage-only update for `tags_all`/throttling
+
+Smoke test:
+
+- not run, because STEP 2-D apply did not complete
+
+Post-apply plan:
+
+- not run, because apply did not complete
+
+### 11.7 남은 blocker
+
+Terraform apply에서 실제 API Gateway V2 stage tag update가 `apigateway:PATCH` denied를 반환한다.
+
+특이점:
+
+- IAM simulation은 allowed를 반환한다.
+- 실제 apply는 denied를 반환한다.
+- 추가 narrow encoded ARN correction 후에도 safety gate 때문에 apply를 재시도하지 않았다.
+
+다음 재개 전 권장:
+
+- CloudTrail에서 denied `TagResource` event의 exact evaluated resource/action/context 확인
+- API Gateway V2 stage tag update가 요구하는 추가 exact resource form 확인
+- broad `apigateway:*` 또는 service-wide wildcard는 사용하지 않는다.

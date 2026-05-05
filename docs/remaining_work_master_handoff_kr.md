@@ -498,3 +498,79 @@ terraform -chdir=infra/terraform/envs/revenue-dev show -json tfplan.step2d.final
 ```
 
 그 다음 `apigateway:PATCH` simulation을 별도로 실행한다. `PATCH`가 필요한 경우 narrow action/resource만 보정하고 plan을 재생성한 뒤 진행한다.
+
+## 17. 2026-05-06 STEP 2-D Finish Attempt Update
+
+STEP 2-D만 완료하기 위해 재개했으나 최종 상태는 여전히 blocked다.
+
+확인된 plan gate:
+
+```text
+tfplan.step2d.final-api-gateway
+create: 0
+update: 1
+delete: 0
+changed resource: module.revenue_api.aws_apigatewayv2_stage.default[0]
+```
+
+나타나지 않은 범위:
+
+- Cognito/Auth
+- Aurora/RDS
+- ETL/Glue/Athena/Step Functions/EventBridge
+- schedule/live collector/POS ingestion
+- frontend/CloudFront replacement
+- Product Ops/productops resources
+
+IAM 변경:
+
+- `RevenueOpsApiGatewayFoundationAccess` inline policy를 좁게 보정했다.
+- 첫 update는 policy size limit으로 실패했으며 권한 변경 없음.
+- 성공한 update는 기존 중복 `/v2/apis...` resource patterns를 제거해 크기를 줄이고 `apigateway:PATCH` stage resources를 추가했다.
+- 최종 `PATCH` resources:
+
+```text
+arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/$default
+arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/%24default
+arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/*
+```
+
+Simulation:
+
+- `apigateway:PATCH`: allowed for literal `$default`, encoded `%24default`, and stage wildcard
+- requested stage `apigateway:TagResource`: allowed
+
+Apply attempts:
+
+- First apply failed with `apigateway:PATCH` denied on `$default` stage during API Gateway V2 stage tagging.
+- Plan was regenerated after failure.
+- Second apply failed with the same `apigateway:PATCH` denial.
+- A final encoded-stage ARN correction was added, but final apply was blocked by the IAM correction-round safety gate and was not executed.
+
+Current live state:
+
+- API Gateway API exists: `7q8hxxta67`
+- Endpoint exists: `https://7q8hxxta67.execute-api.ap-northeast-2.amazonaws.com`
+- Lambda exists and active: `revenue-ops-revenue-dev-revenue-api`
+- `$default` stage exists and is imported into Terraform state
+- Stage tags appear partially applied from the failed apply
+- Pending diff remains stage-only update for `tags_all`/throttling
+
+Current blocker:
+
+```text
+Actual Terraform apply still receives apigateway:PATCH denied during stage tag update,
+despite IAM simulation returning allowed. Further apply was stopped by the IAM
+self-healing correction-round safety gate.
+```
+
+Next exact safe diagnostic before any further apply:
+
+```bash
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=TagResource \
+  --region ap-northeast-2 \
+  --max-results 10
+```
+
+Use CloudTrail only to identify the exact evaluated action/resource/context. Do not add broad API Gateway wildcard permissions without explicit approval.
