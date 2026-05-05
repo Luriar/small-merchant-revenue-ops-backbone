@@ -1,0 +1,25 @@
+{
+  "Name": "revenue-ops-revenue-dev-daily-pipeline",
+  "ScheduleExpression": "cron(0 2 ? * MON *)",
+  "Description": "Revenue Ops Medallion Pipeline — weekly Monday 2am UTC (11am KST). Enable with Terraform var.enable_schedule=true.",
+  "State": "DISABLED",
+  "Target": {
+    "Arn": "arn:aws:states:ap-northeast-2:YOUR_ACCOUNT_ID:stateMachine:revenue-ops-revenue-dev-medallion-pipeline",
+    "RoleArn": "arn:aws:iam::YOUR_ACCOUNT_ID:role/revenue-ops-revenue-dev-eventbridge-invoke",
+    "Input": {
+      "target_year": "CURRENT_YEAR",
+      "target_quarter": "CURRENT_QUARTER",
+      "baseline_year": "PREV_YEAR",
+      "baseline_quarter": "PREV_QUARTER",
+      "use_samples": false
+    },
+    "RetryPolicy": {
+      "MaximumRetryAttempts": 2,
+      "MaximumEventAgeInSeconds": 3600
+    }
+  },
+  "FlexibleTimeWindow": {
+    "Mode": "OFF"
+  },
+  "_note": "Replace YOUR_ACCOUNT_ID with actual AWS Account ID. Schedule is DISABLED by default — set Terraform var enable_schedule=true to activate."
+}

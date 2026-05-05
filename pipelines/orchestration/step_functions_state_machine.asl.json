@@ -1,0 +1,345 @@
+{
+  "Comment": "Revenue Ops Medallion Pipeline — Bronze/Silver/Gold ETL + Anomaly Detection + Evidence + Actions + Brief",
+  "StartAt": "CreateRun",
+  "States": {
+    "CreateRun": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${CreateRunFunctionArn}",
+        "Payload": {
+          "run_type": "pipeline",
+          "target_kind": "medallion_pipeline",
+          "target_ref.$": "$.target_ref"
+        }
+      },
+      "ResultPath": "$.run_context",
+      "Next": "ExtractSources",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "FailRun",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "ExtractSources": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "FetchSeoulSales",
+          "States": {
+            "FetchSeoulSales": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${GlueJobFetchSeoulSales}",
+                "Arguments": {
+                  "--target_year.$": "$.target_year",
+                  "--target_quarter.$": "$.target_quarter"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchWeatherAsos",
+          "States": {
+            "FetchWeatherAsos": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${FetchWeatherAsosLambdaArn}",
+                "Payload": {
+                  "target_year.$": "$.target_year",
+                  "target_quarter.$": "$.target_quarter"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchHolidays",
+          "States": {
+            "FetchHolidays": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${FetchHolidaysLambdaArn}",
+                "Payload": {
+                  "target_year.$": "$.target_year"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchLocalEvents",
+          "States": {
+            "FetchLocalEvents": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${FetchLocalEventsLambdaArn}",
+                "Payload": {
+                  "target_year.$": "$.target_year",
+                  "target_quarter.$": "$.target_quarter"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.extract_results",
+      "Next": "ValidateBronze",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "FailRun",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "ValidateBronze": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${GlueJobValidateBronze}",
+        "Arguments": {
+          "--target_year.$": "$.target_year",
+          "--target_quarter.$": "$.target_quarter",
+          "--run_id.$": "$.run_context.Payload.run_id"
+        }
+      },
+      "ResultPath": "$.validate_bronze_result",
+      "Next": "BronzeToSilver",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "FailRun",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "BronzeToSilver": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "BronzeToSilverRevenue",
+          "States": {
+            "BronzeToSilverRevenue": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${GlueJobBronzeToSilverRevenue}",
+                "Arguments": {
+                  "--target_year.$": "$.target_year",
+                  "--target_quarter.$": "$.target_quarter"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "BronzeToSilverDemand",
+          "States": {
+            "BronzeToSilverDemand": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${GlueJobBronzeToSilverDemand}",
+                "Arguments": {
+                  "--target_year.$": "$.target_year",
+                  "--target_quarter.$": "$.target_quarter"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "BronzeToSilverWeather",
+          "States": {
+            "BronzeToSilverWeather": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${GlueJobBronzeToSilverWeather}",
+                "Arguments": {
+                  "--target_year.$": "$.target_year",
+                  "--target_quarter.$": "$.target_quarter"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "BronzeToSilverCompetition",
+          "States": {
+            "BronzeToSilverCompetition": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${GlueJobBronzeToSilverCompetition}",
+                "Arguments": {
+                  "--target_year.$": "$.target_year",
+                  "--target_quarter.$": "$.target_quarter"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.silver_results",
+      "Next": "SilverToGold",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "FailRun",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "SilverToGold": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${GlueJobBuildGoldRevenueContextMart}",
+        "Arguments": {
+          "--target_year.$": "$.target_year",
+          "--target_quarter.$": "$.target_quarter",
+          "--baseline_year.$": "$.baseline_year",
+          "--baseline_quarter.$": "$.baseline_quarter"
+        }
+      },
+      "ResultPath": "$.gold_mart_result",
+      "Next": "DetectAnomalies",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "FailRun",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "DetectAnomalies": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${GlueJobDetectRevenueAnomalies}",
+        "Arguments": {
+          "--target_year.$": "$.target_year",
+          "--target_quarter.$": "$.target_quarter",
+          "--baseline_year.$": "$.baseline_year",
+          "--baseline_quarter.$": "$.baseline_quarter"
+        }
+      },
+      "ResultPath": "$.anomaly_result",
+      "Next": "LinkEvidence",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "FailRun",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "LinkEvidence": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${GlueJobLinkCauseEvidence}",
+        "Arguments": {
+          "--target_year.$": "$.target_year",
+          "--target_quarter.$": "$.target_quarter"
+        }
+      },
+      "ResultPath": "$.evidence_result",
+      "Next": "MapActions",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "FailRun",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "MapActions": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${GlueJobMapActionRecommendations}",
+        "Arguments": {
+          "--target_year.$": "$.target_year",
+          "--target_quarter.$": "$.target_quarter"
+        }
+      },
+      "ResultPath": "$.actions_result",
+      "Next": "PublishRevenueBrief",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "FailRun",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "PublishRevenueBrief": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${GlueJobPublishRevenueBrief}",
+        "Arguments": {
+          "--target_year.$": "$.target_year",
+          "--target_quarter.$": "$.target_quarter"
+        }
+      },
+      "ResultPath": "$.brief_result",
+      "Next": "CompleteRun",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "FailRun",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "CompleteRun": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${CompleteRunFunctionArn}",
+        "Payload": {
+          "run_id.$": "$.run_context.Payload.run_id",
+          "status": "completed"
+        }
+      },
+      "End": true
+    },
+    "FailRun": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FailRunFunctionArn}",
+        "Payload": {
+          "run_id.$": "$.run_context.Payload.run_id",
+          "status": "failed",
+          "error.$": "$.error"
+        }
+      },
+      "Next": "PipelineFailed"
+    },
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Error": "PipelineError",
+      "Cause": "One or more pipeline stages failed. Check CloudWatch logs for details."
+    }
+  }
+}

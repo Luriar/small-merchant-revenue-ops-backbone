@@ -1,137 +1,184 @@
-# M2 Terraform — Full data platform
+# Revenue Ops — Serverless Batch ETL Terraform Stack
 
-Product Ops Backbone 프로젝트의 M2 인프라 코드 (M1 확장).
+This is the **Revenue Ops** serverless batch ETL infrastructure.
+It is **not** the old Product Ops streaming/CDC/EKS stack — those modules have been removed.
 
-## M1 → M2 추가 사항
+## What this stack does
 
-`envs/dev`의 기본값은 M1-only이다. M2 컴포넌트는 `-var='enable_m2=true'`를 명시한 경우에만 계획/생성되어야 한다.
+Provisions a serverless medallion ETL pipeline on AWS:
 
-- **NAT Gateway 2개** (network 모듈, `enable_nat_gateway` toggle)
-- **EKS** (`modules/eks`) — cluster + nodegroup + addons + OIDC + IRSA
-- **Karpenter** (`modules/karpenter`) — IAM + SQS + EventBridge
-- **MSK Serverless** (`modules/msk`) — IAM 인증
-- **ClickHouse** (`modules/clickhouse`) — r6i.large + gp3
-- **Airflow MWAA** (`modules/airflow`) — small + S3 DAGs
-- **Helm addons** (`modules/helm_addons`) — Karpenter / ALB Controller / Strimzi / kube-prometheus-stack / Argo Rollouts
-- **Argo CD** (`modules/argocd`) — GitOps
+| Layer | Technology | Purpose |
+|---|---|---|
+| Ingestion | Lambda (Python 3.11) | Pull raw data from external APIs into S3 bronze/ |
+| Orchestration | Step Functions (STANDARD) | Sequence and parallelize the ETL pipeline |
+| Scheduling | EventBridge Scheduler | Trigger the pipeline daily at 2:00 AM UTC |
+| Bronze → Silver | AWS Glue (Python Shell) | Clean, type-cast, and write Parquet |
+| Silver → Gold | AWS Glue (Python Shell) | Join signals, detect anomalies, enrich |
+| Query | Athena + Glue Data Catalog | Ad-hoc and downstream BI queries |
+| Secrets | SSM Parameter Store | API keys and configuration |
+| Observability | CloudWatch Logs + Alarms | Log retention and error alerting |
 
-## 디렉토리
+## Stack constraints
+
+The following services are intentionally excluded:
+EKS, MSK, ClickHouse, Debezium, Strimzi, MWAA, Redshift, EMR, Kinesis, Prometheus/Grafana, Argo CD.
+
+## Directory structure
 
 ```
-m2/
-├── bootstrap/        (M1과 동일)
-├── envs/dev/         (M1 + M2 모듈 호출)
+infra/terraform/
+├── bootstrap/                    One-time apply: creates S3 state bucket + DynamoDB lock table
+│   ├── versions.tf
+│   ├── providers.tf
+│   ├── variables.tf
+│   ├── main.tf
+│   └── outputs.tf
+│
+├── envs/
+│   └── revenue-dev/              Main environment (dev/staging/prod parity via tfvars)
+│       ├── versions.tf
+│       ├── providers.tf
+│       ├── backend.tf
+│       ├── variables.tf
+│       ├── locals.tf
+│       ├── main.tf               Module calls
+│       ├── outputs.tf
+│       └── terraform.tfvars.example
+│
 └── modules/
-    ├── network/      (M1 + NAT 활성화)
-    ├── endpoints/    (M1 그대로)
-    ├── bastion/      (M1 그대로)
-    ├── aurora/       (M1 그대로)
-    ├── eks/          [M2 신규]
-    ├── karpenter/    [M2 신규]
-    ├── msk/          [M2 신규]
-    ├── clickhouse/   [M2 신규]
-    ├── airflow/      [M2 신규]
-    ├── helm_addons/  [M2 신규]
-    └── argocd/       [M2 신규]
+    ├── revenue_data_lake/        S3 data lake (bronze/silver/gold) + Athena results bucket
+    ├── revenue_glue_catalog/     Glue Data Catalog database + all Silver and Gold table schemas
+    ├── revenue_athena/           Athena workgroup with cost guard rail and enforced result location
+    ├── revenue_etl_iam/          IAM roles for Lambda, Glue, Step Functions, EventBridge
+    ├── revenue_lambda_extractors/Lambda functions: fetch_weather_asos, fetch_holidays, fetch_local_events
+    ├── revenue_glue_jobs/        8 Glue Python Shell jobs (Bronze→Silver + Silver→Gold)
+    ├── revenue_step_functions/   Step Functions state machine (medallion pipeline ASL)
+    ├── revenue_eventbridge/      EventBridge Scheduler — daily pipeline trigger
+    ├── revenue_observability/    CloudWatch log groups + metric alarms
+    └── revenue_secrets/          SSM Parameter Store entries for API keys
 ```
 
-## 사이즈 결정 철학
+## Prerequisites
 
-**"Production 스킬셋 + 최소 사이즈 + 발표 후 사이즈만 조정해서 실서비스 진입"**
+- Terraform >= 1.5
+- AWS CLI configured (`aws configure` or environment variables)
+- An AWS account and sufficient IAM permissions
 
-| 컴포넌트 | M2 사이즈 | Production 전환 |
-|---|---|---|
-| Aurora Serverless v2 | 0.5~4 ACU | max_capacity 늘림 |
-| EKS 노드 | t3.medium 2대 | t3.large/xlarge로 변경 |
-| Karpenter | 0~∞ (자동) | 그대로 |
-| ClickHouse | r6i.large + gp3 100GB | replicated cluster + 사이즈 ↑ |
-| MSK Serverless | (자동) | 그대로 또는 provisioned |
-| MWAA | mw1.small | mw1.medium / mw1.large |
-| Bastion | t4g.nano | 그대로 |
+## Deploy
 
-## Argo Rollouts Canary
-
-| 항목 | 데모 (M2) | Production 전환 |
-|---|---|---|
-| Step | 10% → 25% → 50% → 75% → 100% | 그대로 |
-| 각 step 대기 | 1분 | 5~10분 |
-| Analysis | error rate < 1% / 30초 윈도우 | error rate + latency p99 + 5분 윈도우 |
-| 자동 롤백 | analysis 실패 시 | 그대로 |
-
-## 적용 순서
-
-### 1) Bootstrap (M1과 동일, 1회)
-
-M1에서 이미 만들었으면 skip.
+### Step 1 — Bootstrap (once per account/region)
 
 ```bash
-cd bootstrap
-terraform init
-terraform apply
-```
-
-### 2) backend 설정 (M1과 동일)
-
-```bash
-cd ../bootstrap
-terraform output -raw backend_config_snippet > ../envs/dev/backend.tf
-```
-
-### 3) Apply
-
-```bash
-cd ../envs/dev
-
-# 기본값은 var.enable_m2 = false 이며 M1 상태만 만듬
-# M2는 readiness gate 통과 후 -var='enable_m2=true'로 명시 활성화
-# 단계적 적용 권장: M1 먼저 → 검증 → M2 활성화
+cd infra/terraform/bootstrap
 
 terraform init
+terraform apply \
+  -var='state_bucket_name=revenue-ops-tfstate-YOUR_ACCOUNT_ID'
+```
+
+Note the `state_bucket_name` and `dynamodb_table_name` outputs.
+
+### Step 2 — Configure the remote backend
+
+Copy `envs/revenue-dev/backend.tf` and fill in the values from Step 1:
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket         = "<state_bucket_name from Step 1>"
+    key            = "revenue-ops/revenue-dev/terraform.tfstate"
+    region         = "ap-northeast-2"
+    dynamodb_table = "<dynamodb_table_name from Step 1>"
+    encrypt        = true
+  }
+}
+```
+
+Or pass them via CLI flags:
+
+```bash
+terraform init \
+  -backend-config="bucket=revenue-ops-tfstate-123456789012" \
+  -backend-config="key=revenue-ops/revenue-dev/terraform.tfstate" \
+  -backend-config="region=ap-northeast-2" \
+  -backend-config="dynamodb_table=revenue-ops-tflock" \
+  -backend-config="encrypt=true"
+```
+
+### Step 3 — Configure tfvars
+
+```bash
+cd infra/terraform/envs/revenue-dev
+
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your account-specific values
+```
+
+### Step 4 — Plan & Apply
+
+```bash
+terraform init      # only needed once or after backend changes
 terraform plan
 terraform apply
 ```
 
-**중요**: M2 첫 apply는 **2단계로 나누는 것을 권장**:
+### Step 5 — Update secrets
+
+After the first apply, update the SSM parameters with real API keys before running the pipeline:
 
 ```bash
-# 1단계: EKS만 (helm provider가 cluster auth를 필요로 하므로)
-terraform apply -target='module.eks' -target='aws_security_group.bastion'
+# Seoul OpenAPI
+aws ssm put-parameter \
+  --name "/revenue-ops-revenue-dev/SEOUL_OPENAPI_KEY" \
+  --value "your-actual-key" \
+  --type SecureString \
+  --overwrite
 
-# 2단계: 나머지
-terraform apply
+# data.go.kr
+aws ssm put-parameter \
+  --name "/revenue-ops-revenue-dev/DATA_GO_KR_SERVICE_KEY" \
+  --value "your-actual-key" \
+  --type SecureString \
+  --overwrite
 ```
 
-이렇게 하면 helm/kubernetes provider 초기화 시점에 cluster가 이미 존재.
-
-## M2 종료 조건 (데모 시연 가능 상태)
-
-1. EKS 클러스터에 bastion에서 kubectl 접근 가능
-2. Strimzi KafkaConnect + 3개 Connector 배포되어 Aurora → MSK → ClickHouse CDC 흐름 통과
-3. Airflow DAG 2개 (anomaly_detection, trace_evaluation) 정상 실행
-4. Argo CD에서 Argo Rollouts canary 배포 시연 가능
-5. Grafana 대시보드 접근 가능
-
-## 주의사항
-
-### 비용
-
-NAT Gateway 2개 × $0.045/hour = 약 $65/월. MWAA mw1.small ~$0.5/시간 = ~$360/월. EKS control plane $0.10/hour = ~$72/월.
-
-**데모 후 즉시 destroy 권장.**
-
-### Provider 초기화 순서
-
-`helm` / `kubernetes` provider는 EKS cluster가 존재해야 초기화 가능. `var.enable_m2 = false` 일 때는 `count = 0`으로 우회.
-
-### 모듈 destroy 순서
+### Step 6 — Enable the schedule (when ready)
 
 ```bash
-# 의존 역순
-terraform destroy -target='module.argocd' -target='module.helm_addons'
-terraform destroy -target='module.airflow'
-terraform destroy -target='module.clickhouse' -target='module.msk'
-terraform destroy -target='module.karpenter' -target='module.eks'
-terraform destroy  # 나머지 (bastion, aurora, endpoints, network)
+terraform apply -var='enable_schedule=true'
 ```
 
-또는 한번에: `terraform destroy` (의존 자동 해석되지만 helm provider auth 이슈 가능).
+## Triggering the pipeline manually
+
+```bash
+# Get the state machine ARN from Terraform output
+STATE_MACHINE_ARN=$(terraform output -raw step_function_arn)
+
+aws stepfunctions start-execution \
+  --state-machine-arn "$STATE_MACHINE_ARN" \
+  --input '{"pipeline_trigger": "manual"}'
+```
+
+## Cost estimate (dev, ap-northeast-2)
+
+| Service | Approximate cost |
+|---|---|
+| S3 (data lake + results) | < $1/month for dev volumes |
+| Lambda (3 extractors, daily) | < $1/month |
+| Glue (8 jobs × 0.0625 DPU, daily) | ~$0.30/month |
+| Step Functions | < $0.01/month |
+| Athena | Pay-per-query (~$5/TB scanned) |
+| CloudWatch | ~$0.50/month |
+| SSM Parameter Store | Free tier |
+
+Total dev estimate: **~$2-5/month** (heavily depends on data volume and query frequency).
+
+## Teardown
+
+```bash
+cd infra/terraform/envs/revenue-dev
+terraform destroy
+```
+
+The bootstrap resources (S3 state bucket, DynamoDB table) are intentionally not destroyed automatically.
+Remove them manually when the project is fully decommissioned.

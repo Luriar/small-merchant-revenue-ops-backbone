@@ -1,0 +1,48 @@
+sources:
+  seoul_estimated_sales:
+    purpose: revenue_signal
+    access_method: seoul_openapi_or_csv_download
+    bronze_path: data/bronze/seoul_sales
+    silver_schema: revenue_signal
+    required: true
+
+  seoul_living_population:
+    purpose: demand_signal
+    access_method: seoul_openapi_or_csv_download
+    bronze_path: data/bronze/seoul_population
+    silver_schema: demand_signal
+    required: true
+
+  trade_area_boundary:
+    purpose: trade_area_code_location_mapping
+    access_method: seoul_openapi_or_csv_download
+    bronze_path: data/bronze/trade_area_boundary
+    required: true
+
+  store_competition:
+    purpose: competition_snapshot
+    access_method: data_go_kr_api_or_csv_download
+    bronze_path: data/bronze/store_competition
+    silver_schema: competition_snapshot
+    required: true
+
+  weather_asos:
+    purpose: weather_signal
+    access_method: data_go_kr_api
+    bronze_path: data/bronze/weather_asos
+    silver_schema: weather_signal
+    required: true
+
+  holidays:
+    purpose: holiday_context
+    access_method: data_go_kr_api
+    bronze_path: data/bronze/holidays
+    silver_schema: holiday_context
+    required: false
+
+  local_events:
+    purpose: local_event_context
+    access_method: seoul_openapi_or_csv_download
+    bronze_path: data/bronze/local_events
+    silver_schema: local_event_context
+    required: false

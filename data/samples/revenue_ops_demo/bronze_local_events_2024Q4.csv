@@ -1,0 +1,3 @@
+event_id,event_name,district_name,place_name,start_date,end_date,is_free,category,latitude,longitude
+E2024Q4001,성수동 할로윈 팝업,성동구,성수동,2024-10-26,2024-10-27,False,문화/이벤트,37.5446,127.0558
+E2024Q4002,성수 크리스마스 마켓,성동구,성수동,2024-12-21,2024-12-24,False,마켓/축제,37.5446,127.0558

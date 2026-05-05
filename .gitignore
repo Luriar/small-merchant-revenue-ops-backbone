@@ -16,15 +16,20 @@ dist/
 build/
 .next/
 
-# Local data lake outputs
+# Local data lake outputs (Bronze/Silver/Gold generated files not tracked)
 data/bronze/**
 data/silver/**
 data/gold/**
 data/runs/**
-!data/bronze/.gitkeep
-!data/silver/.gitkeep
-!data/gold/.gitkeep
+!data/bronze/**/.gitkeep
+!data/silver/**/.gitkeep
+!data/gold/**/.gitkeep
 !data/runs/.gitkeep
+# Sample fixtures ARE tracked
+!data/samples/**
+
+# Zone.Identifier files (WSL artifact)
+*:Zone.Identifier
 
 # Terraform
 .terraform/

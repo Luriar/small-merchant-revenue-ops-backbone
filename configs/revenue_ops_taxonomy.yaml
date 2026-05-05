@@ -1,0 +1,136 @@
+domain: small_merchant_revenue_ops
+version: "0.1"
+description: >
+  소상공인 AI Revenue Ops OS의 도메인 용어, 이상 유형, 근거 유형, 액션 유형, 데이터 소스 유형, 신뢰도 수준, 그리고 표현 가이드라인을 정의합니다.
+
+project_identity:
+  name: "AI Revenue Ops OS for Small Merchants"
+  framing_kr: "소상공인이 매출 변화의 원인 후보를 근거와 함께 이해하고, 바로 실행할 액션까지 결정할 수 있게 돕는 AI Revenue Ops OS"
+  framing_en: "AI Revenue Ops OS — Likely cause candidates with evidence, actionable recommendations for small merchants"
+  not_a:
+    - "generic commercial district dashboard"
+    - "POS replacement"
+    - "causal proof engine"
+    - "guaranteed revenue uplift tool"
+
+data_layer:
+  bronze:
+    description: "원천 데이터 보존 레이어 — 수집된 그대로 저장, 변환 없음"
+    purpose: source_preservation
+  silver:
+    description: "정규화된 신호 스키마 레이어 — 분석 가능한 표준 구조"
+    purpose: normalized_signal_schemas
+  gold:
+    description: "운영 판단 마트 레이어 — 이상 탐지, 근거 후보, 액션 추천, Revenue Brief"
+    purpose: operational_judgment_marts
+
+anomaly_types:
+  revenue_drop:
+    label_kr: "매출 하락"
+    rule: "revenue_change_pct <= -10"
+    severity_base: medium
+  transaction_drop:
+    label_kr: "거래건수 하락"
+    rule: "transaction_change_pct <= -10"
+    severity_base: medium
+  severe_revenue_drop:
+    label_kr: "심각한 매출 하락"
+    rule: "revenue_change_pct <= -20"
+    severity_base: high
+  weak_growth_warning:
+    label_kr: "수요 대비 매출 약세"
+    rule: "revenue_change_pct < 0 and population_change_pct >= 0"
+    severity_base: low
+
+evidence_types:
+  demand:
+    label_kr: "수요 감소 근거"
+    description_kr: "유동인구/생활인구 변화와 매출 하락이 함께 관측됨"
+  weather:
+    label_kr: "날씨 영향 근거"
+    description_kr: "강수일 또는 기온 이상과 매출 하락이 함께 관측됨"
+  competition:
+    label_kr: "경쟁 심화 근거"
+    description_kr: "동일 상권 내 동종 업종 점포수 증가와 매출 하락이 함께 관측됨"
+  context:
+    label_kr: "맥락 변화 근거"
+    description_kr: "공휴일 수, 지역 행사 감소 등 맥락 변화와 매출 하락이 함께 관측됨"
+  benchmark_or_conversion:
+    label_kr: "전환율/경쟁력 근거"
+    description_kr: "수요는 유지되나 매출 하락 — 전환율, 경쟁력, 오퍼 문제 가능성"
+
+action_types:
+  promotion: "프로모션/쿠폰 액션"
+  menu_update: "메뉴/상품 구성 변경"
+  operational: "운영 방식 개선"
+  channel: "채널/배달 관리"
+  customer_retention: "단골 고객 관리"
+  cost_management: "비용 관리"
+  communication: "고객 커뮤니케이션"
+
+data_source_types:
+  seoul_openapi:
+    label_kr: "서울 열린데이터광장"
+    url: "https://data.seoul.go.kr"
+  data_go_kr:
+    label_kr: "공공데이터포털"
+    url: "https://www.data.go.kr"
+  kma_asos:
+    label_kr: "기상청 종관기상관측(ASOS)"
+    url: "https://data.kma.go.kr"
+
+confidence_levels:
+  strong:
+    label_kr: "강한 근거"
+    description_kr: "두 개 이상의 지표가 같은 방향으로 함께 관측됨"
+  medium:
+    label_kr: "보통 근거"
+    description_kr: "한 개 지표가 관측됨, 다른 요인과 함께 검토 필요"
+  weak:
+    label_kr: "약한 근거"
+    description_kr: "방향성이 일치하나 영향 정도가 불명확함"
+
+wording_guardrails:
+  use:
+    - "가능성 높은 원인 후보"
+    - "함께 관측되었습니다"
+    - "영향을 주었을 가능성이 있습니다"
+    - "추가 확인이 필요합니다"
+    - "~으로 보입니다"
+    - "~와 관련이 있을 수 있습니다"
+  do_not_use:
+    - "원인으로 확정됩니다"
+    - "반드시 매출이 오릅니다"
+    - "이 액션을 하면 매출이 보장됩니다"
+    - "이것이 원인입니다"
+    - "확실한 원인은"
+
+period_types:
+  quarterly: "분기별"
+  monthly: "월별"
+  weekly: "주별"
+
+metric_definitions:
+  revenue_amount:
+    label_kr: "추정 매출액"
+    unit: "원"
+    note: "공공데이터 기반 추정치 — 실제 POS 매출과 다를 수 있음"
+  transaction_count:
+    label_kr: "추정 거래건수"
+    note: "공공데이터 기반 추정치"
+  revenue_change_pct:
+    label_kr: "매출 변화율(%)"
+    formula: "(current - baseline) / baseline * 100"
+  population_change_pct:
+    label_kr: "유동인구 변화율(%)"
+
+data_limitations:
+  mvp_scope: >
+    M3 MVP는 서울시 상권 공공데이터(서울 열린데이터광장, 공공데이터포털, 기상청) 기반입니다.
+    개별 사업자 POS 데이터를 직접 수집하지 않습니다.
+    따라서 매출 수치는 상권/업종 단위 추정치이며, 특정 매장의 실제 매출과 다를 수 있습니다.
+  v1_expansion:
+    - "개별 POS 연동"
+    - "배달앱(배달의민족, 쿠팡이츠) 데이터 연동"
+    - "SmartPlace(네이버 플레이스) 리뷰/방문 데이터"
+    - "채널별 매출 통합"

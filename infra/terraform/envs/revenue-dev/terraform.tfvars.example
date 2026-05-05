@@ -1,0 +1,12 @@
+project_name               = "revenue-ops"
+environment                = "revenue-dev"
+aws_region                 = "ap-northeast-2"
+enable_schedule            = false
+data_lake_bucket_name      = "revenue-ops-data-lake-dev-YOURACCOUNTID"
+athena_results_bucket_name = "revenue-ops-athena-results-dev-YOURACCOUNTID"
+glue_database_name         = "revenue_ops_dev"
+use_kms                    = false
+tags = {
+  Team    = "revenue-ops"
+  Contact = "your@email.com"
+}
