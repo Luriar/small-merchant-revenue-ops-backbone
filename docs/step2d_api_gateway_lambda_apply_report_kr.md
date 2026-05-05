@@ -250,3 +250,332 @@ API smoke test:
 ```text
 Approved to add RevenueOpsApiGatewayFoundationAccess to de-ai-12 and apply only the remaining STEP 2-D API Gateway plan with 0 destroy.
 ```
+
+## 10. 2026-05-06 Continuation Attempt
+
+### 10.1 맥락
+
+final execution pass 시작 전 `docs/remaining_work_master_handoff_kr.md`를 작성하고 commit `df041bb`로 먼저 고정했다.
+
+이후 STEP 2-D finish를 재개했다. 이번 단계의 목적은 small-merchant Revenue Ops SaaS API Gateway + Lambda 활성화를 마무리하고, Auth/Aurora/ETL/schedule/live collector/POS ingestion 없이 API endpoint를 smoke test 가능한 상태로 닫는 것이었다.
+
+### 10.2 확인한 현재 상태
+
+Terraform state에는 다음 STEP 2-D 리소스가 있었다.
+
+```text
+module.revenue_api.aws_apigatewayv2_api.api[0]
+module.revenue_api.aws_apigatewayv2_integration.lambda[0]
+module.revenue_api.aws_apigatewayv2_route.revenue[0]
+module.revenue_api.aws_iam_policy.api_lambda[0]
+module.revenue_api.aws_iam_role.api_lambda[0]
+module.revenue_api.aws_iam_role_policy_attachment.api_lambda[0]
+module.revenue_api.aws_lambda_function.api[0]
+module.revenue_api.aws_lambda_permission.api_gateway[0]
+```
+
+초기 확인 시 Terraform state에는 없었으나 AWS에는 존재한 리소스:
+
+```text
+module.revenue_api.aws_apigatewayv2_stage.default[0]
+```
+
+AWS read-only 확인:
+
+- API Gateway API `7q8hxxta67` exists
+- API endpoint `https://7q8hxxta67.execute-api.ap-northeast-2.amazonaws.com` exists
+- `$default` stage exists remotely
+- Lambda `revenue-ops-revenue-dev-revenue-api` is `Active`
+- Lambda `LastUpdateStatus` is `Successful`
+
+### 10.3 IAM 확인
+
+Inline policy `RevenueOpsApiGatewayFoundationAccess`는 이미 존재했다.
+
+정책에 포함된 API Gateway actions:
+
+```text
+apigateway:GET
+apigateway:POST
+apigateway:TagResource
+```
+
+요청된 stage TagResource simulation 결과는 모두 `allowed`였다.
+
+확인한 resources:
+
+```text
+arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages
+arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/*
+arn:aws:apigateway:ap-northeast-2::/apis/*/stages
+arn:aws:apigateway:ap-northeast-2::/apis/*/stages/*
+```
+
+이번 continuation에서 IAM policy 변경은 하지 않았다.
+
+### 10.4 Terraform validate
+
+명령:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev validate
+```
+
+결과:
+
+- success
+- warning: backend `dynamodb_table` parameter deprecated
+
+### 10.5 첫 plan 결과
+
+명령:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  -out=tfplan.step2d.final-api-gateway \
+  -no-color
+```
+
+결과:
+
+```text
+Plan: 1 to add, 0 to change, 0 to destroy.
+```
+
+생성 예정 리소스:
+
+```text
+module.revenue_api.aws_apigatewayv2_stage.default[0]
+```
+
+판단:
+
+- `$default` stage는 AWS에 이미 존재했다.
+- 그대로 apply하면 duplicate stage create conflict 가능성이 높았다.
+- remote resource를 새로 만들지 않는 state reconciliation으로 import를 진행했다.
+
+### 10.6 Terraform import self-heal
+
+첫 import 시도:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev import \
+  'module.revenue_api.aws_apigatewayv2_stage.default[0]' \
+  '7q8hxxta67/$default'
+```
+
+결과:
+
+- failed
+- 원인: required variables `data_lake_bucket_name`, `athena_results_bucket_name` 미입력
+- AWS resource 변경 없음
+- Terraform state 변경 없음
+
+재시도:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev import \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  'module.revenue_api.aws_apigatewayv2_stage.default[0]' \
+  '7q8hxxta67/$default'
+```
+
+결과:
+
+- success
+- `$default` stage가 Terraform state에 추가됨
+
+import 후 state 확인:
+
+```text
+module.revenue_api.aws_apigatewayv2_stage.default[0]
+```
+
+### 10.7 import 후 새 plan 결과
+
+state가 바뀌었으므로 저장된 기존 plan을 재사용하지 않고 다시 생성했다.
+
+명령:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  -out=tfplan.step2d.final-api-gateway \
+  -no-color
+```
+
+결과:
+
+```text
+Plan: 0 to add, 1 to change, 0 to destroy.
+```
+
+변경 예정 리소스:
+
+```text
+module.revenue_api.aws_apigatewayv2_stage.default[0]
+```
+
+변경 내용:
+
+- `$default` stage tag 추가
+- `default_route_settings.throttling_burst_limit: 0 -> 50`
+- `default_route_settings.throttling_rate_limit: 0 -> 25`
+
+예상 외 리소스는 나타나지 않았다.
+
+나타나지 않은 리소스:
+
+- Cognito/Auth
+- Aurora/RDS
+- Glue/Athena/Step Functions/EventBridge
+- ETL pipeline
+- schedule/live collector
+- POS ingestion
+- frontend/CloudFront replacement
+- destroy action
+
+### 10.8 apply 중단 사유
+
+사용자 요청상 apply 전 반드시 다음 명령 형태로 saved plan resource list를 출력해야 한다.
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev show -json tfplan.step2d.final-api-gateway | jq '.resource_changes'
+```
+
+로컬 sandbox 안에서는 provider schema 로딩 실패로 `terraform show -json`이 실패했다.
+
+핵심 오류:
+
+```text
+Error: Failed to load plugin schemas
+Failed to obtain provider schema: Could not load the schema for provider registry.terraform.io/hashicorp/aws
+Failed to read any lines from plugin's stdout
+```
+
+동일 명령을 sandbox 밖에서 실행하려는 escalation은 승인 검토가 사용량 한도로 거부했다.
+
+핵심 오류:
+
+```text
+Automatic approval review failed: You've hit your usage limit.
+```
+
+따라서 다음 조건을 충족할 수 없어 apply하지 않았다.
+
+- saved plan의 `.resource_changes` 출력
+- create/change/delete count의 apply 직전 재확인
+- every resource address의 apply 직전 표시
+
+### 10.9 PATCH simulation 상태
+
+stage in-place update는 실제 apply 시 `apigateway:PATCH`가 필요할 가능성이 있다.
+
+다만 `apigateway:PATCH`와 `apigateway:GET`을 `apigateway:TagResource`와 한 번에 simulation한 첫 명령은 AWS가 다음 오류로 거부했다.
+
+```text
+Invalid Input Actions: [apigateway:PATCH,apigateway:GET] and [apigateway:TagResource] require different authorization information.
+```
+
+이후 `PATCH`/`GET` 단독 simulation을 실행하려 했으나, sandbox escalation이 사용량 한도로 거부되어 확인하지 못했다.
+
+현재까지 확정된 IAM 상태:
+
+- `apigateway:TagResource` stage resources: allowed
+- `apigateway:PATCH`: not verified
+- IAM policy 변경: none
+
+### 10.10 현재 STEP 2-D 상태
+
+현재 상태:
+
+- API Gateway API exists
+- API Gateway endpoint exists
+- API Gateway integration exists
+- API Gateway route exists
+- API Gateway `$default` stage exists remotely
+- `$default` stage is now imported into Terraform state
+- Lambda permission exists
+- Lambda function is active
+- Terraform desired state still has one pending stage in-place update
+- Direct API smoke test was not run in this continuation because apply was not completed and shell/network escalation became unavailable
+
+STEP 2-D는 infrastructure live 상태가 대부분 갖춰졌지만, apply gate를 통과하지 못해 최종 closure로 보지 않는다.
+
+### 10.11 다음 재개 명령
+
+승인/사용량 한도가 복구되면 다음 순서로 재개한다.
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev show -json tfplan.step2d.final-api-gateway | jq '.resource_changes'
+```
+
+확인 기준:
+
+- create: 0
+- change: 1
+- delete: 0
+- only address: `module.revenue_api.aws_apigatewayv2_stage.default[0]`
+- no Auth/Aurora/ETL/schedule/frontend replacement
+
+`apigateway:PATCH` 사전 확인:
+
+```bash
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::827913617635:user/de-ai-12 \
+  --action-names apigateway:PATCH \
+  --resource-arns \
+    'arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/$default' \
+    'arn:aws:apigateway:ap-northeast-2::/apis/7q8hxxta67/stages/*'
+```
+
+PATCH가 allowed이고 saved plan resource list가 위 기준과 일치할 때만 apply한다.
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev apply -no-color tfplan.step2d.final-api-gateway
+```
+
+apply 후:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step1c.first-subset.tfvars \
+  -out=tfplan.step2d.post-apply-check \
+  -no-color
+```
+
+### 10.12 수용 기준 상태
+
+완료:
+
+- handoff 먼저 작성 및 commit
+- Terraform state 확인
+- API Gateway/Lambda live read 확인
+- `RevenueOpsApiGatewayFoundationAccess` 확인
+- requested stage `TagResource` simulation allowed 확인
+- Terraform validate 성공
+- duplicate stage create 위험 식별
+- `$default` stage import self-heal 성공
+- import 후 새 plan 생성
+- destroy 0 확인
+
+미완료:
+
+- saved plan `.resource_changes` apply 직전 출력
+- `apigateway:PATCH` 단독 simulation
+- pending stage in-place update apply
+- direct API smoke test
+- STEP 2-D closure
+
+남은 blocker:
+
+- sandbox 밖 명령 escalation이 사용량 한도로 거부됨
+- sandbox 안 `terraform show -json` provider schema load 실패
+
+산출물 요약:
+
+- Terraform state reconciliation: `$default` stage import 완료
+- 문서 업데이트: 이 continuation attempt section
+- AWS resource 신규 생성/삭제 없음
+- IAM 변경 없음

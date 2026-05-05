@@ -455,3 +455,46 @@ terraform -chdir=infra/terraform/envs/revenue-dev validate
 npm --prefix apps/web run check
 npm --prefix apps/web run build
 ```
+
+## 16. 2026-05-06 STEP 2-D Continuation Update
+
+handoff commit 후 STEP 2-D를 재개했다.
+
+추가로 완료한 것:
+
+- `RevenueOpsApiGatewayFoundationAccess` inline policy 확인
+- requested stage `apigateway:TagResource` resources 4개 simulation: all `allowed`
+- `terraform validate`: success, backend deprecation warning only
+- 첫 STEP 2-D plan: `1 add, 0 change, 0 destroy`
+- AWS에는 이미 존재하지만 Terraform state에 없던 `$default` stage 식별
+- `terraform import -var-file=terraform.step1c.first-subset.tfvars 'module.revenue_api.aws_apigatewayv2_stage.default[0]' '7q8hxxta67/$default'`: success
+- import 후 state에 `module.revenue_api.aws_apigatewayv2_stage.default[0]` 포함 확인
+- import 후 새 plan: `0 add, 1 change, 0 destroy`
+
+최신 pending plan:
+
+```text
+tfplan.step2d.final-api-gateway
+0 add, 1 change, 0 destroy
+only expected address: module.revenue_api.aws_apigatewayv2_stage.default[0]
+```
+
+Pending change:
+
+- `$default` stage tags 추가
+- throttling burst/rate를 `50`/`25`로 설정
+
+중단 사유:
+
+- 사용자 safety gate인 `terraform show -json tfplan.step2d.final-api-gateway | jq '.resource_changes'`를 apply 직전에 완료해야 한다.
+- sandbox 안에서는 Terraform provider schema load 실패가 발생했다.
+- sandbox 밖 실행 escalation은 사용량 한도로 거부되었다.
+- 따라서 saved plan resource list를 apply 직전에 표시할 수 없어 apply하지 않았다.
+
+다음 재개 시 첫 명령:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev show -json tfplan.step2d.final-api-gateway | jq '.resource_changes'
+```
+
+그 다음 `apigateway:PATCH` simulation을 별도로 실행한다. `PATCH`가 필요한 경우 narrow action/resource만 보정하고 plan을 재생성한 뒤 진행한다.
