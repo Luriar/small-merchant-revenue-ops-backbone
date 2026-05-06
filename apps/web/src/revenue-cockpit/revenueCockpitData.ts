@@ -55,6 +55,17 @@ function sourceName(id: string): { ko: string; en: string } {
     cause_evidence_candidates: { ko: '원인 근거 후보 Gold', en: 'Cause Evidence Gold' },
     action_recommendation_candidates: { ko: '액션 추천 후보 Gold', en: 'Action Recommendation Gold' },
     revenue_context_mart: { ko: '매출 컨텍스트 Mart', en: 'Revenue Context Mart' },
+    kakao_geocoding: { ko: '위치 확인', en: 'Location' },
+    kma_weather: { ko: '날씨 맥락', en: 'Weather' },
+    seoul_commercial_benchmark: { ko: '상권 매출 기준', en: 'Commercial benchmark' },
+    seoul_foot_traffic_proxy: { ko: '유동인구 신호', en: 'Foot traffic proxy' },
+    seoul_store_density_proxy: { ko: '주변 점포 밀도', en: 'Store density' },
+    naver_local_competitor_search: { ko: '네이버 주변 점포', en: 'Naver nearby stores' },
+    naver_search_trend: { ko: '네이버 검색 관심도', en: 'Naver search trend' },
+    korean_holiday_calendar: { ko: '공휴일·특일', en: 'Holiday calendar' },
+    toss_place_connector_smoke: { ko: '토스 플레이스 준비상태', en: 'Toss Place readiness' },
+    delivery_provider_connector_smoke: { ko: '배달 연동 준비상태', en: 'Delivery provider readiness' },
+    delivery_upload_parser: { ko: '배달 업로드 파서', en: 'Delivery upload parser' },
   };
   return names[id] ?? { ko: id, en: id };
 }
@@ -142,6 +153,39 @@ function buildReliability(brief: ApiRecord | undefined, context: ApiRecord | und
   const goldFiles = isRecord(pipelineMeta?.gold_files) ? pipelineMeta.gold_files : {};
   const freshness = str(brief?.generated_at, SCENARIO.reliability.sources[0].freshness).slice(0, 10);
   const coverage = Math.round(num(context?.source_coverage_score, 1) * 100);
+  const latestCollectorRun = isRecord(pipelineMeta?.latest_collector_run) ? pipelineMeta.latest_collector_run : undefined;
+  const collectorMetadata = isRecord(latestCollectorRun?.metadata) ? latestCollectorRun.metadata : {};
+  const collectorRows = asRecordList(collectorMetadata.collectors);
+  if (collectorRows.length > 0) {
+    const sources = collectorRows.map(collector => {
+      const id = str(collector.name, str(collector.collector_name, 'collector'));
+      const statusText = str(collector.status, 'partial');
+      const status: 'ok' | 'partial' | 'failed' | 'skipped' =
+        statusText === 'completed' ? 'ok' : statusText === 'failed' ? 'failed' : statusText === 'skipped' ? 'skipped' : 'partial';
+      return {
+        id,
+        name: sourceName(id),
+        sourceName: str(collector.source_name, ''),
+        freshness: str(collector.freshness, str(collector.collected_at, freshness)).slice(0, 19).replace('T', ' '),
+        cadence: { ko: '수집기', en: 'Collector' },
+        status,
+        coverage: status === 'ok' ? 100 : status === 'failed' ? 20 : 45,
+        durationMs: num(collector.duration_ms, 0),
+        reason: str(collector.reason, '') || null,
+      };
+    });
+    const failureCount = num(pipelineMeta?.failed_collector_count, sources.filter(source => source.status === 'failed').length);
+    return {
+      overall: failureCount > 0 ? 'partial' : 'healthy',
+      sources,
+      runs: Math.max(SCENARIO.reliability.runs, sources.length),
+      failures: failureCount,
+      lastRun: {
+        ko: str(latestCollectorRun?.completed_at, str(latestCollectorRun?.created_at, freshness)).slice(0, 19).replace('T', ' '),
+        en: str(latestCollectorRun?.completed_at, str(latestCollectorRun?.created_at, freshness)).slice(0, 19).replace('T', ' '),
+      },
+    };
+  }
   const sources = Object.keys(goldFiles).length
     ? Object.keys(goldFiles).map(id => ({
       id,

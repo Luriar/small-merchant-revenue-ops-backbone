@@ -45,10 +45,13 @@ export interface RcAction {
 export interface DataSource {
   id: string;
   name: BiLingual;
+  sourceName?: string;
   freshness: string;
   cadence: BiLingual;
-  status: 'ok' | 'partial';
+  status: 'ok' | 'partial' | 'failed' | 'skipped';
   coverage: number;
+  durationMs?: number | null;
+  reason?: string | null;
 }
 
 export interface ReliabilityInfo {

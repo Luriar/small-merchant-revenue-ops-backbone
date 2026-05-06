@@ -6,17 +6,20 @@ interface DataReliabilityViewProps { lang: RcLang; scenario?: Scenario }
 
 export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabilityViewProps) {
   const rel = scenario.reliability;
+  const partial = rel.failures > 0 || rel.sources.some(source => source.status === 'failed' || source.status === 'partial');
 
   const trustCards = [
     {
-      icon: 'check', tone: 'good',
-      title: lang === 'ko' ? `${rel.sources.length}개 데이터 상태 확인` : `${rel.sources.length} sources checked`,
-      body:  lang === 'ko' ? '예정된 주기로 모두 갱신되었습니다.' : 'Each refreshed on its scheduled cadence.',
+      icon: partial ? 'shield' : 'check', tone: partial ? 'warm' : 'good',
+      title: lang === 'ko' ? `${rel.sources.length}개 수집기 상태 확인` : `${rel.sources.length} collectors checked`,
+      body:  partial
+        ? (lang === 'ko' ? '일부 맥락데이터 수집이 지연되었습니다.' : 'Some context collection is delayed.')
+        : (lang === 'ko' ? '최근 수집 결과가 정상 범위입니다.' : 'Latest collection is in a healthy range.'),
     },
     {
-      icon: 'spark2', tone: 'good',
-      title: lang === 'ko' ? '최근 14회 실행 무실패' : 'Last 14 runs · no failures',
-      body:  lang === 'ko' ? '계산이 안정적으로 마쳤습니다.' : 'Computations completed cleanly.',
+      icon: 'spark2', tone: partial ? 'warm' : 'good',
+      title: lang === 'ko' ? `최근 실행 실패 ${rel.failures}` : `Latest run · ${rel.failures} failures`,
+      body:  lang === 'ko' ? '현재 수집된 데이터만으로 초기 분석을 시작할 수 있습니다.' : 'The current data is enough to start an initial analysis.',
     },
     {
       icon: 'shield', tone: 'warm',
@@ -38,8 +41,8 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
         </h1>
         <p style={{ fontSize: 14.5, color: 'var(--rc-fg-muted)', lineHeight: 1.65, margin: 0 }}>
           {lang === 'ko'
-            ? '이 브리프는 5개의 공공·결제 데이터를 매일 자동으로 갱신해 만들어집니다. 모든 데이터가 정상 갱신되었고, 최근 14회 실행에서 실패가 없었습니다. 분석은 상권/업종 단위 추정치이며, 결과는 함께 관측된 신호를 정리한 것이지 인과관계를 확정한 것이 아닙니다.'
-            : 'This brief is built from five public and payment datasets that refresh daily. All sources are healthy, and the last 14 runs completed without failure. Analysis is at the trade-area / category level — results summarize signals that moved together, not proven causes.'}
+            ? '이 브리프는 매장 매출 데이터와 공개·연동 맥락 수집 결과를 함께 보며 만듭니다. 일부 수집기가 지연되어도 초기 분석은 계속할 수 있습니다. 분석은 함께 관측된 신호를 정리한 것이지 인과관계를 확정한 것이 아닙니다.'
+            : 'This brief combines store revenue data with public and connector context collection. Initial analysis can continue even when some collectors are delayed. Results summarize signals observed together, not proven causes.'}
         </p>
       </div>
 
@@ -74,40 +77,50 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
 
         <div className="rc-card" style={{ overflow: 'hidden', boxShadow: 'var(--rc-shadow-sm)' }}>
           <div style={{
-            display: 'grid', gridTemplateColumns: '1.6fr 0.9fr 0.9fr 1.1fr 0.7fr',
+            display: 'grid', gridTemplateColumns: '1.5fr 1.2fr 0.95fr 0.7fr 0.7fr',
             padding: '11px 18px', fontSize: 10.5, color: 'var(--rc-fg-muted)',
             textTransform: 'uppercase', letterSpacing: '0.08em',
             background: 'var(--rc-surface-2)',
           }}>
             <span>{lang === 'ko' ? '데이터 소스' : 'Source'}</span>
-            <span>{tr('cadence', lang)}</span>
+            <span>{lang === 'ko' ? '제공처' : 'Provider'}</span>
             <span>{tr('freshAsOf', lang)}</span>
-            <span>{tr('coverage', lang)}</span>
+            <span>{lang === 'ko' ? '소요' : 'Duration'}</span>
             <span style={{ textAlign: 'right' }}>{lang === 'ko' ? '상태' : 'Status'}</span>
           </div>
           {rel.sources.map(src => (
             <div key={src.id} style={{
-              display: 'grid', gridTemplateColumns: '1.6fr 0.9fr 0.9fr 1.1fr 0.7fr',
+              display: 'grid', gridTemplateColumns: '1.5fr 1.2fr 0.95fr 0.7fr 0.7fr',
               padding: '13px 18px', alignItems: 'center', borderTop: '1px solid var(--rc-rule)', fontSize: 12.5,
             }}>
               <span style={{ color: 'var(--rc-fg-strong)', fontWeight: 500 }}>{src.name[lang]}</span>
-              <span style={{ color: 'var(--rc-fg-muted)' }}>{src.cadence[lang]}</span>
+              <span style={{ color: 'var(--rc-fg-muted)' }}>{src.sourceName || src.cadence[lang]}</span>
               <span className="rc-mono" style={{ color: 'var(--rc-fg-muted)', fontSize: 11.5 }}>{src.freshness}</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ width: 80, height: 5, borderRadius: 3, background: 'var(--rc-surface-2)', overflow: 'hidden' }}>
-                  <span style={{ display: 'block', width: src.coverage + '%', height: '100%',
-                    background: src.status === 'ok' ? 'var(--rc-good)' : 'var(--rc-accent)' }}/>
-                </span>
-                <span className="rc-num" style={{ fontSize: 11.5, color: 'var(--rc-fg-muted)' }}>{src.coverage}%</span>
-              </span>
+              <span className="rc-mono" style={{ color: 'var(--rc-fg-muted)', fontSize: 11.5 }}>{typeof src.durationMs === 'number' ? `${src.durationMs}ms` : '-'}</span>
               <span style={{ textAlign: 'right' }}>
                 <Pill tone={src.status === 'ok' ? 'good' : 'warm'} size="sm">
-                  {src.status === 'ok' ? (lang === 'ko' ? '정상' : 'OK') : (lang === 'ko' ? '부분' : 'Partial')}
+                  {src.status === 'ok'
+                    ? (lang === 'ko' ? '정상' : 'OK')
+                    : src.status === 'failed'
+                      ? (lang === 'ko' ? '지연' : 'Delayed')
+                      : src.status === 'skipped'
+                        ? (lang === 'ko' ? '대기' : 'Skipped')
+                        : (lang === 'ko' ? '부분' : 'Partial')}
                 </Pill>
               </span>
             </div>
           ))}
         </div>
+        <details style={{ marginTop: 10, fontSize: 12, color: 'var(--rc-fg-muted)' }}>
+          <summary>{lang === 'ko' ? '수집기 세부 사유 보기' : 'Show collector details'}</summary>
+          <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+            {rel.sources.map(src => (
+              <div key={`${src.id}-detail`} className="rc-mono">
+                {src.id} · {src.status}{src.reason ? ` · ${src.reason}` : ''}
+              </div>
+            ))}
+          </div>
+        </details>
       </div>
 
       {/* run info */}

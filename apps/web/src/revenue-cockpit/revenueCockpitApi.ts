@@ -35,6 +35,18 @@ export interface CreateRevenueStorePayload {
   timezone?: string;
 }
 
+export interface ContextBootstrapHint {
+  recommended: boolean;
+  mode: 'live' | 'seed' | 'auto' | string;
+  reason: 'store_onboarding_bootstrap' | 'manual_refresh' | 'scheduled_refresh' | string;
+  prerequisites?: {
+    has_address_text?: boolean;
+    has_business_category?: boolean;
+  };
+  missing_prerequisites?: string[];
+  note?: string;
+}
+
 export interface ActionStatusUpdateEnvelope {
   action?: {
     action_id?: string;
@@ -93,7 +105,7 @@ export async function apiFetchStores(): Promise<{ stores?: RevenueStoreSummary[]
   return fetchJson(`${ROOT_BASE}/stores`, {}, 'stores');
 }
 
-export async function apiCreateStore(payload: CreateRevenueStorePayload): Promise<{ store?: RevenueStoreSummary }> {
+export async function apiCreateStore(payload: CreateRevenueStorePayload): Promise<{ store?: RevenueStoreSummary; context_bootstrap_hint?: ContextBootstrapHint }> {
   return fetchJson(
     `${ROOT_BASE}/stores`,
     {
@@ -102,6 +114,21 @@ export async function apiCreateStore(payload: CreateRevenueStorePayload): Promis
       body: JSON.stringify(payload),
     },
     'create store',
+  );
+}
+
+export async function apiCollectStoreContext(
+  storeId: string,
+  payload: { mode?: string; reason?: string; collectors?: string[] } = {},
+) {
+  return fetchJson(
+    storeScopedPath(storeId, '/context/collect'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    'collect context',
   );
 }
 

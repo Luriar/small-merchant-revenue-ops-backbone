@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import './revenueCockpit.css';
 import { SCENARIO, tr, DEFAULT_STATUSES } from './revenueCockpitCopy';
 import {
+  apiCollectStoreContext,
   apiCreateStore,
   apiFetchActions,
   apiFetchAnomalies,
@@ -12,6 +13,7 @@ import {
   apiFetchStores,
   apiUpdateActionStatus,
   RevenueApiError,
+  type ContextBootstrapHint,
   type CreateRevenueStorePayload,
   type RevenueStoreSummary,
 } from './revenueCockpitApi';
@@ -140,6 +142,124 @@ interface StoreSwitcherProps {
   compact?: boolean;
 }
 
+interface BootstrapCollector {
+  name?: string;
+  status?: string;
+  source_name?: string;
+  reason?: string | null;
+  duration_ms?: number | null;
+}
+
+interface BootstrapStatus {
+  storeId: string;
+  phase: 'collecting' | 'ready' | 'partial' | 'failed' | 'skipped';
+  collectors: BootstrapCollector[];
+  completed: number;
+  failed: number;
+  skipped: number;
+  timedOut: number;
+  message?: string;
+}
+
+const BOOTSTRAP_GROUPS = [
+  { key: 'registered', names: [], ko: '가게 등록 완료', en: 'Store registered' },
+  { key: 'location', names: ['kakao_geocoding'], ko: '위치 맥락 수집 중', en: 'Collecting location context' },
+  { key: 'weather', names: ['kma_weather'], ko: '날씨 맥락 수집 중', en: 'Collecting weather context' },
+  {
+    key: 'commerce',
+    names: ['seoul_commercial_benchmark', 'seoul_foot_traffic_proxy', 'seoul_store_density_proxy'],
+    ko: '주변 상권 맥락 수집 중',
+    en: 'Collecting trade-area context',
+  },
+  {
+    key: 'search',
+    names: ['naver_local_competitor_search', 'naver_search_trend', 'korean_holiday_calendar'],
+    ko: '검색/공휴일 맥락 수집 중',
+    en: 'Collecting search and holiday context',
+  },
+  { key: 'ready', names: [], ko: '초기 분석 준비 완료', en: 'Initial analysis ready' },
+];
+
+function summarizeBootstrapFromMeta(storeId: string, pipelineMeta: Record<string, unknown> | undefined): BootstrapStatus | null {
+  const latestRun = isRecord(pipelineMeta?.latest_collector_run) ? pipelineMeta.latest_collector_run : undefined;
+  const metadata = isRecord(latestRun?.metadata) ? latestRun.metadata : {};
+  const collectors = Array.isArray(metadata.collectors) ? metadata.collectors.filter(isRecord) as BootstrapCollector[] : [];
+  if (!latestRun && collectors.length === 0) return null;
+  const completed = Number(pipelineMeta?.completed_collector_count ?? metadata.completed_collector_count ?? collectors.filter(c => c.status === 'completed').length) || 0;
+  const failed = Number(pipelineMeta?.failed_collector_count ?? metadata.failed_collector_count ?? collectors.filter(c => c.status === 'failed').length) || 0;
+  const skipped = Number(pipelineMeta?.skipped_collector_count ?? metadata.skipped_collector_count ?? collectors.filter(c => c.status === 'skipped').length) || 0;
+  const timedOut = Number(pipelineMeta?.timed_out_collector_count ?? metadata.timed_out_collector_count ?? collectors.filter(c => c.reason === 'request_timeout').length) || 0;
+  const runStatus = typeof latestRun?.status === 'string' ? latestRun.status : 'completed';
+  const phase: BootstrapStatus['phase'] = runStatus === 'running'
+    ? 'collecting'
+    : failed > 0 || timedOut > 0
+      ? 'partial'
+      : completed > 0 || skipped > 0
+        ? 'ready'
+        : 'skipped';
+  return { storeId, phase, collectors, completed, failed, skipped, timedOut };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function collectorGroupState(status: BootstrapStatus | null, names: string[]): 'done' | 'partial' | 'pending' {
+  if (!status) return 'pending';
+  if (names.length === 0) return status.phase === 'collecting' ? 'pending' : 'done';
+  const matching = status.collectors.filter(collector => names.includes(String(collector.name ?? '')));
+  if (matching.length === 0) return 'pending';
+  if (matching.some(collector => collector.status === 'completed')) return 'done';
+  if (matching.some(collector => collector.status === 'failed')) return 'partial';
+  if (matching.every(collector => collector.status === 'skipped')) return 'partial';
+  return 'pending';
+}
+
+function OnboardingBootstrapPanel({
+  lang,
+  status,
+  onRetry,
+}: {
+  lang: RcLang;
+  status: BootstrapStatus;
+  onRetry: () => void;
+}) {
+  const partial = status.phase === 'partial' || status.phase === 'failed';
+  return (
+    <section className="rc-bootstrap-panel" aria-label={lang === 'ko' ? '초기 맥락 수집 상태' : 'Bootstrap status'}>
+      <div className="rc-bootstrap-head">
+        <div>
+          <div className="rc-bootstrap-kicker">{lang === 'ko' ? '온보딩 맥락 수집' : 'Onboarding context collection'}</div>
+          <strong>{partial
+            ? (lang === 'ko' ? '일부 맥락데이터 수집이 지연되었습니다.' : 'Some context collection is delayed.')
+            : (lang === 'ko' ? '초기 맥락데이터를 수집하고 있습니다.' : 'Collecting initial context data.')}</strong>
+          <p>{partial
+            ? (lang === 'ko' ? '현재 수집된 데이터만으로 초기 분석을 시작할 수 있습니다. 추가 확인이 필요합니다.' : 'The current data is enough to start. Additional confirmation is needed.')
+            : (lang === 'ko' ? '함께 관측된 신호를 준비하고 있으며, 인과가 확정된 것은 아닙니다.' : 'Preparing observed-together signals; this does not prove causality.')}</p>
+        </div>
+        <button type="button" className="rc-store-button" onClick={onRetry}>
+          {lang === 'ko' ? '맥락데이터 다시 수집' : 'Collect context again'}
+        </button>
+      </div>
+      <div className="rc-bootstrap-steps">
+        {BOOTSTRAP_GROUPS.map(group => {
+          const state = group.key === 'registered'
+            ? 'done'
+            : group.key === 'ready'
+              ? (status.phase === 'ready' || status.phase === 'partial' ? 'done' : 'pending')
+              : collectorGroupState(status, group.names);
+          return (
+            <div key={group.key} className={`rc-bootstrap-step rc-bootstrap-step-${state}`}>
+              <Icon name={state === 'done' ? 'check' : state === 'partial' ? 'shield' : 'dot'} size={12}/>
+              <span>{lang === 'ko' ? group.ko : group.en}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function StoreSwitcher({
   lang,
   stores,
@@ -266,6 +386,7 @@ export function RevenueCockpitApp() {
   const [storeLoading, setStoreLoading] = useState(false);
   const [storeNotice, setStoreNotice] = useState<string | null>(null);
   const [showCreateStore, setShowCreateStore] = useState(false);
+  const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
   const [storeForm, setStoreForm] = useState<CreateRevenueStorePayload>({
     store_name: '',
     tenant_name: '',
@@ -279,6 +400,7 @@ export function RevenueCockpitApp() {
       if (!getStoredCognitoToken()) {
         setStores([]);
         setSelectedStoreId(null);
+        setBootstrapStatus(null);
       }
       setAuthReloadTick(tick => tick + 1);
     };
@@ -408,6 +530,82 @@ export function RevenueCockpitApp() {
     return () => { cancelled = true; };
   }, [apiMode, authReloadTick, lang]);
 
+  function refreshCockpitDataForStore(storeId: string) {
+    return Promise.all([
+      apiFetchBriefs(storeId),
+      apiFetchAnomalies(storeId),
+      apiFetchActions(storeId),
+      apiFetchContext(storeId),
+      apiFetchPipelineMeta(storeId),
+    ]).then(([briefsEnvelope, anomaliesEnvelope, actionsEnvelope, contextEnvelope, pipelineMetaEnvelope]) => {
+      const next = buildScenarioFromApi({
+        briefs: briefsEnvelope.briefs,
+        anomalies: anomaliesEnvelope.anomalies,
+        actions: actionsEnvelope.actions,
+        context: contextEnvelope.context,
+        pipelineMeta: pipelineMetaEnvelope.pipeline_meta,
+      });
+      setScenario(next.scenario);
+      setStatuses(next.defaultStatuses);
+      setApiNotice(null);
+      const summarized = summarizeBootstrapFromMeta(storeId, pipelineMetaEnvelope.pipeline_meta);
+      if (summarized) setBootstrapStatus(summarized);
+      return pipelineMetaEnvelope.pipeline_meta;
+    });
+  }
+
+  function pollPipelineMetaForBootstrap(storeId: string, attempt = 0) {
+    apiFetchPipelineMeta(storeId)
+      .then(envelope => {
+        const summarized = summarizeBootstrapFromMeta(storeId, envelope.pipeline_meta);
+        if (summarized) setBootstrapStatus(summarized);
+        const terminal = summarized && summarized.phase !== 'collecting';
+        if (!terminal && attempt < 5) {
+          window.setTimeout(() => pollPipelineMetaForBootstrap(storeId, attempt + 1), 1800);
+          return;
+        }
+        refreshCockpitDataForStore(storeId).catch(() => undefined);
+      })
+      .catch(() => {
+        setBootstrapStatus(prev => prev ? { ...prev, phase: 'partial', message: 'pipeline_meta_fetch_failed' } : prev);
+      });
+  }
+
+  function startContextCollection(storeId: string, hint?: ContextBootstrapHint, reasonOverride?: string) {
+    const reason = reasonOverride || hint?.reason || 'manual_refresh';
+    setBootstrapStatus({
+      storeId,
+      phase: 'collecting',
+      collectors: [],
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      timedOut: 0,
+    });
+    setStoreNotice(lang === 'ko' ? '초기 맥락데이터를 수집하고 있습니다.' : 'Collecting initial context data.');
+    apiCollectStoreContext(storeId, { mode: hint?.mode || 'live', reason })
+      .then(envelope => {
+        const summary = isRecord(envelope.summary) ? envelope.summary : {};
+        const collectors = Array.isArray(summary.collectors) ? summary.collectors.filter(isRecord) as BootstrapCollector[] : [];
+        const failed = Number(summary.failed_collector_count ?? collectors.filter(c => c.status === 'failed').length) || 0;
+        const timedOut = Number(summary.timed_out_collector_count ?? collectors.filter(c => c.reason === 'request_timeout').length) || 0;
+        setBootstrapStatus({
+          storeId,
+          phase: failed > 0 || timedOut > 0 ? 'partial' : 'ready',
+          collectors,
+          completed: Number(summary.completed_collector_count ?? collectors.filter(c => c.status === 'completed').length) || 0,
+          failed,
+          skipped: Number(summary.skipped_collector_count ?? collectors.filter(c => c.status === 'skipped').length) || 0,
+          timedOut,
+        });
+        pollPipelineMetaForBootstrap(storeId);
+      })
+      .catch(() => {
+        setBootstrapStatus(prev => prev ? { ...prev, phase: 'partial', message: 'context_collect_failed' } : prev);
+        setStoreNotice(lang === 'ko' ? '일부 맥락데이터 수집이 지연되었습니다.' : 'Some context collection is delayed.');
+      });
+  }
+
   useEffect(() => {
     if (!apiMode) return;
 
@@ -475,13 +673,32 @@ export function RevenueCockpitApp() {
         setSelectedStoreId(created.store_id);
         setStoreForm({ store_name: '', tenant_name: '', business_category: '', region: '', address_text: '' });
         setShowCreateStore(false);
-        setStoreNotice(lang === 'ko' ? '가게가 등록되었습니다.' : 'Store created.');
-        window.setTimeout(() => setStoreNotice(null), 2000);
+        if (envelope.context_bootstrap_hint?.recommended) {
+          setStoreNotice(lang === 'ko' ? '가게 등록 완료 · 초기 맥락데이터를 수집하고 있습니다.' : 'Store created · collecting initial context data.');
+          startContextCollection(created.store_id, envelope.context_bootstrap_hint);
+        } else {
+          setBootstrapStatus({
+            storeId: created.store_id,
+            phase: 'skipped',
+            collectors: [],
+            completed: 0,
+            failed: 0,
+            skipped: 0,
+            timedOut: 0,
+            message: envelope.context_bootstrap_hint?.missing_prerequisites?.join(',') || 'missing_prerequisites',
+          });
+          setStoreNotice(lang === 'ko' ? '가게가 등록되었습니다. 주소와 업종을 보강하면 맥락 수집을 시작할 수 있습니다.' : 'Store created. Add address and category to collect context.');
+        }
       })
       .catch(() => {
         setStoreNotice(lang === 'ko' ? '가게 등록에 실패했습니다.' : 'Could not create store.');
       })
       .finally(() => setStoreLoading(false));
+  }
+
+  function handleRetryContext() {
+    if (!selectedStoreId) return;
+    startContextCollection(selectedStoreId, { recommended: true, mode: 'live', reason: 'manual_refresh' }, 'manual_refresh');
   }
 
   const chromeLabel = lang === 'ko'
@@ -533,6 +750,13 @@ export function RevenueCockpitApp() {
           <Icon name="shield" size={12}/>
           <span>{noticeCopy}</span>
         </div>
+      )}
+      {apiMode && bootstrapStatus && selectedStoreId === bootstrapStatus.storeId && (
+        <OnboardingBootstrapPanel
+          lang={lang}
+          status={bootstrapStatus}
+          onRetry={handleRetryContext}
+        />
       )}
       <div className="rc-screen">
         {screen === 'brief' && (
