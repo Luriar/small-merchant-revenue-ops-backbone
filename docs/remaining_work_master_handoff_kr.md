@@ -899,3 +899,87 @@ Next gate:
 Detailed report:
 
 - `docs/step2e_b_network_foundation_apply_report_kr.md`
+
+## 21. 2026-05-06 STEP 2-E-C Aurora Foundation Plan Update
+
+STEP 2-E-C Aurora foundation was planned only. No apply or destroy was run.
+
+Local ignored tfvars:
+
+```text
+infra/terraform/envs/revenue-dev/terraform.step2e.aurora.tfvars
+```
+
+Network outputs used:
+
+```text
+aurora_vpc_id = vpc-02e9069c818170256
+aurora_private_subnet_ids:
+  - subnet-01381433f0c693179
+  - subnet-07cb619fbe572a308
+aurora_allowed_security_group_ids:
+  - sg-0f269d20c37ea2f15
+```
+
+Plan command:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step2e.aurora.tfvars \
+  -out=tfplan.step2e.aurora \
+  -no-color
+```
+
+Plan result:
+
+```text
+Plan: 9 to add, 2 to change, 0 to destroy.
+Counts: create=9, update=2, delete=0, replace=0
+```
+
+Resource changes:
+
+```text
+create module.aurora.aws_db_subnet_group.aurora[0]
+create module.aurora.aws_rds_cluster.aurora[0]
+create module.aurora.aws_rds_cluster_instance.aurora[0]
+create module.aurora.aws_secretsmanager_secret.master[0]
+create module.aurora.aws_secretsmanager_secret_version.master[0]
+create module.aurora.aws_security_group.aurora[0]
+create module.aurora.aws_security_group_rule.aurora_egress[0]
+create module.aurora.aws_security_group_rule.aurora_ingress["sg-0f269d20c37ea2f15"]
+create module.aurora.random_password.master[0]
+read   module.revenue_api.data.aws_iam_policy_document.api_lambda_permissions[0]
+update module.revenue_api.aws_iam_policy.api_lambda[0]
+update module.revenue_api.aws_lambda_function.api[0]
+```
+
+Expected updates:
+
+- Lambda IAM policy gets narrow Secrets Manager read permissions for the Aurora secret.
+- Lambda environment gets `AURORA_SECRET_ARN`.
+
+Confirmed absent:
+
+- Cognito/Auth resources
+- API Gateway JWT authorizer
+- API route JWT update
+- frontend/CloudFront update
+- ETL/pipeline/schedule/live collector/POS resources
+- destroy/replacement
+
+Saved plan confirms API route remains:
+
+```text
+authorization_type = "NONE"
+```
+
+Apply recommendation:
+
+- Structurally apply-eligible later after explicit approval and a fresh regenerated plan.
+- Ongoing Aurora Serverless v2/Secrets Manager cost must be accepted before apply.
+- Note that the current Aurora module creates its own DB security group; the network foundation Aurora SG remains unused unless the module is later changed to accept an existing SG.
+
+Detailed report:
+
+- `docs/step2e_c_aurora_foundation_plan_kr.md`
