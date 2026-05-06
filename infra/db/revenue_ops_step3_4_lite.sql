@@ -342,6 +342,114 @@ CREATE TABLE IF NOT EXISTS action_outcome_snapshots (
 
 CREATE INDEX IF NOT EXISTS action_outcome_snapshots_action_idx ON action_outcome_snapshots (action_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS platform_event_outbox (
+    event_id        TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    event_type      TEXT NOT NULL,
+    aggregate_type  TEXT NOT NULL,
+    aggregate_id    TEXT NOT NULL,
+    tenant_id       TEXT,
+    store_id        TEXT,
+    idempotency_key TEXT UNIQUE,
+    payload         JSONB NOT NULL DEFAULT '{}'::JSONB,
+    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'published', 'failed', 'skipped')),
+    retry_count     INTEGER NOT NULL DEFAULT 0,
+    available_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    published_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS platform_event_outbox_status_available_idx
+    ON platform_event_outbox (status, available_at);
+
+CREATE TABLE IF NOT EXISTS job_runs (
+    job_run_id     TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    job_type       TEXT NOT NULL CHECK (job_type IN (
+        'upload_parse', 'context_collect', 'mart_build', 'cause_generation',
+        'action_outcome_eval', 'connector_sync', 'seed'
+    )),
+    target_kind    TEXT CHECK (target_kind IS NULL OR target_kind IN ('store', 'upload', 'tenant', 'global')),
+    target_id      TEXT,
+    tenant_id      TEXT,
+    store_id       TEXT,
+    status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
+    started_at     TIMESTAMPTZ,
+    completed_at   TIMESTAMPTZ,
+    error_code     TEXT,
+    error_message  TEXT,
+    input_payload  JSONB NOT NULL DEFAULT '{}'::JSONB,
+    result_summary JSONB NOT NULL DEFAULT '{}'::JSONB,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS job_runs_store_type_status_created_idx
+    ON job_runs (store_id, job_type, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS mart_build_runs (
+    mart_build_run_id  TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    store_id           TEXT NOT NULL REFERENCES stores(store_id) ON DELETE CASCADE,
+    build_type         TEXT NOT NULL CHECK (build_type IN ('daily_revenue', 'item_change', 'cause_candidate', 'action_outcome')),
+    input_window_start DATE,
+    input_window_end   DATE,
+    source_upload_id   TEXT,
+    context_cutoff_at  TIMESTAMPTZ,
+    status             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'skipped')),
+    rows_written       INTEGER NOT NULL DEFAULT 0,
+    error_message      TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at       TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS mart_build_runs_store_type_created_idx
+    ON mart_build_runs (store_id, build_type, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS store_revenue_daily_mart (
+    store_id                            TEXT NOT NULL REFERENCES stores(store_id) ON DELETE CASCADE,
+    business_date                       DATE NOT NULL,
+    net_sales_amount                    NUMERIC(14,2) NOT NULL DEFAULT 0,
+    gross_sales_amount                  NUMERIC(14,2) NOT NULL DEFAULT 0,
+    order_count                         INTEGER NOT NULL DEFAULT 0,
+    aov                                 NUMERIC(14,2) NOT NULL DEFAULT 0,
+    cancel_count                        INTEGER NOT NULL DEFAULT 0,
+    refund_amount                       NUMERIC(14,2) NOT NULL DEFAULT 0,
+    discount_amount                     NUMERIC(14,2) NOT NULL DEFAULT 0,
+    sales_delta_vs_prev_weekday_pct     NUMERIC(8,2),
+    order_delta_vs_prev_weekday_pct     NUMERIC(8,2),
+    aov_delta_vs_prev_weekday_pct       NUMERIC(8,2),
+    weather_label                       TEXT,
+    rain_mm                             NUMERIC(8,2),
+    holiday_flag                        BOOLEAN NOT NULL DEFAULT false,
+    local_event_flag                    BOOLEAN NOT NULL DEFAULT false,
+    benchmark_delta_pct                 NUMERIC(8,2),
+    foot_traffic_proxy_delta_pct        NUMERIC(8,2),
+    same_category_store_count           INTEGER,
+    top_declining_category              TEXT,
+    evidence_readiness_score            NUMERIC(5,2),
+    built_at                            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    source_summary                      JSONB NOT NULL DEFAULT '{}'::JSONB,
+    PRIMARY KEY (store_id, business_date)
+);
+
+CREATE INDEX IF NOT EXISTS store_revenue_daily_mart_store_date_idx
+    ON store_revenue_daily_mart (store_id, business_date DESC);
+
+CREATE TABLE IF NOT EXISTS toss_place_connections (
+    connection_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    store_id      TEXT NOT NULL REFERENCES stores(store_id) ON DELETE CASCADE,
+    merchant_id   TEXT,
+    status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'disabled', 'failed')),
+    secret_ref    TEXT,
+    connected_at  TIMESTAMPTZ,
+    last_sync_at  TIMESTAMPTZ,
+    metadata      JSONB NOT NULL DEFAULT '{}'::JSONB,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS toss_place_connections_store_status_idx
+    ON toss_place_connections (store_id, status);
+
 ALTER TABLE IF EXISTS revenue_action_status_override
     ADD COLUMN IF NOT EXISTS store_id TEXT;
 

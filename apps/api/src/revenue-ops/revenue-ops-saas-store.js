@@ -3,6 +3,7 @@ const { randomUUID } = require("node:crypto");
 const exportData = require("./data/revenue_ops_export.json");
 const { normalizeClaims } = require("./revenue-ops-auth");
 const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
+const { previewRevenueUploadPayload } = require("./revenue-upload-parsers");
 
 const DEMO_STORE_NAME = "성수 커피음료 매장";
 const DEMO_TENANT_NAME = "Demo Merchant Tenant";
@@ -43,6 +44,10 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     causeCandidates: [],
     causeEvidence: [],
     outcomes: [],
+    outboxEvents: [],
+    jobRuns: [],
+    martBuildRuns: [],
+    dailyMart: [],
   };
 
   function nowIso() {
@@ -698,6 +703,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     const latestContext = latestBy(state.contextObservations.filter((row) => row.store_id === storeId), "fetched_at");
     const latestBenchmark = latestBy(state.publicBenchmarks, "fetched_at");
     const latestCollectorRun = latestBy(state.collectorRuns.filter((row) => row.target_store_id === storeId), "created_at");
+    const latestMartBuild = latestBy(state.martBuildRuns.filter((row) => row.store_id === storeId), "created_at");
 
     return clone({
       store_id: storeId,
@@ -709,6 +715,10 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         source_id: latestBenchmark.source_id,
       } : null,
       latest_collector_run: latestCollectorRun,
+      latest_mart_build: latestMartBuild,
+      context_freshness_note: latestContext
+        ? "공개 맥락 데이터가 함께 관측되었습니다. 인과가 확정된 것은 아닙니다."
+        : "공개 맥락 데이터가 아직 충분하지 않습니다.",
       bronze: ["revenue_uploads", "revenue_upload_raw_rows", "revenue_upload_rejected_rows"],
       silver: ["revenue_daily_facts", "revenue_item_facts", "context_observations", "public_revenue_benchmarks", "store_context_links"],
       gold: ["cause_candidates", "cause_candidate_evidence", "action_planner_items", "action_outcome_snapshots"],
@@ -751,6 +761,18 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       action.completed_at = timestamp;
       ensureOutcomePlaceholder(action, timestamp);
     }
+    createOutboxEvent({
+      event_type: "action.status.changed",
+      aggregate_type: "action",
+      aggregate_id: action.action_id,
+      store_id: storeId,
+      idempotency_key: `action.status.changed:${storeId}:${action.action_id}:${status}:${timestamp}`,
+      payload: {
+        action_id: action.action_id,
+        status,
+        not_proven_causality: true,
+      },
+    });
 
     return clone(withCauseAndOutcome(action));
   }
@@ -894,6 +916,18 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         ? "partially_accepted"
         : "failed";
     upload.updated_at = timestamp;
+    createOutboxEvent({
+      event_type: upload.accepted_count > 0 ? "revenue.upload.accepted" : "revenue.upload.failed",
+      aggregate_type: "revenue_upload",
+      aggregate_id: upload.upload_id,
+      store_id: storeId,
+      idempotency_key: `revenue.upload:${upload.upload_id}`,
+      payload: {
+        source_type: upload.source_type,
+        accepted_count: upload.accepted_count,
+        rejected_count: upload.rejected_count,
+      },
+    });
 
     return clone({
       upload,
@@ -903,14 +937,54 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     });
   }
 
+  function previewRevenueUpload(payload = {}) {
+    return previewRevenueUploadPayload(payload);
+  }
+
   function listRevenueUploadsForStore(storeId) {
     return clone(state.uploads
       .filter((upload) => upload.store_id === storeId)
       .sort((a, b) => b.created_at.localeCompare(a.created_at)));
   }
 
+  function listRejectedRowsForUpload(storeId, uploadId) {
+    const upload = state.uploads.find((item) => item.store_id === storeId && item.upload_id === uploadId);
+    if (!upload) {
+      return null;
+    }
+    return clone(state.rejectedRows.filter((row) => row.upload_id === uploadId));
+  }
+
+  function reprocessRevenueUpload(storeId, uploadId) {
+    const upload = state.uploads.find((item) => item.store_id === storeId && item.upload_id === uploadId);
+    if (!upload) {
+      return null;
+    }
+    const jobRun = createJobRun({
+      job_type: "upload_parse",
+      target_kind: "upload",
+      target_id: uploadId,
+      store_id: storeId,
+      status: "skipped",
+      input_payload: { upload_id: uploadId },
+      result_summary: {
+        message: "Reprocess skeleton recorded. No destructive rewrite was performed.",
+      },
+    });
+    return clone({ job_run: jobRun, upload });
+  }
+
   function collectContextForStore(storeId, { mode = "seed" } = {}) {
     const timestamp = nowIso();
+    const jobRun = createJobRun({
+      job_type: "context_collect",
+      target_kind: "store",
+      target_id: storeId,
+      store_id: storeId,
+      status: "running",
+      started_at: timestamp,
+      input_payload: { mode },
+    });
     seedContextForStore(storeId, timestamp);
     const run = {
       collector_run_id: newId("collector"),
@@ -928,14 +1002,196 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       created_at: timestamp,
     };
     state.collectorRuns.push(run);
+    updateJobRun(jobRun.job_run_id, {
+      status: "completed",
+      completed_at: timestamp,
+      result_summary: {
+        collector_run_id: run.collector_run_id,
+      },
+    });
     return clone({
       collector_run: run,
+      job_run: state.jobRuns.find((row) => row.job_run_id === jobRun.job_run_id),
       summary: {
         context_observation_count: state.contextObservations.filter((row) => row.store_id === storeId).length,
         benchmark_count: state.publicBenchmarks.length,
         nearby_snapshot_count: state.nearbyStoreSnapshots.filter((row) => row.store_id === storeId).length,
       },
     });
+  }
+
+  function createOutboxEvent(event = {}) {
+    const timestamp = nowIso();
+    const existing = event.idempotency_key
+      ? state.outboxEvents.find((row) => row.idempotency_key === event.idempotency_key)
+      : null;
+    if (existing) {
+      return clone(existing);
+    }
+    const row = {
+      event_id: newId("evt"),
+      event_type: text(event.event_type),
+      aggregate_type: text(event.aggregate_type),
+      aggregate_id: text(event.aggregate_id),
+      tenant_id: event.tenant_id ?? null,
+      store_id: event.store_id ?? null,
+      idempotency_key: event.idempotency_key ?? null,
+      payload: safeObject(event.payload),
+      status: event.status || "pending",
+      retry_count: 0,
+      available_at: event.available_at || timestamp,
+      published_at: null,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    state.outboxEvents.push(row);
+    return clone(row);
+  }
+
+  function markOutboxPublished(eventId) {
+    const event = state.outboxEvents.find((row) => row.event_id === eventId);
+    if (!event) return null;
+    const timestamp = nowIso();
+    event.status = "published";
+    event.published_at = timestamp;
+    event.updated_at = timestamp;
+    return clone(event);
+  }
+
+  function createJobRun(payload = {}) {
+    const timestamp = nowIso();
+    const row = {
+      job_run_id: newId("job"),
+      job_type: payload.job_type,
+      target_kind: payload.target_kind ?? null,
+      target_id: payload.target_id ?? null,
+      tenant_id: payload.tenant_id ?? null,
+      store_id: payload.store_id ?? null,
+      status: payload.status || "pending",
+      started_at: payload.started_at ?? null,
+      completed_at: payload.completed_at ?? null,
+      error_code: payload.error_code ?? null,
+      error_message: payload.error_message ?? null,
+      input_payload: safeObject(payload.input_payload),
+      result_summary: safeObject(payload.result_summary),
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    state.jobRuns.push(row);
+    return clone(row);
+  }
+
+  function updateJobRun(jobRunId, patch = {}) {
+    const row = state.jobRuns.find((item) => item.job_run_id === jobRunId);
+    if (!row) return null;
+    Object.assign(row, {
+      status: patch.status ?? row.status,
+      completed_at: patch.completed_at ?? row.completed_at,
+      error_code: patch.error_code ?? row.error_code,
+      error_message: patch.error_message ?? row.error_message,
+      result_summary: patch.result_summary ? safeObject(patch.result_summary) : row.result_summary,
+      updated_at: nowIso(),
+    });
+    return clone(row);
+  }
+
+  function createMartBuildRun(payload = {}) {
+    const timestamp = nowIso();
+    const row = {
+      mart_build_run_id: newId("mart_run"),
+      store_id: payload.store_id,
+      build_type: payload.build_type || "daily_revenue",
+      input_window_start: payload.input_window_start ?? null,
+      input_window_end: payload.input_window_end ?? null,
+      source_upload_id: payload.source_upload_id ?? null,
+      context_cutoff_at: payload.context_cutoff_at ?? null,
+      status: payload.status || "pending",
+      rows_written: payload.rows_written ?? 0,
+      error_message: payload.error_message ?? null,
+      created_at: timestamp,
+      completed_at: payload.completed_at ?? null,
+    };
+    state.martBuildRuns.push(row);
+    return clone(row);
+  }
+
+  function buildStoreRevenueDailyMart(storeId, range = {}) {
+    const started = createMartBuildRun({
+      store_id: storeId,
+      build_type: "daily_revenue",
+      input_window_start: range.start_date ?? null,
+      input_window_end: range.end_date ?? null,
+      status: "running",
+    });
+    const facts = state.dailyFacts
+      .filter((row) => row.store_id === storeId)
+      .filter((row) => !range.start_date || row.business_date >= range.start_date)
+      .filter((row) => !range.end_date || row.business_date <= range.end_date)
+      .sort((a, b) => a.business_date.localeCompare(b.business_date));
+    let rowsWritten = 0;
+    for (const fact of facts) {
+      const aov = fact.order_count > 0 ? Math.round((fact.net_sales_amount / fact.order_count) * 100) / 100 : 0;
+      const existingIndex = state.dailyMart.findIndex((row) => row.store_id === storeId && row.business_date === fact.business_date);
+      const rain = state.contextObservations.find((row) => row.store_id === storeId && row.observation_date === fact.business_date && row.metric_name === "rainfall_mm");
+      const benchmark = state.contextObservations.find((row) => row.store_id === storeId && row.observation_date === fact.business_date && row.metric_name === "commercial_area_sales_delta_pct");
+      const footTraffic = state.contextObservations.find((row) => row.store_id === storeId && row.observation_date === fact.business_date && row.metric_name === "foot_traffic_proxy_delta_pct");
+      const martRow = {
+        store_id: storeId,
+        business_date: fact.business_date,
+        net_sales_amount: fact.net_sales_amount,
+        gross_sales_amount: fact.gross_sales_amount,
+        order_count: fact.order_count,
+        aov,
+        cancel_count: fact.cancel_count,
+        refund_amount: fact.refund_amount,
+        discount_amount: fact.discount_amount,
+        sales_delta_vs_prev_weekday_pct: null,
+        order_delta_vs_prev_weekday_pct: null,
+        aov_delta_vs_prev_weekday_pct: null,
+        weather_label: rain?.label ?? null,
+        rain_mm: rain?.metric_value ?? null,
+        holiday_flag: false,
+        local_event_flag: false,
+        benchmark_delta_pct: benchmark?.metric_value ?? null,
+        foot_traffic_proxy_delta_pct: footTraffic?.metric_value ?? null,
+        same_category_store_count: state.nearbyStoreSnapshots.find((row) => row.store_id === storeId)?.same_category_store_count ?? null,
+        top_declining_category: null,
+        evidence_readiness_score: rain || benchmark || footTraffic ? 0.8 : 0.45,
+        built_at: nowIso(),
+        source_summary: {
+          revenue_source_upload_id: fact.source_upload_id,
+          context_observed_together: Boolean(rain || benchmark || footTraffic),
+          not_proven_causality: true,
+        },
+      };
+      if (existingIndex >= 0) {
+        state.dailyMart[existingIndex] = martRow;
+      } else {
+        state.dailyMart.push(martRow);
+      }
+      rowsWritten += 1;
+    }
+    const run = state.martBuildRuns.find((row) => row.mart_build_run_id === started.mart_build_run_id);
+    run.status = "completed";
+    run.rows_written = rowsWritten;
+    run.completed_at = nowIso();
+    createOutboxEvent({
+      event_type: "mart.daily_revenue.built",
+      aggregate_type: "store",
+      aggregate_id: storeId,
+      store_id: storeId,
+      idempotency_key: `mart.daily_revenue.built:${storeId}:${run.mart_build_run_id}`,
+      payload: { rows_written: rowsWritten },
+    });
+    return clone({ mart_build_run: run, rows_written: rowsWritten });
+  }
+
+  function getStoreRevenueDailyMart(storeId, range = {}) {
+    return clone(state.dailyMart
+      .filter((row) => row.store_id === storeId)
+      .filter((row) => !range.start_date || row.business_date >= range.start_date)
+      .filter((row) => !range.end_date || row.business_date <= range.end_date)
+      .sort((a, b) => b.business_date.localeCompare(a.business_date)));
   }
 
   return {
@@ -953,8 +1209,18 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     getCauseCandidatesForStore,
     getCauseCandidateForStore,
     ingestRevenueUpload,
+    previewRevenueUpload,
     listRevenueUploadsForStore,
+    listRejectedRowsForUpload,
+    reprocessRevenueUpload,
     collectContextForStore,
+    createOutboxEvent,
+    markOutboxPublished,
+    createJobRun,
+    updateJobRun,
+    createMartBuildRun,
+    buildStoreRevenueDailyMart,
+    getStoreRevenueDailyMart,
   };
 }
 
@@ -1184,4 +1450,15 @@ module.exports = {
   DEMO_TENANT_NAME,
   RELIABILITY_NOTE_KO,
   RELIABILITY_NOTE_EN,
+  normalizeDailyRow,
+  normalizeItemRow,
+  sanitizeRevenueRow,
+  buildSyntheticDailyRows,
+  buildSyntheticItemRows,
+  parseDate,
+  text,
+  money,
+  int,
+  safeObject,
+  clone,
 };

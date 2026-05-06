@@ -100,6 +100,25 @@ test("revenue upload accepts valid rows and records rejected rows safely", async
   const stores = await requestJson({ server, method: "GET", routePath: "/api/v1/stores", authSub: "upload-owner" });
   const storeId = stores.value.stores[0].store_id;
 
+  const preview = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads/preview`,
+    authSub: "upload-owner",
+    input: {
+      parser_type: "standard_daily_revenue_csv",
+      source_type: "generic_pos_csv",
+      csv_text: [
+        "business_date,channel,gross_sales_amount,net_sales_amount,order_count",
+        "2026-05-02,offline_pos,1320000,1260000,91",
+        "bad-date,offline_pos,1000,900,1",
+      ].join("\n"),
+    },
+  });
+  assert.equal(preview.statusCode, 200);
+  assert.equal(preview.value.preview.quality_summary.accepted_count, 1);
+  assert.equal(preview.value.preview.quality_summary.rejected_count, 1);
+
   const upload = await requestJson({
     server,
     method: "POST",
@@ -151,6 +170,25 @@ test("revenue upload accepts valid rows and records rejected rows safely", async
   });
   assert.equal(uploads.statusCode, 200);
   assert.equal(uploads.value.uploads.some((item) => item.upload_id === upload.value.upload.upload_id), true);
+
+  const rejected = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads/${encodeURIComponent(upload.value.upload.upload_id)}/rejected-rows`,
+    authSub: "upload-owner",
+  });
+  assert.equal(rejected.statusCode, 200);
+  assert.equal(rejected.value.rejected_rows.length, 1);
+  assert.equal(rejected.value.rejected_rows[0].reason_code, "invalid_business_date");
+
+  const reprocess = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads/${encodeURIComponent(upload.value.upload.upload_id)}/reprocess`,
+    authSub: "upload-owner",
+  });
+  assert.equal(reprocess.statusCode, 202);
+  assert.equal(reprocess.value.job_run.status, "skipped");
 });
 
 test("context seed collector works without external API keys and updates pipeline meta", async () => {
@@ -200,6 +238,41 @@ test("store-scoped OPTIONS preflight returns 204", async () => {
 
   assert.equal(response.status, 204);
   assert.equal(response.headers["access-control-allow-methods"].includes("POST"), true);
+});
+
+test("production-lite store records outbox, jobs, and idempotent daily mart rows", async () => {
+  const store = createRevenueOpsSaasStore();
+  const user = store.resolveAppUserFromJwtClaims({ sub: "runtime-owner", email: "runtime@example.com" });
+  const stores = store.listStoresForUser(user.app_user_id);
+  const storeId = stores[0].store_id;
+
+  const built = store.buildStoreRevenueDailyMart(storeId);
+  assert.equal(built.mart_build_run.status, "completed");
+  assert.equal(built.rows_written > 0, true);
+
+  const rebuilt = store.buildStoreRevenueDailyMart(storeId);
+  const martRows = store.getStoreRevenueDailyMart(storeId);
+  assert.equal(rebuilt.rows_written, built.rows_written);
+  assert.equal(martRows.length, built.rows_written);
+
+  const outbox = store.createOutboxEvent({
+    event_type: "test.event",
+    aggregate_type: "store",
+    aggregate_id: storeId,
+    store_id: storeId,
+    idempotency_key: `test.event:${storeId}`,
+    payload: { safe: true },
+  });
+  const duplicate = store.createOutboxEvent({
+    event_type: "test.event",
+    aggregate_type: "store",
+    aggregate_id: storeId,
+    store_id: storeId,
+    idempotency_key: `test.event:${storeId}`,
+    payload: { safe: true },
+  });
+  assert.equal(duplicate.event_id, outbox.event_id);
+  assert.equal(store.markOutboxPublished(outbox.event_id).status, "published");
 });
 
 async function requestJson({ server, method, routePath, input, authSub, authEmail }) {

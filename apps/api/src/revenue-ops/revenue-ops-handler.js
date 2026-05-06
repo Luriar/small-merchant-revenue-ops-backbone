@@ -47,8 +47,8 @@ async function resolveAppUser({ request, store }) {
   return store.resolveAppUserFromJwtClaims(claims);
 }
 
-function ensureStoreAccess({ response, store, appUser, storeId, minimumRole = "viewer" }) {
-  const access = store.requireStoreAccess(appUser.app_user_id, storeId, minimumRole);
+async function ensureStoreAccess({ response, store, appUser, storeId, minimumRole = "viewer" }) {
+  const access = await store.requireStoreAccess(appUser.app_user_id, storeId, minimumRole);
   if (!access) {
     writeError(response, 403, "forbidden", "Store access is required");
     return null;
@@ -170,7 +170,7 @@ async function handleCreateStore({ request, response, store }) {
 async function handleGetStoreBriefs({ request, response, store, storeId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
     return writeJson(response, 200, { briefs: await store.getBriefsForStore(storeId) });
   } catch (error) {
     return handleStoreRouteError(response, error);
@@ -180,7 +180,7 @@ async function handleGetStoreBriefs({ request, response, store, storeId }) {
 async function handleGetStoreAnomalies({ request, response, store, storeId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
     return writeJson(response, 200, { anomalies: await store.getAnomaliesForStore(storeId) });
   } catch (error) {
     return handleStoreRouteError(response, error);
@@ -190,7 +190,7 @@ async function handleGetStoreAnomalies({ request, response, store, storeId }) {
 async function handleGetStoreActions({ request, response, store, storeId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
     return writeJson(response, 200, { actions: await store.getActionsForStore(storeId) });
   } catch (error) {
     return handleStoreRouteError(response, error);
@@ -200,7 +200,7 @@ async function handleGetStoreActions({ request, response, store, storeId }) {
 async function handleUpdateStoreActionStatus({ request, response, store, storeId, actionId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
     const body = await readJsonBody(request);
     const status = body.status;
     if (!status) {
@@ -227,7 +227,7 @@ async function handleUpdateStoreActionStatus({ request, response, store, storeId
 async function handleGetStoreContext({ request, response, store, storeId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
     return writeJson(response, 200, { context: await store.getContextForStore(storeId) });
   } catch (error) {
     return handleStoreRouteError(response, error);
@@ -237,7 +237,7 @@ async function handleGetStoreContext({ request, response, store, storeId }) {
 async function handleGetStorePipelineMeta({ request, response, store, storeId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
     return writeJson(response, 200, { pipeline_meta: await store.getPipelineMetaForStore(storeId) });
   } catch (error) {
     return handleStoreRouteError(response, error);
@@ -247,7 +247,7 @@ async function handleGetStorePipelineMeta({ request, response, store, storeId })
 async function handleListRevenueUploads({ request, response, store, storeId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
     return writeJson(response, 200, { uploads: await store.listRevenueUploadsForStore(storeId) });
   } catch (error) {
     return handleStoreRouteError(response, error);
@@ -257,7 +257,7 @@ async function handleListRevenueUploads({ request, response, store, storeId }) {
 async function handleCreateRevenueUpload({ request, response, store, storeId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId, minimumRole: "operator" })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId, minimumRole: "operator" })) return undefined;
     const body = await readJsonBody(request);
     const result = await store.ingestRevenueUpload({ appUserId: appUser.app_user_id, storeId, payload: body });
     return writeJson(response, 201, result);
@@ -266,10 +266,50 @@ async function handleCreateRevenueUpload({ request, response, store, storeId }) 
   }
 }
 
+async function handlePreviewRevenueUpload({ request, response, store, storeId }) {
+  try {
+    const appUser = await resolveAppUser({ request, store });
+    if (!await ensureStoreAccess({ response, store, appUser, storeId, minimumRole: "operator" })) return undefined;
+    const body = await readJsonBody(request);
+    const preview = await store.previewRevenueUpload(body);
+    return writeJson(response, 200, { preview });
+  } catch (error) {
+    return handleStoreRouteError(response, error);
+  }
+}
+
+async function handleListRejectedRevenueRows({ request, response, store, storeId, uploadId }) {
+  try {
+    const appUser = await resolveAppUser({ request, store });
+    if (!await ensureStoreAccess({ response, store, appUser, storeId, minimumRole: "operator" })) return undefined;
+    const rejectedRows = await store.listRejectedRowsForUpload(storeId, uploadId);
+    if (!rejectedRows) {
+      return writeError(response, 404, "not_found", "Revenue upload not found");
+    }
+    return writeJson(response, 200, { rejected_rows: rejectedRows });
+  } catch (error) {
+    return handleStoreRouteError(response, error);
+  }
+}
+
+async function handleReprocessRevenueUpload({ request, response, store, storeId, uploadId }) {
+  try {
+    const appUser = await resolveAppUser({ request, store });
+    if (!await ensureStoreAccess({ response, store, appUser, storeId, minimumRole: "operator" })) return undefined;
+    const result = await store.reprocessRevenueUpload(storeId, uploadId);
+    if (!result) {
+      return writeError(response, 404, "not_found", "Revenue upload not found");
+    }
+    return writeJson(response, 202, result);
+  } catch (error) {
+    return handleStoreRouteError(response, error);
+  }
+}
+
 async function handleCollectStoreContext({ request, response, store, storeId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId, minimumRole: "operator" })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId, minimumRole: "operator" })) return undefined;
     const body = await readJsonBody(request);
     const result = await store.collectContextForStore(storeId, body);
     return writeJson(response, 202, result);
@@ -281,7 +321,7 @@ async function handleCollectStoreContext({ request, response, store, storeId }) 
 async function handleGetStoreCauseCandidates({ request, response, store, storeId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
     return writeJson(response, 200, { cause_candidates: await store.getCauseCandidatesForStore(storeId) });
   } catch (error) {
     return handleStoreRouteError(response, error);
@@ -291,7 +331,7 @@ async function handleGetStoreCauseCandidates({ request, response, store, storeId
 async function handleGetStoreCauseCandidate({ request, response, store, storeId, causeCandidateId }) {
   try {
     const appUser = await resolveAppUser({ request, store });
-    if (!ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
+    if (!await ensureStoreAccess({ response, store, appUser, storeId })) return undefined;
     const causeCandidate = await store.getCauseCandidateForStore(storeId, causeCandidateId);
     if (!causeCandidate) {
       return writeError(response, 404, "not_found", "Cause candidate not found");
@@ -322,6 +362,9 @@ module.exports = {
   handleGetStorePipelineMeta,
   handleListRevenueUploads,
   handleCreateRevenueUpload,
+  handlePreviewRevenueUpload,
+  handleListRejectedRevenueRows,
+  handleReprocessRevenueUpload,
   handleCollectStoreContext,
   handleGetStoreCauseCandidates,
   handleGetStoreCauseCandidate,

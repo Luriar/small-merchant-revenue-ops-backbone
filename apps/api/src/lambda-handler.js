@@ -2,7 +2,7 @@ const { EventEmitter } = require("node:events");
 const { Readable } = require("node:stream");
 
 const { createRevenueOpsStore } = require("./revenue-ops/revenue-ops-store");
-const { createRevenueOpsSaasStore } = require("./revenue-ops/revenue-ops-saas-store");
+const { createRevenueOpsSaasStoreFromEnv } = require("./revenue-ops/revenue-ops-saas-store-factory");
 const { createOptionalAuroraActionStatusStoreFromEnv } = require("./revenue-ops/aurora-action-status-store");
 const {
   handleGetBriefs,
@@ -24,6 +24,9 @@ const {
   handleGetStorePipelineMeta,
   handleListRevenueUploads,
   handleCreateRevenueUpload,
+  handlePreviewRevenueUpload,
+  handleListRejectedRevenueRows,
+  handleReprocessRevenueUpload,
   handleCollectStoreContext,
   handleGetStoreCauseCandidates,
   handleGetStoreCauseCandidate,
@@ -33,7 +36,7 @@ const { handleGetAuroraHealth } = require("./revenue-ops/aurora-health");
 const revenueOpsStore = createRevenueOpsStore({
   actionStatusPersistence: createOptionalAuroraActionStatusStoreFromEnv(),
 });
-const revenueOpsSaasStore = createRevenueOpsSaasStore();
+const revenueOpsSaasStore = createRevenueOpsSaasStoreFromEnv();
 
 async function handler(event) {
   const request = createRequestFromApiGatewayEvent(event);
@@ -110,8 +113,31 @@ async function dispatchRevenueRequest({ request, response, store, saasStore = re
     if (request.method === "GET" && rest === "revenue/uploads") {
       return handleListRevenueUploads({ request, response, store: saasStore, storeId });
     }
+    if (request.method === "POST" && rest === "revenue/uploads/preview") {
+      return handlePreviewRevenueUpload({ request, response, store: saasStore, storeId });
+    }
     if (request.method === "POST" && rest === "revenue/uploads") {
       return handleCreateRevenueUpload({ request, response, store: saasStore, storeId });
+    }
+    const rejectedRowsMatch = request.method === "GET" ? rest.match(/^revenue\/uploads\/([^/?]+)\/rejected-rows$/) : null;
+    if (rejectedRowsMatch) {
+      return handleListRejectedRevenueRows({
+        request,
+        response,
+        store: saasStore,
+        storeId,
+        uploadId: decodeURIComponent(rejectedRowsMatch[1]),
+      });
+    }
+    const reprocessMatch = request.method === "POST" ? rest.match(/^revenue\/uploads\/([^/?]+)\/reprocess$/) : null;
+    if (reprocessMatch) {
+      return handleReprocessRevenueUpload({
+        request,
+        response,
+        store: saasStore,
+        storeId,
+        uploadId: decodeURIComponent(reprocessMatch[1]),
+      });
     }
     if (request.method === "GET" && rest === "cause-candidates") {
       return handleGetStoreCauseCandidates({ request, response, store: saasStore, storeId });

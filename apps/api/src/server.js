@@ -22,7 +22,7 @@ const { handleTraceCreate, handleTraceDetail, handleTraceEvidences, handleTraceL
 const { createTraceStoreFromEnv } = require("./trace-store-factory");
 const { createCdcRecoveryRouteDispatcher } = require("./cdc-recovery/cdc-recovery-routes");
 const { createRevenueOpsStore } = require("./revenue-ops/revenue-ops-store");
-const { createRevenueOpsSaasStore } = require("./revenue-ops/revenue-ops-saas-store");
+const { createRevenueOpsSaasStoreFromEnv } = require("./revenue-ops/revenue-ops-saas-store-factory");
 const { createOptionalAuroraActionStatusStoreFromEnv } = require("./revenue-ops/aurora-action-status-store");
 const {
   handleGetBriefs,
@@ -44,6 +44,9 @@ const {
   handleGetStorePipelineMeta,
   handleListRevenueUploads,
   handleCreateRevenueUpload,
+  handlePreviewRevenueUpload,
+  handleListRejectedRevenueRows,
+  handleReprocessRevenueUpload,
   handleCollectStoreContext,
   handleGetStoreCauseCandidates,
   handleGetStoreCauseCandidate,
@@ -51,7 +54,6 @@ const {
 const { handleGetAuroraHealth } = require("./revenue-ops/aurora-health");
 
 const _revenueOpsStore = createRevenueOpsStore();
-const _revenueOpsSaasStore = createRevenueOpsSaasStore();
 
 function createLogger() {
   return {
@@ -93,7 +95,7 @@ function createServer({
     authConfig: startupConfig.authConfig,
   });
   const resolvedRevenueOpsStore = revenueOpsStore ?? _revenueOpsStore;
-  const resolvedRevenueOpsSaasStore = revenueOpsSaasStore ?? _revenueOpsSaasStore;
+  const resolvedRevenueOpsSaasStore = revenueOpsSaasStore ?? createRevenueOpsSaasStoreFromEnv({ env, logger });
 
   return http.createServer((request, response) => {
     const requestContext = attachRequestContext({ request, response, logger, metrics });
@@ -429,8 +431,31 @@ function dispatchRequest({
       if (request.method === "GET" && rest === "revenue/uploads") {
         return handleListRevenueUploads({ request, response, store: revenueOpsSaasStore, storeId });
       }
+      if (request.method === "POST" && rest === "revenue/uploads/preview") {
+        return handlePreviewRevenueUpload({ request, response, store: revenueOpsSaasStore, storeId });
+      }
       if (request.method === "POST" && rest === "revenue/uploads") {
         return handleCreateRevenueUpload({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      const rejectedRowsMatch = request.method === "GET" ? rest.match(/^revenue\/uploads\/([^/?]+)\/rejected-rows$/) : null;
+      if (rejectedRowsMatch) {
+        return handleListRejectedRevenueRows({
+          request,
+          response,
+          store: revenueOpsSaasStore,
+          storeId,
+          uploadId: decodeURIComponent(rejectedRowsMatch[1]),
+        });
+      }
+      const reprocessMatch = request.method === "POST" ? rest.match(/^revenue\/uploads\/([^/?]+)\/reprocess$/) : null;
+      if (reprocessMatch) {
+        return handleReprocessRevenueUpload({
+          request,
+          response,
+          store: revenueOpsSaasStore,
+          storeId,
+          uploadId: decodeURIComponent(reprocessMatch[1]),
+        });
       }
       if (request.method === "GET" && rest === "cause-candidates") {
         return handleGetStoreCauseCandidates({ request, response, store: revenueOpsSaasStore, storeId });
