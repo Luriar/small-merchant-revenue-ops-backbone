@@ -103,3 +103,23 @@ output "aurora_master_secret_arn" {
   description = "Secrets Manager secret ARN containing Aurora master credentials. Null when disabled."
   value       = module.aurora.master_secret_arn
 }
+
+output "cognito_web_client_id" {
+  description = "Cognito web app client ID. Null when auth is disabled."
+  value       = module.auth.web_client_id
+}
+
+output "cognito_hosted_ui_domain_prefix" {
+  description = "Cognito hosted UI domain prefix. Null when the hosted UI domain is disabled."
+  value       = module.auth.domain_prefix
+}
+
+output "cognito_hosted_ui_base_url" {
+  description = "Cognito hosted UI base URL. Null when the hosted UI domain is disabled."
+  value       = module.auth.domain_prefix != null ? "https://${module.auth.domain_prefix}.auth.${var.aws_region}.amazoncognito.com" : null
+}
+
+output "cognito_issuer_url" {
+  description = "Cognito JWT issuer URL. Null when auth is disabled."
+  value       = module.auth.user_pool_id != null ? "https://cognito-idp.${var.aws_region}.amazonaws.com/${module.auth.user_pool_id}" : null
+}

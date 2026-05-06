@@ -8,6 +8,13 @@ import { RevenueCockpitApp } from "./revenue-cockpit/RevenueCockpitApp";
 import type { AppPage } from "./types/navigation";
 
 function resolvePageFromHash(hash: string): AppPage {
+  if (typeof window !== "undefined") {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("code") && params.has("state")) {
+      return "revenue-cockpit";
+    }
+  }
+
   const page = hash.replace(/^#/, "").split("?")[0].toLowerCase();
 
   if (page === "changes") {
