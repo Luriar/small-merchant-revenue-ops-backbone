@@ -330,3 +330,15 @@ resource "aws_security_group_rule" "lambda_to_public_https_egress" {
   cidr_blocks       = ["0.0.0.0/0"]
   description       = "Allow Revenue Ops collector Lambda HTTPS egress through NAT for public context APIs."
 }
+
+resource "aws_security_group_rule" "lambda_to_seoul_open_data_egress" {
+  count = local.egress_enabled ? 1 : 0
+
+  type              = "egress"
+  from_port         = 8088
+  to_port           = 8088
+  protocol          = "tcp"
+  security_group_id = aws_security_group.lambda[0].id
+  cidr_blocks       = ["0.0.0.0/0"]
+  description       = "Allow Revenue Ops collector Lambda egress to Seoul Open Data API over TCP 8088 through NAT."
+}

@@ -71,7 +71,7 @@ function normalizePublicContextCredentials(source = {}, credentialSource = "miss
     kmaNowcastEndpoint: trimToNull(source.KMA_NOWCAST_ENDPOINT),
     kmaDefaultNx: trimToNull(source.KMA_DEFAULT_NX),
     kmaDefaultNy: trimToNull(source.KMA_DEFAULT_NY),
-    seoulOpenDataBaseUrl: trimToNull(source.SEOUL_OPEN_DATA_BASE_URL) || "https://openapi.seoul.go.kr:8088",
+    seoulOpenDataBaseUrl: trimToNull(source.SEOUL_OPEN_DATA_BASE_URL) || "http://openapi.seoul.go.kr:8088",
     seoulCommercialSalesEndpoint: trimToNull(source.SEOUL_COMMERCIAL_SALES_ENDPOINT),
     seoulFootTrafficEndpoint: trimToNull(source.SEOUL_FOOT_TRAFFIC_ENDPOINT),
     seoulStoreDensityEndpoint: trimToNull(source.SEOUL_STORE_DENSITY_ENDPOINT),

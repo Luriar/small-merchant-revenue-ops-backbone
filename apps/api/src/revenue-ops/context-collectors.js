@@ -382,7 +382,7 @@ function normalizeWeatherObservations(items, { store, sourceRef, baseDate, baseT
   }));
 }
 
-async function fetchSeoulOpenDataDataset({ endpoint, key, startIndex = 1, endIndex = 5, params = {}, baseUrl = "https://openapi.seoul.go.kr:8088", fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUTS.seoul_commercial_benchmark }) {
+async function fetchSeoulOpenDataDataset({ endpoint, key, startIndex = 1, endIndex = 5, params = {}, baseUrl = "http://openapi.seoul.go.kr:8088", fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUTS.seoul_commercial_benchmark }) {
   const safeEndpoint = String(endpoint || "").replace(/^\/+|\/+$/g, "");
   const url = new URL(`${baseUrl.replace(/\/+$/, "")}/${encodeURIComponent(key)}/json/${safeEndpoint}/${startIndex}/${endIndex}`);
   for (const [name, value] of Object.entries(params)) {

@@ -14,9 +14,19 @@ Kakao Local API와 KMA/data.go.kr weather collector가 Lambda에서 `TypeError`�
 
 따라서 Kakao/KMA 오류는 collector application logic 문제가 아니라, VPC Lambda에 outbound internet path가 없는 정상적인 결과다.
 
+추가 live smoke에서 Kakao와 KMA는 NAT 적용 후 정상화되었지만, Seoul Open Data collector는 timeout으로 남았다. Seoul Open Data 공식 API는 일반 HTTPS 443이 아니라 `http://openapi.seoul.go.kr:8088/{KEY}/json/{SERVICE}/{START}/{END}/` 형태의 HTTP 8088 endpoint를 사용한다. NAT route가 있어도 Lambda security group egress가 443만 허용되면 Seoul Open Data outbound가 차단될 수 있다.
+
 ## 원칙
 
-Aurora는 계속 private subnet에 둔다. Aurora security group은 Lambda security group에서 오는 PostgreSQL만 허용한다. Public subnet과 NAT Gateway는 Lambda가 Kakao/KMA/Seoul Open Data 같은 public API에 HTTPS outbound를 보내기 위한 egress path일 뿐이며, Aurora를 public하게 만들지 않는다.
+Aurora는 계속 private subnet에 둔다. Aurora security group은 Lambda security group에서 오는 PostgreSQL만 허용한다. Public subnet과 NAT Gateway는 Lambda가 Kakao/KMA/Seoul Open Data 같은 public API에 outbound를 보내기 위한 egress path일 뿐이며, Aurora를 public하게 만들지 않는다.
+
+포트 정책:
+
+- Kakao Local API: HTTPS `443`
+- KMA/data.go.kr Weather API: HTTPS `443`
+- Seoul Open Data API: HTTP `8088`
+
+따라서 NAT egress profile에서는 Lambda security group에 public HTTPS `443` egress와 Seoul Open Data `8088` egress가 함께 필요하다. 두 rule 모두 outbound-only이며 inbound를 열지 않는다.
 
 ## Terraform Profile
 
@@ -51,6 +61,7 @@ vpc_egress_profile = "none" # none | single_nat | multi_az_nat
 - NAT Gateway 1개
 - 기존 private route table에 `0.0.0.0/0 -> NAT Gateway`
 - Lambda security group HTTPS egress `443 -> 0.0.0.0/0`
+- Lambda security group Seoul Open Data egress `8088 -> 0.0.0.0/0`
 
 장점은 비용이 낮고 구조가 production-shaped라는 점이다. 단점은 NAT Gateway가 단일 AZ 장애 지점이 된다는 점이다.
 
@@ -68,12 +79,15 @@ HA production egress profile이다.
 - private route table per AZ
 - 각 private subnet이 same-AZ NAT Gateway로 `0.0.0.0/0` route
 - Lambda security group HTTPS egress `443 -> 0.0.0.0/0`
+- Lambda security group Seoul Open Data egress `8088 -> 0.0.0.0/0`
 
 장점은 AZ 장애 격리가 좋다. 단점은 NAT Gateway와 EIP 비용이 AZ 수만큼 증가한다.
 
 ## 비용 경고
 
 NAT Gateway는 시간당 비용과 처리량 비용이 발생한다. `single_nat`, `multi_az_nat`는 cost-bearing profile이다. Terraform apply 전 반드시 plan resource list와 월 예상 비용을 확인한다.
+
+Security group의 `0.0.0.0/0` egress는 Lambda에서 public API를 호출하기 위한 outbound rule이다. Aurora security group ingress는 PostgreSQL `5432`를 Lambda security group에만 허용하므로 Aurora는 public으로 노출되지 않는다. Seoul Open Data `8088` rule은 공식 Seoul endpoint 때문에 필요한 별도 outbound exception이며, API key는 Secrets Manager/env에서만 읽고 로그와 S3 Bronze raw artifact에는 포함하지 않는다.
 
 ## Live Smoke
 

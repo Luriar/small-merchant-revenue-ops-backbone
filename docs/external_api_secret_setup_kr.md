@@ -23,7 +23,7 @@ JSON shape:
   "KMA_NOWCAST_ENDPOINT": "<optional-nowcast-endpoint>",
   "KMA_DEFAULT_NX": "<kma-grid-x>",
   "KMA_DEFAULT_NY": "<kma-grid-y>",
-  "SEOUL_OPEN_DATA_BASE_URL": "https://openapi.seoul.go.kr:8088",
+  "SEOUL_OPEN_DATA_BASE_URL": "http://openapi.seoul.go.kr:8088",
   "SEOUL_COMMERCIAL_SALES_ENDPOINT": "<dataset-name>",
   "SEOUL_FOOT_TRAFFIC_ENDPOINT": "<dataset-name>",
   "SEOUL_STORE_DENSITY_ENDPOINT": "<dataset-name>"

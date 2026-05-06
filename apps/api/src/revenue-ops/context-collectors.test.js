@@ -138,7 +138,7 @@ test("Seoul collector skips missing endpoint and normalizes mocked commercial be
   const completed = await collectSeoulCommercialBenchmark(store, {
     seoulOpenDataKey: "seoul-key",
     seoulCommercialSalesEndpoint: "CommercialSales",
-    seoulOpenDataBaseUrl: "https://openapi.seoul.go.kr:8088",
+    seoulOpenDataBaseUrl: "http://openapi.seoul.go.kr:8088",
   }, {
     fetchImpl: mockJsonFetch({
       CommercialSales: {
