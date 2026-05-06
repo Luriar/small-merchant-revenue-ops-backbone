@@ -227,6 +227,7 @@ module "revenue_api" {
   cognito_user_pool_id        = module.auth.user_pool_id
   cognito_user_pool_arn       = module.auth.user_pool_arn
   cognito_user_pool_client_id = module.auth.web_client_id
+  enable_cognito_authorizer   = var.enable_auth
   custom_domain_name          = var.api_custom_domain_name
   acm_certificate_arn         = var.api_acm_certificate_arn
   hosted_zone_id              = var.api_hosted_zone_id

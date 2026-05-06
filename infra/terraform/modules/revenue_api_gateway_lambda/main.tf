@@ -137,7 +137,7 @@ resource "aws_apigatewayv2_api" "api" {
 }
 
 resource "aws_apigatewayv2_authorizer" "cognito" {
-  count = var.enable_api && var.cognito_user_pool_arn != null && var.cognito_user_pool_client_id != null ? 1 : 0
+  count = var.enable_api && var.enable_cognito_authorizer ? 1 : 0
 
   api_id           = aws_apigatewayv2_api.api[0].id
   authorizer_type  = "JWT"
@@ -165,8 +165,8 @@ resource "aws_apigatewayv2_route" "revenue" {
   api_id             = aws_apigatewayv2_api.api[0].id
   route_key          = "ANY /api/v1/revenue/{proxy+}"
   target             = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
-  authorization_type = var.cognito_user_pool_arn != null && var.cognito_user_pool_client_id != null ? "JWT" : "NONE"
-  authorizer_id      = var.cognito_user_pool_arn != null && var.cognito_user_pool_client_id != null ? aws_apigatewayv2_authorizer.cognito[0].id : null
+  authorization_type = var.enable_cognito_authorizer ? "JWT" : "NONE"
+  authorizer_id      = var.enable_cognito_authorizer ? aws_apigatewayv2_authorizer.cognito[0].id : null
 }
 
 resource "aws_apigatewayv2_stage" "default" {

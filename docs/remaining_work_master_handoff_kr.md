@@ -401,6 +401,89 @@ enable_saas_observability = false
 - Aurora는 minimum dev/prod-min viable size만 허용한다.
 - ETL/schedule/live collector는 계속 꺼둔다.
 
+## 12-A. 2026-05-06 STEP 2-E Plan-Only Update
+
+STEP 2-E Cognito + Aurora Core Runtime은 plan-only로 시작했다.
+
+생성한 local ignored tfvars:
+
+```text
+infra/terraform/envs/revenue-dev/terraform.step2e.auth-aurora.tfvars
+```
+
+설정:
+
+```hcl
+enable_artifacts           = true
+enable_frontend            = true
+enable_api                 = true
+enable_auth                = true
+enable_aurora              = true
+enable_pipeline_foundation = false
+enable_schedule            = false
+enable_saas_observability  = false
+```
+
+검증:
+
+- `terraform fmt -recursive -check infra/terraform`: passed
+- `terraform -chdir=infra/terraform/envs/revenue-dev validate`: passed, backend `dynamodb_table` deprecation warning only
+
+좁은 Terraform planning fix:
+
+- `revenue_api_gateway_lambda` module의 Cognito authorizer `count`가 새 Cognito output에 의존해 plan이 실패했다.
+- `enable_cognito_authorizer` known boolean을 추가하고 revenue-dev에서는 `var.enable_auth`로 전달했다.
+- 이 변경은 plan-time unknown count 문제를 제거하기 위한 code/config fix이며 apply는 실행하지 않았다.
+
+STEP 2-E plan:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev plan \
+  -var-file=terraform.step2e.auth-aurora.tfvars \
+  -out=tfplan.step2e.auth-aurora \
+  -no-color
+```
+
+결과:
+
+- command exit code: `1`
+- saved planfile inspection showed `6 create, 3 update, 0 delete, 0 replace`
+- apply는 권장하지 않음
+
+Inspectable resource changes:
+
+```text
+create module.aurora.aws_secretsmanager_secret.master[0]
+create module.aurora.aws_secretsmanager_secret_version.master[0]
+create module.aurora.random_password.master[0]
+create module.auth.aws_cognito_user_pool.main[0]
+create module.auth.aws_cognito_user_pool_client.web[0]
+read   module.revenue_api.data.aws_iam_policy_document.api_lambda_permissions[0]
+create module.revenue_api.aws_apigatewayv2_authorizer.cognito[0]
+update module.revenue_api.aws_apigatewayv2_route.revenue[0]
+update module.revenue_api.aws_iam_policy.api_lambda[0]
+update module.revenue_api.aws_lambda_function.api[0]
+```
+
+Blocker:
+
+```text
+vpc_id is required when enable_aurora is true.
+At least two private_subnet_ids are required when enable_aurora is true.
+```
+
+AWS read-only discovery found existing VPC/subnet resources, but none were clearly Revenue Ops-owned. Do not use unrelated workload VPCs for Aurora. Next gate is reviewed Revenue Ops VPC/private subnet selection, then a regenerated plan.
+
+Additional apply risk:
+
+- The plan changes the API route auth from `NONE` to `JWT`.
+- Frontend Cognito login/token flow is not implemented yet.
+- Applying Auth before frontend auth wiring may break current unauthenticated API mode.
+
+Detailed report:
+
+- `docs/step2e_cognito_aurora_core_runtime_plan_kr.md`
+
 ## 13. STEP 3 다음 게이트
 
 STEP 3은 controlled sample path가 있을 때만 apply한다.

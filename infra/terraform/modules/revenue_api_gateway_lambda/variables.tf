@@ -67,6 +67,12 @@ variable "cognito_user_pool_client_id" {
   description = "Cognito app client ID used as the JWT audience."
 }
 
+variable "enable_cognito_authorizer" {
+  type        = bool
+  default     = false
+  description = "Enable the API Gateway JWT authorizer. Keep this driven by a known boolean so planning does not depend on newly created Cognito IDs."
+}
+
 variable "custom_domain_name" {
   type        = string
   default     = null
