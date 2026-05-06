@@ -574,3 +574,66 @@ aws cloudtrail lookup-events \
 ```
 
 Use CloudTrail only to identify the exact evaluated action/resource/context. Do not add broad API Gateway wildcard permissions without explicit approval.
+
+## 18. 2026-05-06 STEP 2-D Frontend API Wiring Update
+
+STEP 2-D frontend API wiring was completed for Revenue Cockpit API mode.
+
+Code change:
+
+- `apps/web/src/revenue-cockpit/revenueCockpitApi.ts`
+- Changed Revenue Cockpit API base from relative `/api/v1/revenue` to a Vite-configurable origin:
+  - `VITE_REVENUE_API_BASE_URL` if provided
+  - default: `https://7q8hxxta67.execute-api.ap-northeast-2.amazonaws.com`
+
+Live frontend:
+
+- `https://d1fquuc7vsf9cu.cloudfront.net/`
+- `https://d1fquuc7vsf9cu.cloudfront.net/#revenue-cockpit`
+- `https://d1fquuc7vsf9cu.cloudfront.net/#revenue-cockpit?data=api`
+
+API endpoint used:
+
+```text
+https://7q8hxxta67.execute-api.ap-northeast-2.amazonaws.com
+```
+
+Build/deploy:
+
+- `npm --prefix apps/web run check`: passed
+- `npm --prefix apps/web run build`: passed
+- dist safety scan: no tfvars/tfstate/tfplan/env/AWS key/private key markers
+- upload target: `s3://revenue-ops-frontend-dev-827913617635/`
+- uploaded only `apps/web/dist`
+- CloudFront invalidation:
+  - distribution: `E31KH7PFML1A6N`
+  - id: `I6D2N3JDMDI967RDWT2KOE117J`
+  - path: `/*`
+  - final status: `Completed`
+
+Smoke:
+
+- CloudFront root: HTTP 200 HTML
+- `#revenue-cockpit`: HTTP 200 SPA shell
+- `#revenue-cockpit?data=api`: HTTP 200 SPA shell
+- JS asset `assets/index-_S6L24XV.js`: HTTP 200 JavaScript
+- Direct API:
+  - `GET /api/v1/revenue/briefs`: HTTP 200 JSON
+  - `GET /api/v1/revenue/anomalies`: HTTP 200 JSON
+  - `GET /api/v1/revenue/actions`: HTTP 200 JSON
+  - `GET /api/v1/revenue/context`: HTTP 200 JSON
+  - `GET /api/v1/revenue/pipeline-meta`: HTTP 200 JSON
+
+Manual browser check still needed:
+
+- curl verifies SPA shell/assets only for hash routes because fragments are not sent to CloudFront.
+- Browser DevTools should confirm `#revenue-cockpit?data=api` fetches `https://7q8hxxta67.execute-api.ap-northeast-2.amazonaws.com/api/v1/revenue/*`.
+
+Still intentionally disabled:
+
+- Cognito/Auth
+- Aurora/RDS persistence
+- ETL/pipeline/schedule
+- live external collector
+- POS real ingestion
+- Product Ops/productops resources

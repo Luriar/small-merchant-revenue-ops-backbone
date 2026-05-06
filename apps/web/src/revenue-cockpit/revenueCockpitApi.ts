@@ -1,4 +1,9 @@
-const BASE = '/api/v1/revenue';
+const DEFAULT_API_ORIGIN = 'https://7q8hxxta67.execute-api.ap-northeast-2.amazonaws.com';
+const API_PATH = '/api/v1/revenue';
+
+const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+const configuredOrigin = env?.VITE_REVENUE_API_BASE_URL?.replace(/\/+$/, '');
+const BASE = `${configuredOrigin || DEFAULT_API_ORIGIN}${API_PATH}`;
 
 export async function apiFetchBriefs() {
   const res = await fetch(`${BASE}/briefs`);
