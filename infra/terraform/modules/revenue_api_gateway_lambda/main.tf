@@ -1,6 +1,10 @@
 data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
+locals {
+  lambda_vpc_enabled = length(var.lambda_vpc_subnet_ids) > 0 && length(var.lambda_vpc_security_group_ids) > 0
+}
+
 data "aws_iam_policy_document" "lambda_trust" {
   statement {
     effect  = "Allow"
@@ -59,6 +63,25 @@ data "aws_iam_policy_document" "api_lambda_permissions" {
   }
 
   dynamic "statement" {
+    for_each = local.lambda_vpc_enabled ? [1] : []
+    content {
+      sid    = "LambdaVpcNetworkInterfaceAccess"
+      effect = "Allow"
+      actions = [
+        "ec2:CreateNetworkInterface",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeVpcs",
+        "ec2:DeleteNetworkInterface",
+        "ec2:AssignPrivateIpAddresses",
+        "ec2:UnassignPrivateIpAddresses",
+      ]
+      resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
     for_each = var.enable_xray ? [1] : []
     content {
       sid    = "XRayWrite"
@@ -100,6 +123,15 @@ resource "aws_lambda_function" "api" {
   memory_size   = 512
   s3_bucket     = var.lambda_s3_bucket
   s3_key        = var.lambda_s3_key
+
+  dynamic "vpc_config" {
+    for_each = local.lambda_vpc_enabled ? [1] : []
+
+    content {
+      subnet_ids         = var.lambda_vpc_subnet_ids
+      security_group_ids = var.lambda_vpc_security_group_ids
+    }
+  }
 
   environment {
     variables = merge(

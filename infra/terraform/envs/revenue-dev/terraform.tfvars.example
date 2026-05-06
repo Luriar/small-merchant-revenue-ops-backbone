@@ -9,6 +9,7 @@ enable_auth                = false
 enable_api_jwt_authorizer  = false # Keep false until frontend Cognito login/token flow is ready.
 enable_aurora              = false
 enable_aurora_network_foundation = false
+enable_api_lambda_vpc_access     = false
 enable_artifacts           = false
 enable_saas_observability  = false
 data_lake_bucket_name      = "revenue-ops-data-lake-dev-YOURACCOUNTID"

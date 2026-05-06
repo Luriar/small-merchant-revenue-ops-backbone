@@ -225,26 +225,40 @@ module "aurora" {
   tags                       = local.common_tags
 }
 
+resource "aws_security_group_rule" "api_lambda_to_aurora_module_egress" {
+  count = var.enable_api_lambda_vpc_access && var.enable_aurora ? 1 : 0
+
+  type                     = "egress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  security_group_id        = module.aurora_network.lambda_security_group_id
+  source_security_group_id = module.aurora.security_group_id
+  description              = "Allow API Lambda security group to reach the module-created Aurora PostgreSQL security group."
+}
+
 module "revenue_api" {
   source = "../../modules/revenue_api_gateway_lambda"
 
-  enable_api                  = var.enable_api
-  name_prefix                 = local.name_prefix
-  lambda_s3_bucket            = var.api_lambda_s3_bucket
-  lambda_s3_key               = var.api_lambda_s3_key
-  artifact_bucket_name        = module.artifacts.artifact_bucket_name
-  artifact_bucket_arn         = module.artifacts.artifact_bucket_arn
-  aurora_secret_arn           = module.aurora.master_secret_arn
-  cognito_user_pool_id        = var.enable_api_jwt_authorizer ? module.auth.user_pool_id : null
-  cognito_user_pool_arn       = var.enable_api_jwt_authorizer ? module.auth.user_pool_arn : null
-  cognito_user_pool_client_id = var.enable_api_jwt_authorizer ? module.auth.web_client_id : null
-  enable_cognito_authorizer   = var.enable_api_jwt_authorizer
-  custom_domain_name          = var.api_custom_domain_name
-  acm_certificate_arn         = var.api_acm_certificate_arn
-  hosted_zone_id              = var.api_hosted_zone_id
-  create_dns_record           = var.create_api_dns_record
-  enable_xray                 = var.enable_api_xray
-  tags                        = local.common_tags
+  enable_api                    = var.enable_api
+  name_prefix                   = local.name_prefix
+  lambda_s3_bucket              = var.api_lambda_s3_bucket
+  lambda_s3_key                 = var.api_lambda_s3_key
+  artifact_bucket_name          = module.artifacts.artifact_bucket_name
+  artifact_bucket_arn           = module.artifacts.artifact_bucket_arn
+  aurora_secret_arn             = module.aurora.master_secret_arn
+  lambda_vpc_subnet_ids         = var.enable_api_lambda_vpc_access ? module.aurora_network.private_subnet_ids : []
+  lambda_vpc_security_group_ids = var.enable_api_lambda_vpc_access ? [module.aurora_network.lambda_security_group_id] : []
+  cognito_user_pool_id          = var.enable_api_jwt_authorizer ? module.auth.user_pool_id : null
+  cognito_user_pool_arn         = var.enable_api_jwt_authorizer ? module.auth.user_pool_arn : null
+  cognito_user_pool_client_id   = var.enable_api_jwt_authorizer ? module.auth.web_client_id : null
+  enable_cognito_authorizer     = var.enable_api_jwt_authorizer
+  custom_domain_name            = var.api_custom_domain_name
+  acm_certificate_arn           = var.api_acm_certificate_arn
+  hosted_zone_id                = var.api_hosted_zone_id
+  create_dns_record             = var.create_api_dns_record
+  enable_xray                   = var.enable_api_xray
+  tags                          = local.common_tags
 }
 
 module "saas_observability" {

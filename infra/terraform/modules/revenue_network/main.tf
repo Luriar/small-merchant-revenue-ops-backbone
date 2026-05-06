@@ -1,7 +1,15 @@
+data "aws_region" "current" {}
+
 data "aws_availability_zones" "available" {
   count = var.enable_network && length(var.availability_zones) == 0 ? 1 : 0
 
   state = "available"
+}
+
+data "aws_vpc_endpoint_service" "secretsmanager" {
+  count = var.enable_network ? 1 : 0
+
+  service = "secretsmanager"
 }
 
 locals {
@@ -109,4 +117,84 @@ resource "aws_security_group_rule" "aurora_from_lambda_ingress" {
   security_group_id        = aws_security_group.aurora[0].id
   source_security_group_id = aws_security_group.lambda[0].id
   description              = "Allow PostgreSQL only from Revenue Ops Lambda security group."
+}
+
+
+resource "aws_security_group" "vpc_endpoint" {
+  count = var.enable_network ? 1 : 0
+
+  name        = "${var.name_prefix}-vpc-endpoints"
+  description = "Private AWS service endpoint access for Revenue Ops Lambda."
+  vpc_id      = aws_vpc.main[0].id
+
+  tags = merge(var.tags, {
+    Name    = "${var.name_prefix}-vpc-endpoints"
+    Purpose = "revenue-ops-private-aws-endpoints"
+  })
+}
+
+resource "aws_security_group_rule" "lambda_to_vpc_endpoint_egress" {
+  count = var.enable_network ? 1 : 0
+
+  type                     = "egress"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.lambda[0].id
+  source_security_group_id = aws_security_group.vpc_endpoint[0].id
+  description              = "Allow Lambda security group to reach interface VPC endpoints over HTTPS."
+}
+
+resource "aws_security_group_rule" "vpc_endpoint_from_lambda_ingress" {
+  count = var.enable_network ? 1 : 0
+
+  type                     = "ingress"
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.vpc_endpoint[0].id
+  source_security_group_id = aws_security_group.lambda[0].id
+  description              = "Allow HTTPS from Revenue Ops Lambda security group."
+}
+
+resource "aws_vpc_endpoint" "secretsmanager" {
+  count = var.enable_network ? 1 : 0
+
+  vpc_id              = aws_vpc.main[0].id
+  service_name        = data.aws_vpc_endpoint_service.secretsmanager[0].service_name
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [for subnet in aws_subnet.private : subnet.id]
+  private_dns_enabled = true
+  security_group_ids  = [aws_security_group.vpc_endpoint[0].id]
+
+  tags = merge(var.tags, {
+    Name    = "${var.name_prefix}-secretsmanager-endpoint"
+    Purpose = "revenue-ops-private-secretsmanager"
+  })
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  count = var.enable_network ? 1 : 0
+
+  vpc_id            = aws_vpc.main[0].id
+  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.private[0].id]
+
+  tags = merge(var.tags, {
+    Name    = "${var.name_prefix}-s3-endpoint"
+    Purpose = "revenue-ops-private-s3"
+  })
+}
+
+resource "aws_security_group_rule" "lambda_to_s3_egress" {
+  count = var.enable_network ? 1 : 0
+
+  type              = "egress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  security_group_id = aws_security_group.lambda[0].id
+  prefix_list_ids   = [aws_vpc_endpoint.s3[0].prefix_list_id]
+  description       = "Allow Lambda security group to reach S3 through the gateway endpoint prefix list."
 }

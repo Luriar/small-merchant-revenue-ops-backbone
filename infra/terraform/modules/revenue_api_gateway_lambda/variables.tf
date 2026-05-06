@@ -49,6 +49,18 @@ variable "aurora_secret_arn" {
   description = "Aurora credential secret ARN. Optional until Aurora persistence is enabled."
 }
 
+variable "lambda_vpc_subnet_ids" {
+  type        = list(string)
+  default     = []
+  description = "Optional private subnet IDs used to attach the API Lambda to the Revenue Ops VPC."
+}
+
+variable "lambda_vpc_security_group_ids" {
+  type        = list(string)
+  default     = []
+  description = "Optional security group IDs used to attach the API Lambda to the Revenue Ops VPC."
+}
+
 variable "cognito_user_pool_id" {
   type        = string
   default     = null

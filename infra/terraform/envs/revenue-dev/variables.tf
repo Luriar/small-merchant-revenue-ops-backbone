@@ -82,6 +82,12 @@ variable "enable_aurora_network_foundation" {
   description = "Enable the Revenue Ops-owned isolated VPC/subnet/security-group foundation for Aurora. Does not create Aurora/RDS."
 }
 
+variable "enable_api_lambda_vpc_access" {
+  type        = bool
+  default     = false
+  description = "Attach the Revenue Ops API Lambda to the private Aurora network and enable private AWS service endpoint access."
+}
+
 variable "enable_artifacts" {
   type        = bool
   default     = false
