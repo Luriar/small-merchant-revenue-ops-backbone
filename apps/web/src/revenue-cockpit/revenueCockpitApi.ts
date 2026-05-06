@@ -5,6 +5,15 @@ const env = (import.meta as ImportMeta & { env?: Record<string, string | undefin
 const configuredOrigin = env?.VITE_REVENUE_API_BASE_URL?.replace(/\/+$/, '');
 const BASE = `${configuredOrigin || DEFAULT_API_ORIGIN}${API_PATH}`;
 
+export interface ActionStatusUpdateEnvelope {
+  action?: {
+    action_id?: string;
+    status?: string;
+  };
+  status_persistence?: 'aurora' | 'memory' | 'memory_fallback' | string;
+}
+
+
 export async function apiFetchBriefs() {
   const res = await fetch(`${BASE}/briefs`);
   if (!res.ok) throw new Error(`briefs ${res.status}`);
@@ -29,7 +38,7 @@ export async function apiFetchContext() {
   return res.json();
 }
 
-export async function apiUpdateActionStatus(id: string, status: string) {
+export async function apiUpdateActionStatus(id: string, status: string): Promise<ActionStatusUpdateEnvelope> {
   const res = await fetch(`${BASE}/actions/${id}/status`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

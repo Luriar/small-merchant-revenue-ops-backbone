@@ -95,16 +95,50 @@ export function RevenueCockpitApp() {
   const [scenario, setScenario] = useState<Scenario>(() => SCENARIO);
   const [statuses, setStatuses] = useState<ActionStatuses>(() => ({ ...DEFAULT_STATUSES }));
   const [apiMode] = useState(() => wantsApiData());
-  const [apiNotice, setApiNotice] = useState<'loading' | 'fallback' | 'patch-failed' | null>(() => wantsApiData() ? 'loading' : null);
+  const [apiNotice, setApiNotice] = useState<'loading' | 'fallback' | 'patch-saving' | 'patch-saved' | 'patch-local' | 'patch-failed' | null>(() => wantsApiData() ? 'loading' : null);
 
   const setLang = (l: RcLang) => { setLangState(l); savePref('rc-lang', l); };
   const setTheme = (t: RcTheme) => { setThemeState(t); savePref('rc-theme', t); setEffectiveTheme(resolveTheme(t)); };
+
+  function isActionStatus(value: unknown): value is ActionStatus {
+    return value === 'recommended' || value === 'selected' || value === 'planned' || value === 'done' || value === 'dismissed';
+  }
+
+  function mergeActionStatusesFromEnvelope(actionsEnvelope: { actions?: Array<{ action_id?: string; status?: unknown }> }) {
+    setStatuses(prev => {
+      const next = { ...prev };
+      for (const action of actionsEnvelope.actions ?? []) {
+        if (action.action_id && isActionStatus(action.status)) {
+          next[action.action_id] = action.status;
+        }
+      }
+      return next;
+    });
+  }
+
   const setStatus = (id: string, s: ActionStatus) => {
     setStatuses(prev => ({ ...prev, [id]: s }));
     if (!apiMode) return;
+
+    setApiNotice('patch-saving');
+
     apiUpdateActionStatus(id, s)
-      .then(() => {
-        setApiNotice(prev => (prev === 'patch-failed' ? null : prev));
+      .then(async envelope => {
+        if (envelope.action?.action_id && isActionStatus(envelope.action.status)) {
+          setStatuses(prev => ({ ...prev, [envelope.action!.action_id!]: envelope.action!.status as ActionStatus }));
+        }
+
+        try {
+          const actionsEnvelope = await apiFetchActions();
+          mergeActionStatusesFromEnvelope(actionsEnvelope);
+        } catch {
+          // PATCH succeeded, but refetch failed. Keep optimistic state and show persistence result below.
+        }
+
+        setApiNotice(envelope.status_persistence === 'aurora' ? 'patch-saved' : 'patch-local');
+        window.setTimeout(() => {
+          setApiNotice(prev => (prev === 'patch-saved' || prev === 'patch-local' ? null : prev));
+        }, 2400);
       })
       .catch(() => {
         setApiNotice('patch-failed');
@@ -167,9 +201,15 @@ export function RevenueCockpitApp() {
     ? (lang === 'ko' ? 'API 데이터를 확인하는 중입니다.' : 'Checking API data.')
     : apiNotice === 'fallback'
       ? (lang === 'ko' ? 'API 데이터를 불러오지 못해 데모 데이터를 표시합니다.' : 'Could not load API data. Showing demo data instead.')
-      : apiNotice === 'patch-failed'
-        ? (lang === 'ko' ? '상태 변경을 API에 저장하지 못했습니다. 화면 상태는 유지됩니다.' : 'Could not save the status to the API. The screen state is kept.')
-        : null;
+      : apiNotice === 'patch-saving'
+        ? (lang === 'ko' ? '상태 변경을 Aurora에 저장하는 중입니다.' : 'Saving the status to Aurora.')
+        : apiNotice === 'patch-saved'
+          ? (lang === 'ko' ? '상태 변경이 Aurora에 저장되었습니다.' : 'Status saved to Aurora.')
+          : apiNotice === 'patch-local'
+            ? (lang === 'ko' ? '상태 변경은 반영됐지만 Aurora 저장 여부를 확인하지 못했습니다.' : 'Status changed, but Aurora persistence was not confirmed.')
+            : apiNotice === 'patch-failed'
+              ? (lang === 'ko' ? '상태 변경을 API에 저장하지 못했습니다. 화면 상태는 유지됩니다.' : 'Could not save the status to the API. The screen state is kept.')
+              : null;
 
   return (
     <div className="rc-root" data-theme={effectiveTheme}>

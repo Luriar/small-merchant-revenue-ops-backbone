@@ -40,7 +40,15 @@ test("Revenue Ops store persists action status to Aurora when persistence is ava
   assert.equal(result.action.action_id, KNOWN_ACTION_ID);
   assert.equal(result.action.status, "done");
   assert.equal(result.status_persistence, "aurora");
-  assert.deepEqual(writes, [{ actionId: KNOWN_ACTION_ID, status: "done" }]);
+  assert.equal(writes.length, 2);
+  assert.deepEqual(
+    writes.map((write) => write.actionId).sort(),
+    [
+      "35e6bb16-2893-44cf-87ab-6894f411d7cf",
+      "de69259a-5fd2-4062-be74-efbf9d08994c",
+    ].sort(),
+  );
+  assert.deepEqual([...new Set(writes.map((write) => write.status))], ["done"]);
 });
 
 test("Revenue Ops store falls back to memory if Aurora persistence fails", async () => {
@@ -61,4 +69,18 @@ test("Revenue Ops store falls back to memory if Aurora persistence fails", async
 
   assert.equal(result.status_persistence, "memory_fallback");
   assert.equal(action.status, "selected");
+});
+
+test("Revenue Ops store deduplicates semantically duplicated action candidates", async () => {
+  const store = createRevenueOpsStore();
+  const actions = await store.getActions();
+  const titles = actions.map((action) => action.title);
+
+  assert.equal(titles.filter((title) => title === "대표 메뉴 재포지셔닝").length, 1);
+  assert.equal(titles.filter((title) => title === "리뷰 응답 우선 관리").length, 1);
+  assert.equal(titles.filter((title) => title === "매장 앞 메뉴판/홍보 문구 업데이트").length, 1);
+
+  const menuBoard = actions.find((action) => action.title === "매장 앞 메뉴판/홍보 문구 업데이트");
+  assert.equal(menuBoard.duplicate_count, 2);
+  assert.equal(Array.isArray(menuBoard.action_family_ids), true);
 });

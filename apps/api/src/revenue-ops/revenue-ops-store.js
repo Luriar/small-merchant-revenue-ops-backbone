@@ -42,6 +42,71 @@ function sanitizePipelineMeta(pipelineMeta = {}) {
   };
 }
 
+
+function normalizeActionText(value) {
+  return typeof value === "string" ? value.trim().replace(/\s+/g, " ").toLowerCase() : "";
+}
+
+function actionDedupKey(action) {
+  return [
+    normalizeActionText(action.title),
+    normalizeActionText(action.action_type),
+    normalizeActionText(action.description || action.why_this_action),
+  ].join("::");
+}
+
+function actionFamilyIds(actions, actionId) {
+  const action = actions.find((item) => item.action_id === actionId);
+  if (!action) {
+    return [];
+  }
+
+  const key = actionDedupKey(action);
+  return actions
+    .filter((item) => actionDedupKey(item) === key)
+    .map((item) => item.action_id);
+}
+
+function chooseMergedStatus(statuses) {
+  const rank = {
+    recommended: 0,
+    dismissed: 1,
+    selected: 2,
+    planned: 3,
+    done: 4,
+  };
+
+  return statuses
+    .filter((status) => VALID_ACTION_STATUSES.includes(status))
+    .sort((a, b) => (rank[b] ?? 0) - (rank[a] ?? 0))[0] ?? "recommended";
+}
+
+function dedupeActions(actions, statusMap) {
+  const grouped = new Map();
+
+  for (const action of actions) {
+    const key = actionDedupKey(action);
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+    grouped.get(key).push(action);
+  }
+
+  return Array.from(grouped.values()).map((group) => {
+    const representative = group[0];
+    const statuses = group.map((action) => statusMap.get(action.action_id) ?? action.status ?? "recommended");
+    const mergedStatus = chooseMergedStatus(statuses);
+
+    return {
+      ...representative,
+      status: mergedStatus,
+      action_family_ids: group.map((action) => action.action_id),
+      duplicate_count: group.length,
+    };
+  });
+}
+
+
 function createRevenueOpsStore({ actionStatusPersistence = null } = {}) {
   const exported = loadExport();
   const pipelineMeta = sanitizePipelineMeta(exported.pipeline_meta);
@@ -74,12 +139,7 @@ function createRevenueOpsStore({ actionStatusPersistence = null } = {}) {
 
   async function buildActions(filterFn = () => true) {
     const mergedStatusMap = await loadMergedActionStatusMap();
-    return exported.actions
-      .filter(filterFn)
-      .map((a) => ({
-        ...a,
-        status: mergedStatusMap.get(a.action_id) ?? "recommended",
-      }));
+    return dedupeActions(exported.actions.filter(filterFn), mergedStatusMap);
   }
 
   return {
@@ -116,21 +176,29 @@ function createRevenueOpsStore({ actionStatusPersistence = null } = {}) {
       }
 
       const action = exported.actions.find((a) => a.action_id === actionId);
+      const familyIds = actionFamilyIds(exported.actions, actionId);
       let statusPersistence = "memory";
 
       if (actionStatusPersistence && typeof actionStatusPersistence.upsertActionStatus === "function") {
         try {
-          await actionStatusPersistence.upsertActionStatus(actionId, newStatus);
+          await Promise.all(familyIds.map((familyActionId) => actionStatusPersistence.upsertActionStatus(familyActionId, newStatus)));
           statusPersistence = "aurora";
         } catch {
           statusPersistence = "memory_fallback";
         }
       }
 
-      actionStatusMap.set(actionId, newStatus);
+      for (const familyActionId of familyIds) {
+        actionStatusMap.set(familyActionId, newStatus);
+      }
 
       return {
-        action: { ...action, status: newStatus },
+        action: {
+          ...action,
+          status: newStatus,
+          action_family_ids: familyIds,
+          duplicate_count: familyIds.length,
+        },
         status_persistence: statusPersistence,
       };
     },
