@@ -264,3 +264,13 @@ resource "aws_route53_record" "api" {
     evaluate_target_health = false
   }
 }
+
+resource "aws_apigatewayv2_route" "revenue_options" {
+  count = var.enable_api ? 1 : 0
+
+  api_id    = aws_apigatewayv2_api.api[0].id
+  route_key = "OPTIONS /api/v1/revenue/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
+
+  authorization_type = "NONE"
+}

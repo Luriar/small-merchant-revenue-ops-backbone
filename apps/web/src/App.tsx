@@ -13,6 +13,15 @@ function resolvePageFromHash(hash: string): AppPage {
     if (params.has("code") && params.has("state")) {
       return "revenue-cockpit";
     }
+    if (window.sessionStorage.getItem("revenue_ops_after_logout") === "1") {
+      window.sessionStorage.removeItem("revenue_ops_after_logout");
+      window.history.replaceState(null, "", `${window.location.origin}/#revenue-cockpit?data=api`);
+      return "revenue-cockpit";
+    }
+    if (params.get("logout") === "revenue") {
+      window.history.replaceState(null, "", `${window.location.origin}/#revenue-cockpit?data=api`);
+      return "revenue-cockpit";
+    }
   }
 
   const page = hash.replace(/^#/, "").split("?")[0].toLowerCase();

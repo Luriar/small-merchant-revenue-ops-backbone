@@ -7,6 +7,7 @@ const viteEnv = (import.meta as RevenueImportMeta).env ?? {};
 const CLIENT_ID = viteEnv.VITE_REVENUE_COGNITO_CLIENT_ID || '6ckcj7igctutanc2s6cjo3vjs7';
 const HOSTED_UI = viteEnv.VITE_REVENUE_COGNITO_HOSTED_UI || 'https://revenue-ops-dev-827913617635.auth.ap-northeast-2.amazoncognito.com';
 const REDIRECT_URI = viteEnv.VITE_REVENUE_COGNITO_REDIRECT_URI || 'https://d1fquuc7vsf9cu.cloudfront.net/';
+const LOGOUT_URI = viteEnv.VITE_REVENUE_COGNITO_LOGOUT_URI || REDIRECT_URI;
 
 const STORAGE_PREFIX = 'revenue_ops_cognito';
 const VERIFIER_KEY = `${STORAGE_PREFIX}_code_verifier`;
@@ -65,6 +66,10 @@ export function getStoredAuthSession(): RevenueAuthSession | null {
 
 export function clearStoredAuthSession() {
   sessionStorage.removeItem(TOKENS_KEY);
+}
+
+export function markRevenueLogoutRedirect() {
+  sessionStorage.setItem('revenue_ops_after_logout', '1');
 }
 
 export async function startCognitoLogin() {
@@ -139,7 +144,7 @@ export async function handleCognitoRedirectIfPresent(): Promise<RevenueAuthSessi
   sessionStorage.removeItem(VERIFIER_KEY);
   sessionStorage.removeItem(STATE_KEY);
 
-  window.history.replaceState(null, '', `${window.location.origin}/#revenue-cockpit?data=api`);
+  window.location.replace(`${window.location.origin}/#revenue-cockpit?data=api`);
 
   return session;
 }
@@ -147,7 +152,7 @@ export async function handleCognitoRedirectIfPresent(): Promise<RevenueAuthSessi
 export function buildCognitoLogoutUrl(): string {
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
-    logout_uri: REDIRECT_URI,
+    logout_uri: LOGOUT_URI,
   });
 
   return `${HOSTED_UI.replace(/\/$/, '')}/logout?${params.toString()}`;

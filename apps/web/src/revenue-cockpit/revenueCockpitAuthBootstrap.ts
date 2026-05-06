@@ -3,6 +3,7 @@ import {
   clearStoredAuthSession,
   getStoredAuthSession,
   handleCognitoRedirectIfPresent,
+  markRevenueLogoutRedirect,
   startCognitoLogin,
 } from './revenueCockpitAuth';
 
@@ -57,6 +58,7 @@ function renderOverlay(message?: string) {
   if (session) {
     button.textContent = 'Logout';
     button.onclick = () => {
+      markRevenueLogoutRedirect();
       clearStoredAuthSession();
       window.location.assign(buildCognitoLogoutUrl());
     };
