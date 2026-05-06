@@ -14,6 +14,8 @@ STEP 3+4-lite의 store-scoped SaaS foundation을 production-lite runtime에 맞�
 - revenue upload preview/rejected/reprocess endpoints 추가
 - outbox/job/mart runtime 구조 추가
 - Lambda package script에 Aurora SaaS runtime 파일과 SQL bootstrap 포함
+- STEP 3.6에서 `/api/v1/me`, `/api/v1/stores`, `/api/v1/stores/{proxy+}` API Gateway routes를 Terraform으로 관리
+- manual hotfix routes를 Terraform state로 import하고 CORS `POST` method를 적용
 
 ## Aurora-backed Persistence
 
@@ -46,6 +48,7 @@ STEP 3+4-lite의 store-scoped SaaS foundation을 production-lite runtime에 맞�
 node --test apps/api/src/revenue-ops/revenue-ops-saas-routes.test.js apps/api/src/revenue-ops/revenue-ops-saas-store-factory.test.js apps/api/src/revenue-ops/revenue-upload-parsers.test.js apps/api/src/revenue-ops/context-collectors.test.js apps/api/src/revenue-ops/runtime-boundaries.test.js
 node --check apps/api/src/lambda-handler.js
 node --check apps/api/src/server.js
+node scripts/validate_step3_lambda_package_manifest.js
 terraform -chdir=infra/terraform/envs/revenue-dev validate
 ```
 
@@ -54,3 +57,4 @@ terraform -chdir=infra/terraform/envs/revenue-dev validate
 - Aurora repository live smoke with deployed Lambda package
 - 실제 운영 migration 절차 분리
 - SQS/Step Functions 실제 AWS resource wiring review
+- fresh `ID_TOKEN`으로 live store-scoped route smoke

@@ -10,6 +10,8 @@
 - runtime boundary skeletons
 - Toss Place connector v0 skeleton
 - prod-lite/lakehouse-ready/platform-scale Terraform profile skeletons
+- STEP 3.6 API Gateway `/api/v1/me` and `/api/v1/stores` route persistence
+- Lambda package manifest validator
 
 ## API Test
 
@@ -37,6 +39,20 @@ npm --prefix apps/web run build
 - lint pass
 - build pass
 - Vite output: `dist/index.html`, CSS bundle, JS bundle 생성
+
+## Lambda Package
+
+```bash
+node scripts/validate_step3_lambda_package_manifest.js
+bash scripts/package_step2d_revenue_api_lambda.sh
+```
+
+결과:
+
+- manifest validation pass
+- package build pass
+- zip includes Step 3.5 runtime files and `revenue_ops_step3_4_lite.sql`
+- local package install emitted Node engine warnings because local Node is v18, while Lambda runtime is `nodejs20.x`
 
 ## API npm scripts
 
@@ -68,6 +84,13 @@ terraform -chdir=infra/terraform/envs/platform-scale validate
 - prod-lite validate pass
 - lakehouse-ready validate pass
 - platform-scale validate pass
+
+STEP 3.6 route persistence:
+
+- imported six manually hotfixed `/me` and `/stores` API Gateway routes into state
+- applied saved route/CORS plan
+- apply result: 0 added, 1 changed, 0 destroyed
+- post-apply plan: no changes
 
 ## Terraform Plans
 

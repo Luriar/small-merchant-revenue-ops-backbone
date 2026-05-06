@@ -5,7 +5,7 @@ const { Pool } = require("pg");
 
 const exportData = require("./data/revenue_ops_export.json");
 const { parseSecretJson } = require("./aurora-action-status-store");
-const { normalizeClaims } = require("./revenue-ops-auth");
+const { getJwtClaimsFromEvent, normalizeClaims } = require("./revenue-ops-auth");
 const {
   DEMO_STORE_NAME,
   DEMO_TENANT_NAME,
@@ -20,6 +20,7 @@ const {
   safeObject,
   clone,
 } = require("./revenue-ops-saas-store");
+const { planStorePublicContextCollection } = require("./context-collectors");
 const { previewRevenueUploadPayload } = require("./revenue-upload-parsers");
 const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
 
@@ -133,6 +134,10 @@ function createAuroraRevenueOpsSaasStore({
       [normalized.cognito_sub, normalized.email, normalized.display_name],
     );
     return result.rows[0];
+  }
+
+  async function requireAuthenticatedAppUser(event) {
+    return resolveAppUserFromJwtClaims(event?.authClaims ?? getJwtClaimsFromEvent(event) ?? event);
   }
 
   async function requireStoreAccess(appUserId, storeId, minimumRole = "viewer") {
@@ -719,6 +724,32 @@ function createAuroraRevenueOpsSaasStore({
     });
   }
 
+  async function evaluateActionOutcome(actionId) {
+    const action = await one("SELECT store_id FROM action_planner_items WHERE action_id = $1", [actionId]);
+    if (!action) return null;
+    return buildActionOutcomeForStore(action.store_id, actionId);
+  }
+
+  async function buildActionOutcomeForStore(storeId, actionId) {
+    const action = await one(
+      "SELECT action_id FROM action_planner_items WHERE store_id = $1 AND action_id = $2",
+      [storeId, actionId],
+    );
+    if (!action) return null;
+    const outcome = await one(
+      "SELECT * FROM action_outcome_snapshots WHERE store_id = $1 AND action_id = $2 ORDER BY created_at DESC LIMIT 1",
+      [storeId, actionId],
+    );
+    return outcome ?? {
+      action_id: actionId,
+      store_id: storeId,
+      metric_name: "net_sales_amount",
+      summary: "결과 추적 대기 중",
+      summary_en: "Waiting for result window",
+      not_proven_causality: true,
+    };
+  }
+
   async function ingestRevenueUpload({ appUserId, storeId, payload = {} }) {
     const dailyRows = Array.isArray(payload.daily_rows) ? payload.daily_rows : [];
     const itemRows = Array.isArray(payload.item_rows) ? payload.item_rows : [];
@@ -854,6 +885,10 @@ function createAuroraRevenueOpsSaasStore({
     return result.rows;
   }
 
+  async function getRejectedRowsForUpload(storeId, uploadId) {
+    return listRejectedRowsForUpload(storeId, uploadId);
+  }
+
   async function reprocessRevenueUpload(storeId, uploadId) {
     const uploads = await query("SELECT * FROM revenue_uploads WHERE store_id = $1 AND upload_id = $2", [storeId, uploadId]);
     if (!uploads.rows[0]) return null;
@@ -897,6 +932,7 @@ function createAuroraRevenueOpsSaasStore({
 
   async function collectContextForStore(storeId, { mode = "seed" } = {}) {
     return withTransaction(async (client) => {
+      const collectionPlan = planStorePublicContextCollection({ mode, env });
       const job = await createJobRunWithClient(client, {
         job_type: "context_collect",
         target_kind: "store",
@@ -904,7 +940,7 @@ function createAuroraRevenueOpsSaasStore({
         store_id: storeId,
         status: "running",
         started_at: new Date(),
-        input_payload: { mode },
+        input_payload: { mode, resolved_mode: collectionPlan.resolved_mode },
       });
       const store = await getStoreWithClient(client, storeId);
       await seedContextWithClient(client, store);
@@ -916,7 +952,13 @@ function createAuroraRevenueOpsSaasStore({
           VALUES ('collectStorePublicContext', 'completed', $1, now(), now(), $2::jsonb)
           RETURNING *
         `,
-        [storeId, JSON.stringify({ mode, external_api_keys_required: false, skipped_live_collectors_without_keys: true })],
+        [storeId, JSON.stringify({
+          mode,
+          resolved_mode: collectionPlan.resolved_mode,
+          collectors: collectionPlan.collectors,
+          external_api_keys_required: false,
+          skipped_live_collectors_without_keys: collectionPlan.resolved_mode !== "live",
+        })],
       );
       const completed = await updateJobRunWithClient(client, job.job_run_id, {
         status: "completed",
@@ -928,6 +970,7 @@ function createAuroraRevenueOpsSaasStore({
         job_run: completed,
         summary: {
           context_observation_count: await scalarCount(client, "context_observations", "store_id", storeId),
+          collector_plan: collectionPlan,
         },
       };
     });
@@ -1072,17 +1115,32 @@ function createAuroraRevenueOpsSaasStore({
       );
       let rowsWritten = 0;
       for (const fact of facts.rows) {
+        const previous = await client.query(
+          `
+            SELECT *
+            FROM revenue_daily_facts
+            WHERE store_id = $1 AND business_date = ($2::date - INTERVAL '7 days')::date
+            LIMIT 1
+          `,
+          [storeId, fact.business_date],
+        );
+        const previousFact = previous.rows[0] ?? null;
         const context = await contextForDate(client, storeId, fact.business_date);
         const aov = Number(fact.order_count) > 0 ? Number(fact.net_sales_amount) / Number(fact.order_count) : 0;
+        const previousAov = previousFact && Number(previousFact.order_count) > 0
+          ? Number(previousFact.net_sales_amount) / Number(previousFact.order_count)
+          : null;
         await client.query(
           `
             INSERT INTO store_revenue_daily_mart (
               store_id, business_date, net_sales_amount, gross_sales_amount, order_count, aov,
               cancel_count, refund_amount, discount_amount, weather_label, rain_mm,
+              sales_delta_vs_prev_weekday_pct, order_delta_vs_prev_weekday_pct,
+              aov_delta_vs_prev_weekday_pct,
               benchmark_delta_pct, foot_traffic_proxy_delta_pct, same_category_store_count,
               evidence_readiness_score, source_summary, built_at
             )
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,now())
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,now())
             ON CONFLICT (store_id, business_date)
             DO UPDATE SET
               net_sales_amount = EXCLUDED.net_sales_amount,
@@ -1094,6 +1152,9 @@ function createAuroraRevenueOpsSaasStore({
               discount_amount = EXCLUDED.discount_amount,
               weather_label = EXCLUDED.weather_label,
               rain_mm = EXCLUDED.rain_mm,
+              sales_delta_vs_prev_weekday_pct = EXCLUDED.sales_delta_vs_prev_weekday_pct,
+              order_delta_vs_prev_weekday_pct = EXCLUDED.order_delta_vs_prev_weekday_pct,
+              aov_delta_vs_prev_weekday_pct = EXCLUDED.aov_delta_vs_prev_weekday_pct,
               benchmark_delta_pct = EXCLUDED.benchmark_delta_pct,
               foot_traffic_proxy_delta_pct = EXCLUDED.foot_traffic_proxy_delta_pct,
               same_category_store_count = EXCLUDED.same_category_store_count,
@@ -1113,6 +1174,9 @@ function createAuroraRevenueOpsSaasStore({
             fact.discount_amount,
             context.weather_label,
             context.rain_mm,
+            percentageDelta(fact.net_sales_amount, previousFact?.net_sales_amount),
+            percentageDelta(fact.order_count, previousFact?.order_count),
+            percentageDelta(aov, previousAov),
             context.benchmark_delta_pct,
             context.foot_traffic_proxy_delta_pct,
             context.same_category_store_count,
@@ -1169,6 +1233,7 @@ function createAuroraRevenueOpsSaasStore({
   return {
     _backend: "aurora",
     resolveAppUserFromJwtClaims,
+    requireAuthenticatedAppUser,
     requireStoreAccess,
     listStoresForUser,
     createStoreForUser,
@@ -1180,6 +1245,7 @@ function createAuroraRevenueOpsSaasStore({
     previewRevenueUpload,
     listRevenueUploadsForStore,
     listRejectedRowsForUpload,
+    getRejectedRowsForUpload,
     reprocessRevenueUpload,
     getContextForStore,
     collectContextForStore,
@@ -1193,6 +1259,8 @@ function createAuroraRevenueOpsSaasStore({
     createMartBuildRun,
     buildStoreRevenueDailyMart,
     getStoreRevenueDailyMart,
+    evaluateActionOutcome,
+    buildActionOutcomeForStore,
   };
 }
 
@@ -1368,6 +1436,15 @@ async function contextForDate(client, storeId, businessDate) {
 async function scalarCount(client, table, column, value) {
   const result = await client.query(`SELECT count(*)::int AS count FROM ${table} WHERE ${column} = $1`, [value]);
   return result.rows[0]?.count ?? 0;
+}
+
+function percentageDelta(current, previous) {
+  const currentNumber = Number(current);
+  const previousNumber = Number(previous);
+  if (!Number.isFinite(currentNumber) || !Number.isFinite(previousNumber) || previousNumber === 0) {
+    return null;
+  }
+  return Math.round(((currentNumber - previousNumber) / previousNumber) * 10000) / 100;
 }
 
 function loadStep3SchemaSql() {

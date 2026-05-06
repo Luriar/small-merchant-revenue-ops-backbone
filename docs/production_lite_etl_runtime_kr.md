@@ -40,6 +40,34 @@ ETL은 단순 적재가 아니라 evidence pipeline이다.
 - `mart_build_runs`: mart build audit
 - `store_revenue_daily_mart`: store/day evidence-ready mart
 
+## Production-lite Infra Path
+
+현재 profile은 validate-ready skeleton이다. 실제 apply 전에는 각 resource blast radius를 다시 검토한다.
+
+- S3 Bronze prefixes:
+  - `raw/revenue_uploads/`
+  - `raw/context/`
+  - `rejected/revenue_uploads/`
+  - `bronze/revenue/`
+  - `silver/revenue_daily_facts/`
+  - `silver/context_observations/`
+  - `gold/store_revenue_daily_mart/`
+- SQS jobs:
+  - `upload-parse-queue`
+  - `context-collect-queue`
+  - `mart-build-queue`
+  - `action-outcome-eval-queue`
+- EventBridge schedules:
+  - `daily-context-collector`
+  - `nightly-mart-build`
+  - `daily-action-outcome-eval`
+  - `weekly-benchmark-collector`
+- Step Functions workflows:
+  - `upload_parse_workflow`
+  - `context_collect_workflow`
+  - `mart_build_workflow`
+  - `action_outcome_eval_workflow`
+
 ## Operational Flow
 
 1. Upload JSON/CSV preview validates mapping without committing facts.

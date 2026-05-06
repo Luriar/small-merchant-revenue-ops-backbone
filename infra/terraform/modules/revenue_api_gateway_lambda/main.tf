@@ -161,7 +161,7 @@ resource "aws_apigatewayv2_api" "api" {
 
   cors_configuration {
     allow_headers = ["authorization", "content-type"]
-    allow_methods = ["GET", "PATCH", "OPTIONS"]
+    allow_methods = ["GET", "POST", "PATCH", "OPTIONS"]
     allow_origins = ["https://*"]
     max_age       = 300
   }
@@ -202,6 +202,72 @@ resource "aws_apigatewayv2_route" "revenue" {
   target             = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
   authorization_type = var.enable_cognito_authorizer ? "JWT" : "NONE"
   authorizer_id      = var.enable_cognito_authorizer ? aws_apigatewayv2_authorizer.cognito[0].id : null
+}
+
+resource "aws_apigatewayv2_route" "revenue_options" {
+  count = var.enable_api ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.api[0].id
+  route_key          = "OPTIONS /api/v1/revenue/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "me" {
+  count = var.enable_api ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.api[0].id
+  route_key          = "ANY /api/v1/me"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
+  authorization_type = var.enable_cognito_authorizer ? "JWT" : "NONE"
+  authorizer_id      = var.enable_cognito_authorizer ? aws_apigatewayv2_authorizer.cognito[0].id : null
+}
+
+resource "aws_apigatewayv2_route" "me_options" {
+  count = var.enable_api ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.api[0].id
+  route_key          = "OPTIONS /api/v1/me"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "stores" {
+  count = var.enable_api ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.api[0].id
+  route_key          = "ANY /api/v1/stores"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
+  authorization_type = var.enable_cognito_authorizer ? "JWT" : "NONE"
+  authorizer_id      = var.enable_cognito_authorizer ? aws_apigatewayv2_authorizer.cognito[0].id : null
+}
+
+resource "aws_apigatewayv2_route" "stores_options" {
+  count = var.enable_api ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.api[0].id
+  route_key          = "OPTIONS /api/v1/stores"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
+  authorization_type = "NONE"
+}
+
+resource "aws_apigatewayv2_route" "stores_proxy" {
+  count = var.enable_api ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.api[0].id
+  route_key          = "ANY /api/v1/stores/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
+  authorization_type = var.enable_cognito_authorizer ? "JWT" : "NONE"
+  authorizer_id      = var.enable_cognito_authorizer ? aws_apigatewayv2_authorizer.cognito[0].id : null
+}
+
+resource "aws_apigatewayv2_route" "stores_proxy_options" {
+  count = var.enable_api ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.api[0].id
+  route_key          = "OPTIONS /api/v1/stores/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
+  authorization_type = "NONE"
 }
 
 resource "aws_apigatewayv2_stage" "default" {
@@ -263,14 +329,4 @@ resource "aws_route53_record" "api" {
     zone_id                = aws_apigatewayv2_domain_name.api[0].domain_name_configuration[0].hosted_zone_id
     evaluate_target_health = false
   }
-}
-
-resource "aws_apigatewayv2_route" "revenue_options" {
-  count = var.enable_api ? 1 : 0
-
-  api_id    = aws_apigatewayv2_api.api[0].id
-  route_key = "OPTIONS /api/v1/revenue/{proxy+}"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda[0].id}"
-
-  authorization_type = "NONE"
 }

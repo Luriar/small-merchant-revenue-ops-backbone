@@ -1,8 +1,9 @@
 const { randomUUID } = require("node:crypto");
 
 const exportData = require("./data/revenue_ops_export.json");
-const { normalizeClaims } = require("./revenue-ops-auth");
+const { getJwtClaimsFromEvent, normalizeClaims } = require("./revenue-ops-auth");
 const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
+const { planStorePublicContextCollection } = require("./context-collectors");
 const { previewRevenueUploadPayload } = require("./revenue-upload-parsers");
 
 const DEMO_STORE_NAME = "성수 커피음료 매장";
@@ -83,6 +84,10 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     };
     state.users.set(user.cognito_sub, user);
     return clone(user);
+  }
+
+  function requireAuthenticatedAppUser(event) {
+    return resolveAppUserFromJwtClaims(event?.authClaims ?? getJwtClaimsFromEvent(event) ?? event);
   }
 
   function requireStoreAccess(appUserId, storeId, minimumRole = "viewer") {
@@ -777,6 +782,26 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     return clone(withCauseAndOutcome(action));
   }
 
+  function evaluateActionOutcome(actionId) {
+    const action = state.actions.find((item) => item.action_id === actionId);
+    if (!action) return null;
+    return buildActionOutcomeForStore(action.store_id, actionId);
+  }
+
+  function buildActionOutcomeForStore(storeId, actionId) {
+    const action = state.actions.find((item) => item.store_id === storeId && item.action_id === actionId);
+    if (!action) return null;
+    const outcome = latestBy(state.outcomes.filter((row) => row.action_id === actionId), "created_at");
+    return clone(outcome ?? {
+      action_id: actionId,
+      store_id: storeId,
+      metric_name: "net_sales_amount",
+      summary: "결과 추적 대기 중",
+      summary_en: "Waiting for result window",
+      not_proven_causality: true,
+    });
+  }
+
   function withCauseAndOutcome(action) {
     const cause = state.causeCandidates.find((row) => row.cause_candidate_id === action.cause_candidate_id) ?? null;
     const evidence = cause
@@ -955,6 +980,10 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     return clone(state.rejectedRows.filter((row) => row.upload_id === uploadId));
   }
 
+  function getRejectedRowsForUpload(storeId, uploadId) {
+    return listRejectedRowsForUpload(storeId, uploadId);
+  }
+
   function reprocessRevenueUpload(storeId, uploadId) {
     const upload = state.uploads.find((item) => item.store_id === storeId && item.upload_id === uploadId);
     if (!upload) {
@@ -976,6 +1005,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
 
   function collectContextForStore(storeId, { mode = "seed" } = {}) {
     const timestamp = nowIso();
+    const collectionPlan = planStorePublicContextCollection({ mode });
     const jobRun = createJobRun({
       job_type: "context_collect",
       target_kind: "store",
@@ -983,7 +1013,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       store_id: storeId,
       status: "running",
       started_at: timestamp,
-      input_payload: { mode },
+      input_payload: { mode, resolved_mode: collectionPlan.resolved_mode },
     });
     seedContextForStore(storeId, timestamp);
     const run = {
@@ -996,6 +1026,8 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       error_message: null,
       metadata: {
         mode,
+        resolved_mode: collectionPlan.resolved_mode,
+        collectors: collectionPlan.collectors,
         external_api_keys_required: false,
         skipped_live_collectors_without_keys: true,
       },
@@ -1016,6 +1048,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         context_observation_count: state.contextObservations.filter((row) => row.store_id === storeId).length,
         benchmark_count: state.publicBenchmarks.length,
         nearby_snapshot_count: state.nearbyStoreSnapshots.filter((row) => row.store_id === storeId).length,
+        collector_plan: collectionPlan,
       },
     });
   }
@@ -1130,7 +1163,9 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       .sort((a, b) => a.business_date.localeCompare(b.business_date));
     let rowsWritten = 0;
     for (const fact of facts) {
+      const previous = facts.find((row) => row.business_date === addDays(fact.business_date, -7));
       const aov = fact.order_count > 0 ? Math.round((fact.net_sales_amount / fact.order_count) * 100) / 100 : 0;
+      const previousAov = previous?.order_count > 0 ? previous.net_sales_amount / previous.order_count : null;
       const existingIndex = state.dailyMart.findIndex((row) => row.store_id === storeId && row.business_date === fact.business_date);
       const rain = state.contextObservations.find((row) => row.store_id === storeId && row.observation_date === fact.business_date && row.metric_name === "rainfall_mm");
       const benchmark = state.contextObservations.find((row) => row.store_id === storeId && row.observation_date === fact.business_date && row.metric_name === "commercial_area_sales_delta_pct");
@@ -1145,9 +1180,9 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         cancel_count: fact.cancel_count,
         refund_amount: fact.refund_amount,
         discount_amount: fact.discount_amount,
-        sales_delta_vs_prev_weekday_pct: null,
-        order_delta_vs_prev_weekday_pct: null,
-        aov_delta_vs_prev_weekday_pct: null,
+        sales_delta_vs_prev_weekday_pct: percentageDelta(fact.net_sales_amount, previous?.net_sales_amount),
+        order_delta_vs_prev_weekday_pct: percentageDelta(fact.order_count, previous?.order_count),
+        aov_delta_vs_prev_weekday_pct: percentageDelta(aov, previousAov),
         weather_label: rain?.label ?? null,
         rain_mm: rain?.metric_value ?? null,
         holiday_flag: false,
@@ -1197,6 +1232,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   return {
     _state: state,
     resolveAppUserFromJwtClaims,
+    requireAuthenticatedAppUser,
     requireStoreAccess,
     listStoresForUser,
     createStoreForUser,
@@ -1212,6 +1248,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     previewRevenueUpload,
     listRevenueUploadsForStore,
     listRejectedRowsForUpload,
+    getRejectedRowsForUpload,
     reprocessRevenueUpload,
     collectContextForStore,
     createOutboxEvent,
@@ -1221,6 +1258,8 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     createMartBuildRun,
     buildStoreRevenueDailyMart,
     getStoreRevenueDailyMart,
+    evaluateActionOutcome,
+    buildActionOutcomeForStore,
   };
 }
 
@@ -1402,6 +1441,22 @@ function latestBy(rows, key) {
   return rows
     .filter((row) => row?.[key])
     .sort((a, b) => String(b[key]).localeCompare(String(a[key])))[0] ?? null;
+}
+
+function addDays(yyyyMmDd, delta) {
+  const date = new Date(`${yyyyMmDd}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setUTCDate(date.getUTCDate() + delta);
+  return date.toISOString().slice(0, 10);
+}
+
+function percentageDelta(current, previous) {
+  const currentNumber = Number(current);
+  const previousNumber = Number(previous);
+  if (!Number.isFinite(currentNumber) || !Number.isFinite(previousNumber) || previousNumber === 0) {
+    return null;
+  }
+  return Math.round(((currentNumber - previousNumber) / previousNumber) * 10000) / 100;
 }
 
 function parseDate(value) {

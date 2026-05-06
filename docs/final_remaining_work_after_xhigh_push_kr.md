@@ -12,6 +12,9 @@
 - public context collector v1 planning skeleton 추가
 - Toss Place connector v0 skeleton 추가
 - prod-lite/lakehouse-ready/platform-scale Terraform profile skeleton 추가
+- STEP 3.6 API Gateway `/me` 및 `/stores` routes Terraform config 추가
+- manual hotfix routes Terraform state import 완료
+- API Gateway CORS `POST` method apply 완료
 
 ## 남은 작업
 
@@ -28,6 +31,7 @@
 - platform-scale profile은 validate-ready skeleton이며 apply 대상이 아니다.
 - Excel binary parsing은 구현하지 않았다.
 - 인과를 단정하지 않고 함께 관측된 evidence로만 표현한다.
+- fresh `ID_TOKEN` live smoke는 사용자가 별도 수행해야 한다.
 
 ## 다음 권장 명령
 

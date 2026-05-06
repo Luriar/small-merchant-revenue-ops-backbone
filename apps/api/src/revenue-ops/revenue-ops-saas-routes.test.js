@@ -254,6 +254,7 @@ test("production-lite store records outbox, jobs, and idempotent daily mart rows
   const martRows = store.getStoreRevenueDailyMart(storeId);
   assert.equal(rebuilt.rows_written, built.rows_written);
   assert.equal(martRows.length, built.rows_written);
+  assert.equal(martRows.some((row) => row.sales_delta_vs_prev_weekday_pct !== null), true);
 
   const outbox = store.createOutboxEvent({
     event_type: "test.event",
@@ -273,6 +274,10 @@ test("production-lite store records outbox, jobs, and idempotent daily mart rows
   });
   assert.equal(duplicate.event_id, outbox.event_id);
   assert.equal(store.markOutboxPublished(outbox.event_id).status, "published");
+
+  const actions = await store.getActionsForStore(storeId);
+  const outcome = store.buildActionOutcomeForStore(storeId, actions[0].action_id);
+  assert.equal(outcome.summary, "결과 추적 대기 중");
 });
 
 async function requestJson({ server, method, routePath, input, authSub, authEmail }) {
