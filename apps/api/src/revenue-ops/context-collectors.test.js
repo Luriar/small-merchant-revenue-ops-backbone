@@ -3,7 +3,10 @@ const assert = require("node:assert/strict");
 
 const {
   collectKakaoStoreLocation,
+  collectKoreanHolidayCalendar,
   collectKmaWeather,
+  collectNaverLocalCompetitorSearch,
+  collectNaverSearchTrend,
   collectSeoulCommercialBenchmark,
   collectSeoulFootTrafficProxy,
   collectStorePublicContext,
@@ -34,11 +37,16 @@ test("public context credentials load from env and mask values for logs", () => 
   const credentials = loadPublicContextCredentialsFromEnv({
     KAKAO_REST_API_KEY: "kakao-secret-value",
     DATA_GO_KR_SERVICE_KEY: "data-go-secret",
+    NAVER_CLIENT_ID: "naver-id",
+    NAVER_CLIENT_SECRET: "naver-secret",
+    HOLIDAY_SERVICE_KEY: "holiday-secret",
     KMA_NOWCAST_ENDPOINT: "https://example.test/kma",
   });
   assert.equal(credentials.credentialSource, "env");
   assert.equal(credentials.kakaoRestApiKey, "kakao-secret-value");
   assert.equal(credentials.kmaServiceKey, "data-go-secret");
+  assert.equal(credentials.naverClientId, "naver-id");
+  assert.equal(credentials.holidayServiceKey, "holiday-secret");
   assert.equal(maskCredentialForLog(credentials.kakaoRestApiKey), "kak...lue");
 });
 
@@ -158,6 +166,86 @@ test("Seoul collector skips missing endpoint and normalizes mocked commercial be
   assert.equal(completed.observations[0].source_ref.includes("seoul-key"), false);
 });
 
+test("Naver collectors normalize local search and DataLab without leaking credentials", async () => {
+  const store = {
+    store_id: "store-1",
+    region: "서울 성동구 성수동",
+    business_category: "카페",
+    metadata: { representative_menu_keywords: ["소금빵"] },
+  };
+  const credentials = {
+    naverClientId: "naver-client-id",
+    naverClientSecret: "naver-client-secret",
+    naverSearchTrendClientId: "trend-id",
+    naverSearchTrendClientSecret: "trend-secret",
+  };
+
+  const local = await collectNaverLocalCompetitorSearch(store, credentials, {
+    fetchImpl: mockJsonFetch({
+      items: [
+        { title: "<b>성수 카페</b>", category: "카페,디저트", address: "서울 성동구", roadAddress: "서울 성동구 성수로" },
+        { title: "디저트 카페", category: "<b>카페</b>", address: "서울 성동구", roadAddress: "서울 성동구" },
+      ],
+    }),
+  });
+  assert.equal(local.status, "completed");
+  assert.equal(local.observations[0].metric_name, "nearby_same_category_result_count");
+  assert.equal(local.observations[0].metric_value, 2);
+  assert.equal(local.observations[0].metadata.normalized_items[0].title, "성수 카페");
+  assert.equal(JSON.stringify(local).includes("naver-client-secret"), false);
+
+  const trend = await collectNaverSearchTrend(store, credentials, {
+    latestRevenueDate: "2026-05-06",
+    fetchImpl: mockJsonFetch({
+      results: [{
+        title: "store_category_context",
+        data: [
+          { period: "2026-05-05", ratio: 32.1 },
+          { period: "2026-05-06", ratio: 41.5 },
+        ],
+      }],
+    }),
+  });
+  assert.equal(trend.status, "completed");
+  assert.equal(trend.observations[0].metric_name, "naver_search_ratio");
+  assert.equal(trend.observations[0].metric_value, 41.5);
+  assert.equal(trend.observations[0].metadata.relative_search_trend_not_absolute_demand, true);
+  assert.equal(JSON.stringify(trend).includes("trend-secret"), false);
+});
+
+test("Korean holiday collector parses verified Data.go.kr shape safely", async () => {
+  const store = { store_id: "store-1", region: "서울" };
+  const completed = await collectKoreanHolidayCalendar(store, {
+    holidayServiceKey: "holiday-secret",
+  }, {
+    latestRevenueDate: "2026-05-01",
+    fetchImpl: mockTextFetch(JSON.stringify({
+      response: {
+        header: { resultCode: "00", resultMsg: "NORMAL SERVICE." },
+        body: {
+          items: {
+            item: [
+              { dateName: "노동절", locdate: "20260501", isHoliday: "N" },
+              { dateName: "어린이날", locdate: "20260505", isHoliday: "Y" },
+            ],
+          },
+        },
+      },
+    })),
+  });
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.observations.length, 2);
+  assert.equal(completed.observations[0].context_type, "calendar");
+  assert.equal(completed.observations[0].metric_name, "holiday_or_special_day");
+  assert.equal(completed.observations[0].source_ref.includes("holiday-secret"), false);
+
+  const failed = await collectKoreanHolidayCalendar(store, { holidayServiceKey: "holiday-secret" }, {
+    fetchImpl: mockTextFetch(JSON.stringify({ response: { header: { resultCode: "30", resultMsg: "SERVICE KEY IS NOT REGISTERED" } } })),
+  });
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.reason, "service_result_30");
+});
+
 test("auto live collection falls back safely when all live collectors skip", async () => {
   const result = await collectStorePublicContext({
     store: { store_id: "store-1", region: "Seoul Seongsu", business_category: "cafe" },
@@ -267,8 +355,8 @@ test("live collection supports mixed results, collector filter, and safe source 
     }),
   });
 
-  assert.equal(result.completed_collector_count, 2);
-  assert.equal(result.skipped_collector_count, 2);
+  assert.equal(result.completed_collector_count, 3);
+  assert.equal(result.skipped_collector_count, 6);
   assert.equal(result.failed_collector_count, 1);
   assert.equal(result.timed_out_collector_count, 1);
   assert.equal(result.collectors.find((collector) => collector.name === "seoul_commercial_benchmark").reason, "request_timeout");

@@ -4,11 +4,17 @@ const DAILY_ALIASES = {
   gross_sales_amount: ["gross_sales_amount", "gross_amount", "sales_amount", "총매출", "총 결제금액", "결제금액"],
   net_sales_amount: ["net_sales_amount", "net_amount", "settlement_amount", "순매출", "정산금액"],
   order_count: ["order_count", "orders", "transaction_count", "주문수", "거래수"],
-  cancel_count: ["cancel_count", "cancellations", "취소수"],
+  cancel_count: ["cancel_count", "cancellation_count", "cancellations", "취소수", "취소건수"],
+  cancellation_count: ["cancellation_count", "cancel_count", "cancellations", "취소수", "취소건수"],
   refund_amount: ["refund_amount", "refunds", "환불금액"],
   discount_amount: ["discount_amount", "discounts", "할인금액"],
+  delivery_fee_amount: ["delivery_fee_amount", "delivery_fee", "배달비", "배달팁", "배달료"],
+  commission_amount: ["commission_amount", "commission", "중개수수료", "수수료"],
+  settlement_amount: ["settlement_amount", "settlement", "정산금액", "입금예정금액"],
   payment_card_amount: ["payment_card_amount", "card_amount", "카드금액"],
   payment_cash_amount: ["payment_cash_amount", "cash_amount", "현금금액"],
+  source_file_type: ["source_file_type", "file_type", "파일유형"],
+  source_row_number: ["source_row_number", "row_number", "행번호"],
 };
 
 const ITEM_ALIASES = {
@@ -22,10 +28,26 @@ const ITEM_ALIASES = {
   net_sales_amount: ["net_sales_amount", "net_amount", "settlement_amount", "순매출", "정산금액"],
 };
 
+const DELIVERY_SOURCE_TYPES = [
+  "baemin_orders_csv",
+  "baemin_settlement_xlsx",
+  "coupangeats_orders_csv",
+  "coupangeats_settlement_xlsx",
+  "delivery_provider_normalized",
+];
+
+const DELIVERY_CHANNEL_BY_SOURCE_TYPE = {
+  baemin_orders_csv: "delivery_baemin",
+  baemin_settlement_xlsx: "delivery_baemin",
+  coupangeats_orders_csv: "delivery_coupangeats",
+  coupangeats_settlement_xlsx: "delivery_coupangeats",
+  delivery_provider_normalized: "delivery_provider",
+};
+
 function previewRevenueUploadPayload(payload = {}) {
   const parserType = text(payload.parser_type) || inferParserType(payload);
   const sourceType = text(payload.source_type) || parserType || "manual_template";
-  const parsed = parsePayloadByType(payload, parserType);
+  const parsed = parsePayloadByType(payload, parserType, sourceType);
   const dailyRows = parsed.daily_rows.map((row, index) => normalizePreviewRow("daily", row, index));
   const itemRows = parsed.item_rows.map((row, index) => normalizePreviewRow("item", row, index));
   const acceptedDailyRows = dailyRows.filter((row) => row.ok).map((row) => row.value);
@@ -65,7 +87,8 @@ function previewRevenueUploadPayload(payload = {}) {
   };
 }
 
-function parsePayloadByType(payload, parserType) {
+function parsePayloadByType(payload, parserType, sourceType = "") {
+  const deliveryParser = isDeliverySourceType(parserType) || isDeliverySourceType(sourceType);
   if (Array.isArray(payload.daily_rows) || Array.isArray(payload.item_rows)) {
     return {
       daily_rows: Array.isArray(payload.daily_rows) ? payload.daily_rows : [],
@@ -92,10 +115,10 @@ function parsePayloadByType(payload, parserType) {
   const detectedColumns = rows.headers;
   const dailyMapping = buildMapping(detectedColumns, DAILY_ALIASES);
   const itemMapping = buildMapping(detectedColumns, ITEM_ALIASES);
-  const mappedRows = rows.records.map((row) => mapCsvRow(row, parserType, dailyMapping, itemMapping));
+  const mappedRows = rows.records.map((row, index) => mapCsvRow(row, parserType, dailyMapping, itemMapping, { sourceType, rowIndex: index }));
   const itemParser = parserType === "standard_item_revenue_csv"
     || parserType === "toss_style_product_orders_csv"
-    || Boolean(itemMapping.item_name);
+    || (Boolean(itemMapping.item_name) && !deliveryParser);
 
   return {
     daily_rows: itemParser ? [] : mappedRows,
@@ -148,11 +171,17 @@ function parseCsv(csvText) {
   };
 }
 
-function mapCsvRow(row, parserType, dailyMapping, itemMapping) {
+function mapCsvRow(row, parserType, dailyMapping, itemMapping, { sourceType = "", rowIndex = 0 } = {}) {
   const mapping = parserType === "standard_item_revenue_csv" || parserType === "toss_style_product_orders_csv"
     ? itemMapping
     : dailyMapping;
-  return Object.fromEntries(Object.entries(mapping).map(([field, column]) => [field, row[column]]));
+  const mapped = Object.fromEntries(Object.entries(mapping).map(([field, column]) => [field, row[column]]));
+  if (isDeliverySourceType(sourceType) || isDeliverySourceType(parserType)) {
+    mapped.channel = text(mapped.channel) || DELIVERY_CHANNEL_BY_SOURCE_TYPE[sourceType] || "delivery_provider";
+    mapped.source_file_type = text(mapped.source_file_type) || sourceType || parserType;
+    mapped.source_row_number = mapped.source_row_number || rowIndex + 1;
+  }
+  return mapped;
 }
 
 function normalizePreviewRow(kind, row, index) {
@@ -190,11 +219,17 @@ function normalizeDailyRow(row) {
     gross_sales_amount: money(row.gross_sales_amount),
     net_sales_amount: money(row.net_sales_amount),
     order_count: orderCount,
-    cancel_count: int(row.cancel_count, 0),
+    cancel_count: int(row.cancel_count ?? row.cancellation_count, 0),
+    cancellation_count: int(row.cancellation_count ?? row.cancel_count, 0),
     refund_amount: money(row.refund_amount),
     discount_amount: money(row.discount_amount),
+    delivery_fee_amount: money(row.delivery_fee_amount),
+    commission_amount: money(row.commission_amount),
+    settlement_amount: money(row.settlement_amount),
     payment_card_amount: money(row.payment_card_amount),
     payment_cash_amount: money(row.payment_cash_amount),
+    source_file_type: text(row.source_file_type) || null,
+    source_row_number: int(row.source_row_number, 0) || null,
   });
 }
 
@@ -230,10 +265,16 @@ function sanitizeRevenueRow(row) {
     "net_sales_amount",
     "order_count",
     "cancel_count",
+    "cancellation_count",
     "refund_amount",
     "discount_amount",
+    "delivery_fee_amount",
+    "commission_amount",
+    "settlement_amount",
     "payment_card_amount",
     "payment_cash_amount",
+    "source_file_type",
+    "source_row_number",
     "item_name",
     "item_category",
     "quantity",
@@ -250,10 +291,12 @@ function rejected(reasonCode, reasonMessage) {
 }
 
 function parseDate(value) {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return null;
-  }
-  return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  if (/^\d{4}\.\d{2}\.\d{2}$/.test(trimmed)) return trimmed.replace(/\./g, "-");
+  if (/^\d{8}$/.test(trimmed)) return `${trimmed.slice(0, 4)}-${trimmed.slice(4, 6)}-${trimmed.slice(6, 8)}`;
+  return null;
 }
 
 function text(value) {
@@ -261,12 +304,12 @@ function text(value) {
 }
 
 function money(value) {
-  const number = Number(value ?? 0);
+  const number = Number(String(value ?? 0).replace(/,/g, ""));
   return Number.isFinite(number) && number >= 0 ? Math.round(number * 100) / 100 : 0;
 }
 
 function int(value, fallback = 0) {
-  const number = Number(value ?? fallback);
+  const number = Number(String(value ?? fallback).replace(/,/g, ""));
   return Number.isInteger(number) ? number : Math.trunc(Number.isFinite(number) ? number : fallback);
 }
 
@@ -292,9 +335,15 @@ function detectObjectColumns(rows) {
 }
 
 function inferParserType(payload) {
-  if (payload.csv_text && payload.source_type === "toss_place_excel") return "toss_style_payments_csv";
-  if (payload.csv_text && payload.source_type === "generic_pos_csv") return "standard_daily_revenue_csv";
+  const sourceType = text(payload.source_type);
+  if (payload.csv_text && DELIVERY_SOURCE_TYPES.includes(sourceType)) return sourceType;
+  if (payload.csv_text && sourceType === "toss_place_excel") return "toss_style_payments_csv";
+  if (payload.csv_text && sourceType === "generic_pos_csv") return "standard_daily_revenue_csv";
   return payload.csv_text ? "standard_daily_revenue_csv" : "json_manual_template";
+}
+
+function isDeliverySourceType(sourceType) {
+  return DELIVERY_SOURCE_TYPES.includes(text(sourceType));
 }
 
 function normalizeColumn(value) {
@@ -302,6 +351,7 @@ function normalizeColumn(value) {
 }
 
 module.exports = {
+  DELIVERY_SOURCE_TYPES,
   previewRevenueUploadPayload,
   parseCsv,
 };

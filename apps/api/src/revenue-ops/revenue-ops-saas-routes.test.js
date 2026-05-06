@@ -43,9 +43,32 @@ test("POST /stores creates tenant, store, and owner membership for current user"
   assert.equal(created.statusCode, 201);
   assert.equal(created.value.store.store_name, "합정 샌드위치 매장");
   assert.equal(created.value.store.member_role, "owner");
+  assert.equal(created.value.context_bootstrap_hint.recommended, true);
+  assert.equal(created.value.context_bootstrap_hint.mode, "live");
+  assert.equal(created.value.context_bootstrap_hint.reason, "store_onboarding_bootstrap");
+  assert.equal(created.value.context_bootstrap_hint.prerequisites.has_address_text, true);
+  assert.equal(created.value.context_bootstrap_hint.prerequisites.has_business_category, true);
 
   const stores = await requestJson({ server, method: "GET", routePath: "/api/v1/stores", authSub: "store-owner" });
   assert.equal(stores.value.stores.some((store) => store.store_id === created.value.store.store_id), true);
+});
+
+test("POST /stores returns a non-blocking bootstrap hint when context prerequisites are missing", async () => {
+  const server = createTestServer();
+
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "store-owner-missing-context",
+    input: {
+      store_name: "주소 없는 매장",
+    },
+  });
+
+  assert.equal(created.statusCode, 201);
+  assert.equal(created.value.context_bootstrap_hint.recommended, false);
+  assert.deepEqual(created.value.context_bootstrap_hint.missing_prerequisites.sort(), ["address_text", "business_category"]);
 });
 
 test("store-scoped actions reject non-members and persist status with outcome placeholder", async () => {
@@ -191,6 +214,34 @@ test("revenue upload accepts valid rows and records rejected rows safely", async
   assert.equal(reprocess.value.job_run.status, "skipped");
 });
 
+test("delivery CSV upload parser creates normalized delivery daily rows without raw login automation", async () => {
+  const server = createTestServer();
+  const stores = await requestJson({ server, method: "GET", routePath: "/api/v1/stores", authSub: "delivery-upload-owner" });
+  const storeId = stores.value.stores[0].store_id;
+
+  const upload = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "delivery-upload-owner",
+    input: {
+      source_type: "baemin_orders_csv",
+      original_filename: "baemin_orders.csv",
+      file_type: "csv",
+      csv_text: [
+        "주문일,총 결제금액,정산금액,주문수,취소건수,배달비,중개수수료",
+        "2026.05.01,\"128,000\",\"104,000\",12,1,\"18,000\",\"6,000\"",
+      ].join("\n"),
+    },
+  });
+
+  assert.equal(upload.statusCode, 201);
+  assert.equal(upload.value.upload.source_type, "baemin_orders_csv");
+  assert.equal(upload.value.upload.accepted_count, 1);
+  assert.equal(upload.value.upload.rejected_count, 0);
+  assert.equal(upload.value.upload.metadata.xlsx_binary_supported, false);
+});
+
 test("context seed collector works without external API keys and updates pipeline meta", async () => {
   const server = createTestServer();
   const stores = await requestJson({ server, method: "GET", routePath: "/api/v1/stores", authSub: "context-owner" });
@@ -201,10 +252,12 @@ test("context seed collector works without external API keys and updates pipelin
     method: "POST",
     routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/context/collect`,
     authSub: "context-owner",
-    input: { mode: "seed" },
+    input: { mode: "seed", reason: "store_onboarding_bootstrap" },
   });
   assert.equal(collect.statusCode, 202);
   assert.equal(collect.value.collector_run.status, "completed");
+  assert.equal(collect.value.collector_run.metadata.reason, "store_onboarding_bootstrap");
+  assert.equal(collect.value.job_run.input_payload.reason, "store_onboarding_bootstrap");
 
   const context = await requestJson({
     server,
@@ -223,6 +276,7 @@ test("context seed collector works without external API keys and updates pipelin
   });
   assert.equal(meta.statusCode, 200);
   assert.ok(meta.value.pipeline_meta.latest_context_observation);
+  assert.equal(meta.value.pipeline_meta.latest_context_collection_reason, "store_onboarding_bootstrap");
   assert.equal(meta.value.pipeline_meta.data_reliability_note.includes("인과가 확정된 것"), true);
 });
 

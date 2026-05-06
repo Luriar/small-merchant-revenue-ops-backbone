@@ -12,7 +12,9 @@ const required = [
   "apps/api/src/revenue-ops/runtime-boundaries.js",
   "apps/api/src/revenue-ops/context-collectors.js",
   "apps/api/src/revenue-ops/public-context-credentials.js",
+  "apps/api/src/revenue-ops/connector-credentials.js",
   "apps/api/src/revenue-ops/connectors/toss-place-client.js",
+  "apps/api/src/revenue-ops/connectors/delivery-provider-client.js",
   "infra/db/revenue_ops_step3_4_lite.sql",
 ];
 

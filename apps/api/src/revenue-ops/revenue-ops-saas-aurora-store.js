@@ -14,14 +14,16 @@ const {
   normalizeDailyRow,
   normalizeItemRow,
   sanitizeRevenueRow,
+  prepareRevenueUploadRows,
   buildSyntheticDailyRows,
   buildSyntheticItemRows,
   text,
   safeObject,
   clone,
 } = require("./revenue-ops-saas-store");
-const { collectStorePublicContext, planStorePublicContextCollection } = require("./context-collectors");
+const { collectStorePublicContext, planStorePublicContextCollection, normalizeContextCollectionReason } = require("./context-collectors");
 const { loadPublicContextCredentials } = require("./public-context-credentials");
+const { loadRevenueConnectorCredentials } = require("./connector-credentials");
 const { previewRevenueUploadPayload } = require("./revenue-upload-parsers");
 const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
 
@@ -1177,13 +1179,14 @@ function createAuroraRevenueOpsSaasStore({
   }
 
   async function ingestRevenueUpload({ appUserId, storeId, payload = {} }) {
-    const dailyRows = Array.isArray(payload.daily_rows) ? payload.daily_rows : [];
-    const itemRows = Array.isArray(payload.item_rows) ? payload.item_rows : [];
+    const prepared = prepareRevenueUploadRows(payload);
+    const dailyRows = prepared.dailyRows;
+    const itemRows = prepared.itemRows;
     const rows = [
       ...dailyRows.map((row, index) => ({ kind: "daily", row, index })),
       ...itemRows.map((row, index) => ({ kind: "item", row, index })),
     ];
-    if (rows.length === 0) {
+    if (rows.length === 0 && prepared.rejectedRows.length === 0) {
       const err = new Error("daily_rows or item_rows is required");
       err.code = "invalid_body";
       throw err;
@@ -1204,8 +1207,8 @@ function createAuroraRevenueOpsSaasStore({
           text(payload.source_type) || "manual_template",
           text(payload.original_filename) || null,
           text(payload.file_type) || "json",
-          rows.length,
-          JSON.stringify(safeObject(payload.metadata)),
+          rows.length + prepared.rejectedRows.length,
+          JSON.stringify({ ...safeObject(payload.metadata), ...prepared.metadata }),
         ],
       );
       const upload = uploadResult.rows[0];
@@ -1261,6 +1264,20 @@ function createAuroraRevenueOpsSaasStore({
             [storeId, value.business_date, value.channel, value.item_name, value.item_category, value.quantity, value.gross_sales_amount, value.discount_amount, value.net_sales_amount, upload.upload_id],
           );
         }
+      }
+      for (const rejectedRow of prepared.rejectedRows) {
+        rejectedCount += 1;
+        const rejected = await client.query(
+          `
+            INSERT INTO revenue_upload_rejected_rows (
+              upload_id, row_number, reason_code, reason_message, raw_row_preview
+            )
+            VALUES ($1,$2,$3,$4,$5::jsonb)
+            RETURNING *
+          `,
+          [upload.upload_id, rejectedRow.row_number, rejectedRow.reason_code, rejectedRow.reason_message, JSON.stringify(sanitizeRevenueRow(rejectedRow.raw_row_preview))],
+        );
+        rejectedRows.push(rejected.rows[0]);
       }
       const status = rejectedCount === 0 ? "accepted" : acceptedCount > 0 ? "partially_accepted" : "failed";
       const updated = await client.query(
@@ -1359,13 +1376,16 @@ function createAuroraRevenueOpsSaasStore({
     }];
   }
 
-  async function collectContextForStore(storeId, { mode = "seed", collectors = null } = {}) {
+  async function collectContextForStore(storeId, { mode = "seed", collectors = null, reason: requestedReason = "manual_refresh" } = {}) {
+    const reason = normalizeContextCollectionReason(requestedReason);
     return withTransaction(async (client) => {
       const store = await getStoreWithClient(client, storeId);
       if (!store) return null;
       const storeLocation = await getStoreLocationWithClient(client, storeId);
       const latestRevenueDate = await getLatestRevenueDateWithClient(client, storeId);
-      const credentials = await loadPublicContextCredentials({ env });
+      const publicCredentials = await loadPublicContextCredentials({ env });
+      const connectorCredentials = await loadRevenueConnectorCredentials({ env });
+      const credentials = { ...publicCredentials, ...connectorCredentials };
       const collectionPlan = planStorePublicContextCollection({ mode, env, credentials, collectors });
       const job = await createJobRunWithClient(client, {
         job_type: "context_collect",
@@ -1374,11 +1394,12 @@ function createAuroraRevenueOpsSaasStore({
         store_id: storeId,
         status: "running",
         started_at: new Date(),
-        input_payload: { mode, collectors, resolved_mode: collectionPlan.resolved_mode },
+        input_payload: { mode, collectors, reason, resolved_mode: collectionPlan.resolved_mode },
       });
       const liveResult = await collectStorePublicContext({
         store,
         mode,
+        reason,
         env,
         credentials,
         storeLocation,
@@ -1410,10 +1431,15 @@ function createAuroraRevenueOpsSaasStore({
         `,
         [storeId, collectorStatus, collectorStatus === "failed" ? "One or more live collectors failed; see sanitized metadata." : null, JSON.stringify({
           mode,
+          reason,
           requested_mode: liveResult.requested_mode,
           resolved_mode: liveResult.resolved_mode,
-          credential_source: credentials.credentialSource,
-          credential_load_warning: credentials.credentialLoadWarning ?? null,
+          credential_source: publicCredentials.credentialSource,
+          credential_load_warning: publicCredentials.credentialLoadWarning ?? null,
+          connector_credential_sources: {
+            toss_place: connectorCredentials.tossPlace?.credentialSource ?? "missing",
+            delivery_provider: connectorCredentials.deliveryProvider?.credentialSource ?? "missing",
+          },
           collectors: liveResult.collectors,
           total_duration_ms: liveResult.total_duration_ms,
           global_budget_ms: liveResult.global_budget_ms,
@@ -1434,6 +1460,7 @@ function createAuroraRevenueOpsSaasStore({
         result_summary: {
           collector_run_id: collector.rows[0].collector_run_id,
           collectors: liveResult.collectors,
+          reason,
           total_duration_ms: liveResult.total_duration_ms,
           global_budget_ms: liveResult.global_budget_ms,
           seed_fallback_used: seedFallbackUsed,
@@ -1481,6 +1508,7 @@ function createAuroraRevenueOpsSaasStore({
         source_id: latestBenchmark.source_id,
       } : null,
       latest_collector_run: latestCollectorRun,
+      latest_context_collection_reason: collectorMeta.reason ?? null,
       completed_collector_count: collectorMeta.completed_collector_count ?? collectors.filter((collector) => collector.status === "completed").length,
       skipped_collector_count: collectorMeta.skipped_collector_count ?? collectors.filter((collector) => collector.status === "skipped").length,
       failed_collector_count: collectorMeta.failed_collector_count ?? collectors.filter((collector) => collector.status === "failed").length,
@@ -2089,8 +2117,8 @@ async function insertNearbyStoreSnapshotFromCollectorWithClient(client, store, s
 }
 
 function linkTypeForContextType(contextType) {
-  if (["benchmark", "competition", "foot_traffic"].includes(contextType)) return "commercial_area";
-  if (contextType === "geocoding") return "same_region";
+  if (["benchmark", "competition", "foot_traffic", "nearby_competitor_search"].includes(contextType)) return "commercial_area";
+  if (["geocoding", "weather", "calendar", "search_trend"].includes(contextType)) return "same_region";
   return "same_region";
 }
 
@@ -2253,6 +2281,7 @@ async function contextForDate(client, storeId, businessDate) {
     rain_mm: byMetric.get("rainfall_mm")?.metric_value ?? null,
     benchmark_delta_pct: byMetric.get("commercial_area_sales_delta_pct")?.metric_value ?? null,
     foot_traffic_proxy_delta_pct: byMetric.get("foot_traffic_proxy_delta_pct")?.metric_value ?? null,
+    holiday_flag: Boolean(byMetric.get("holiday_or_special_day")),
     same_category_store_count: nearby.rows[0]?.same_category_store_count ?? null,
     evidence_readiness_score: hasContext ? 0.8 : 0.45,
   };

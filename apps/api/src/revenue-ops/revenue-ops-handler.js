@@ -12,7 +12,8 @@
  *   GET  /api/v1/revenue/pipeline-meta
  */
 const { RevenueOpsHttpError, requireClaimsFromRequest } = require("./revenue-ops-auth");
-const { normalizeCollectorFilter } = require("./context-collectors");
+const { normalizeCollectorFilter, normalizeContextCollectionReason } = require("./context-collectors");
+const { buildContextBootstrapHint } = require("./revenue-ops-saas-store");
 
 function writeJson(response, status, body) {
   response.writeHead(status, {
@@ -162,7 +163,10 @@ async function handleCreateStore({ request, response, store }) {
     const appUser = await resolveAppUser({ request, store });
     const body = await readJsonBody(request);
     const created = await store.createStoreForUser(appUser.app_user_id, body);
-    return writeJson(response, 201, { store: created });
+    return writeJson(response, 201, {
+      store: created,
+      context_bootstrap_hint: buildContextBootstrapHint(created),
+    });
   } catch (error) {
     return handleStoreRouteError(response, error);
   }
@@ -313,6 +317,7 @@ async function handleCollectStoreContext({ request, response, store, storeId }) 
     if (!await ensureStoreAccess({ response, store, appUser, storeId, minimumRole: "operator" })) return undefined;
     const body = await readJsonBody(request);
     normalizeCollectorFilter(body.collectors);
+    normalizeContextCollectionReason(body.reason || "manual_refresh");
     const result = await store.collectContextForStore(storeId, body);
     return writeJson(response, 202, result);
   } catch (error) {

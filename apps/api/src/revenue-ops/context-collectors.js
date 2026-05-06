@@ -1,4 +1,6 @@
 const { createHash } = require("node:crypto");
+const { TossPlaceClient } = require("./connectors/toss-place-client");
+const { DeliveryProviderClient } = require("./connectors/delivery-provider-client");
 
 const LIVE_KEY_NAMES = [
   "KMA_SERVICE_KEY",
@@ -7,6 +9,9 @@ const LIVE_KEY_NAMES = [
   "KAKAO_REST_API_KEY",
   "NAVER_CLIENT_ID",
   "NAVER_CLIENT_SECRET",
+  "NAVER_SEARCH_TREND_CLIENT_ID",
+  "NAVER_SEARCH_TREND_CLIENT_SECRET",
+  "HOLIDAY_SERVICE_KEY",
 ];
 
 const COLLECTOR_NAMES = [
@@ -15,6 +20,17 @@ const COLLECTOR_NAMES = [
   "seoul_commercial_benchmark",
   "seoul_foot_traffic_proxy",
   "seoul_store_density_proxy",
+  "naver_local_competitor_search",
+  "naver_search_trend",
+  "korean_holiday_calendar",
+  "toss_place_connector_smoke",
+  "delivery_provider_connector_smoke",
+];
+
+const CONTEXT_COLLECTION_REASONS = [
+  "store_onboarding_bootstrap",
+  "manual_refresh",
+  "scheduled_refresh",
 ];
 
 const DEFAULT_TIMEOUTS = {
@@ -23,6 +39,11 @@ const DEFAULT_TIMEOUTS = {
   seoul_commercial_benchmark: 5000,
   seoul_foot_traffic_proxy: 5000,
   seoul_store_density_proxy: 5000,
+  naver_local_competitor_search: 5000,
+  naver_search_trend: 5000,
+  korean_holiday_calendar: 5000,
+  toss_place_connector_smoke: 5000,
+  delivery_provider_connector_smoke: 5000,
   global_budget: 20000,
 };
 
@@ -37,6 +58,18 @@ function planStorePublicContextCollection({ mode = "auto", env = process.env, cr
   const hasKma = Boolean(env.KMA_SERVICE_KEY || env.DATA_GO_KR_SERVICE_KEY || credentials?.kmaServiceKey);
   const hasSeoul = Boolean(env.SEOUL_OPEN_DATA_KEY || credentials?.seoulOpenDataKey);
   const hasKakao = Boolean(env.KAKAO_REST_API_KEY || credentials?.kakaoRestApiKey);
+  const hasNaverLocal = Boolean(
+    (env.NAVER_CLIENT_ID && env.NAVER_CLIENT_SECRET)
+    || (credentials?.naverClientId && credentials?.naverClientSecret),
+  );
+  const hasNaverTrend = Boolean(
+    ((env.NAVER_SEARCH_TREND_CLIENT_ID || env.NAVER_CLIENT_ID) && (env.NAVER_SEARCH_TREND_CLIENT_SECRET || env.NAVER_CLIENT_SECRET))
+    || (credentials?.naverSearchTrendClientId && credentials?.naverSearchTrendClientSecret)
+    || (credentials?.naverClientId && credentials?.naverClientSecret),
+  );
+  const hasHoliday = Boolean(env.HOLIDAY_SERVICE_KEY || env.DATA_GO_KR_SERVICE_KEY || env.KMA_SERVICE_KEY || credentials?.holidayServiceKey || credentials?.dataGoKrServiceKey || credentials?.kmaServiceKey);
+  const hasTossPlace = Boolean(credentials?.tossPlace?.configured || env.TOSS_PLACE_API_BASE_URL || env.TOSS_PLACE_SECRET_ID || env.TOSS_PLACE_SECRET_PATH);
+  const hasDeliveryProvider = Boolean(credentials?.deliveryProvider?.configured || env.DELIVERY_PROVIDER_KIND || env.DELIVERY_PROVIDER_SECRET_ID || env.DELIVERY_PROVIDER_SECRET_PATH);
   const resolvedMode = mode === "auto" ? (liveAvailable ? "live" : "seed") : mode;
   const plannedCollectors = [
     collectorPlan("kakao_geocoding", resolvedMode, hasKakao, "Kakao Local API"),
@@ -44,6 +77,11 @@ function planStorePublicContextCollection({ mode = "auto", env = process.env, cr
     collectorPlan("seoul_commercial_benchmark", resolvedMode, hasSeoul, "Seoul commercial district benchmark"),
     collectorPlan("seoul_foot_traffic_proxy", resolvedMode, hasSeoul, "Seoul living population/subway proxy"),
     collectorPlan("seoul_store_density_proxy", resolvedMode, hasSeoul, "Seoul store density proxy"),
+    collectorPlan("naver_local_competitor_search", resolvedMode, hasNaverLocal, "Naver Local Search"),
+    collectorPlan("naver_search_trend", resolvedMode, hasNaverTrend, "Naver DataLab"),
+    collectorPlan("korean_holiday_calendar", resolvedMode, hasHoliday, "Korean Astronomy Holiday API"),
+    connectorPlan("toss_place_connector_smoke", resolvedMode, hasTossPlace, "Toss Place connector smoke"),
+    connectorPlan("delivery_provider_connector_smoke", resolvedMode, hasDeliveryProvider, "Delivery provider connector smoke"),
   ];
   return {
     requested_mode: mode,
@@ -57,6 +95,7 @@ function planStorePublicContextCollection({ mode = "auto", env = process.env, cr
 async function collectStorePublicContext({
   store,
   mode = "auto",
+  reason = "manual_refresh",
   env = process.env,
   credentials = {},
   fetchImpl = globalThis.fetch,
@@ -65,6 +104,7 @@ async function collectStorePublicContext({
   collectors = null,
 } = {}) {
   const startedAt = Date.now();
+  const collectionReason = normalizeContextCollectionReason(reason);
   const globalBudgetMs = readPositiveInt(env.PUBLIC_CONTEXT_GLOBAL_BUDGET_MS, DEFAULT_TIMEOUTS.global_budget);
   const collectorFilter = normalizeCollectorFilter(collectors);
   const plan = planStorePublicContextCollection({ mode, env, credentials, collectors: collectorFilter });
@@ -75,12 +115,14 @@ async function collectStorePublicContext({
       source_name: collector.source,
       observation_count: 0,
       reason: "seed_mode_uses_deterministic_seed_writer",
+      collection_reason: collectionReason,
       duration_ms: 0,
       freshness: null,
       collected_at: new Date().toISOString(),
     }));
     return {
       requested_mode: mode,
+      collection_reason: collectionReason,
       resolved_mode: "seed",
       collectors: seedCollectors,
       observations: [],
@@ -137,9 +179,46 @@ async function collectStorePublicContext({
         timeoutMs: remainingTimeout(env.SEOUL_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.seoul_store_density_proxy, deadlineAt),
       })
       : null,
+    shouldRun("naver_local_competitor_search")
+      ? collectNaverLocalCompetitorSearch(store, credentials, {
+        fetchImpl,
+        timeoutMs: remainingTimeout(env.NAVER_LOCAL_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.naver_local_competitor_search, deadlineAt),
+      })
+      : null,
+    shouldRun("naver_search_trend")
+      ? collectNaverSearchTrend(store, credentials, {
+        fetchImpl,
+        env,
+        latestRevenueDate,
+        timeoutMs: remainingTimeout(env.NAVER_TREND_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.naver_search_trend, deadlineAt),
+      })
+      : null,
+    shouldRun("korean_holiday_calendar")
+      ? collectKoreanHolidayCalendar(store, credentials, {
+        fetchImpl,
+        env,
+        latestRevenueDate,
+        timeoutMs: remainingTimeout(env.HOLIDAY_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.korean_holiday_calendar, deadlineAt),
+      })
+      : null,
+    shouldRun("toss_place_connector_smoke")
+      ? collectTossPlaceConnectorSmoke(store, credentials, {
+        fetchImpl,
+        timeoutMs: remainingTimeout(env.TOSS_PLACE_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.toss_place_connector_smoke, deadlineAt),
+      })
+      : null,
+    shouldRun("delivery_provider_connector_smoke")
+      ? collectDeliveryProviderConnectorSmoke(store, credentials, {
+        fetchImpl,
+        timeoutMs: remainingTimeout(env.DELIVERY_PROVIDER_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.delivery_provider_connector_smoke, deadlineAt),
+      })
+      : null,
   ].filter(Boolean);
 
   results.push(...await Promise.all(parallelCollectors));
+  for (const collector of results) {
+    collector.collection_reason = collectionReason;
+  }
   for (const collector of results) {
     logCollectorStatus(store?.store_id, collector);
   }
@@ -149,6 +228,7 @@ async function collectStorePublicContext({
   const timedOut = results.filter((collector) => collector.reason === "request_timeout");
   return {
     requested_mode: mode,
+    collection_reason: collectionReason,
     resolved_mode: plan.resolved_mode,
     collectors: results.map(summarizeCollectorResult),
     observations: results.flatMap((collector) => collector.observations || []),
@@ -546,6 +626,236 @@ async function collectSeoulDataset({ name, sourceName, endpoint, metricName, con
   }
 }
 
+async function collectNaverLocalCompetitorSearch(store, credentials = {}, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUTS.naver_local_competitor_search } = {}) {
+  const name = "naver_local_competitor_search";
+  const startedAt = Date.now();
+  if (!credentials.naverClientId || !credentials.naverClientSecret) return withDuration(skipped(name, "Naver Local Search", "missing_key"), startedAt);
+  const query = buildNaverLocalQuery(store);
+  if (!query) return withDuration(skipped(name, "Naver Local Search", "missing_query_context"), startedAt);
+  if (typeof fetchImpl !== "function") return withDuration(skipped(name, "Naver Local Search", "fetch_unavailable"), startedAt);
+
+  const endpoint = credentials.naverLocalSearchEndpoint || "https://openapi.naver.com/v1/search/local.json";
+  const url = new URL(endpoint);
+  url.searchParams.set("query", query);
+  url.searchParams.set("display", "5");
+  const sourceRef = `naver_local_search:query_hash:${hashText(query)}:display_5`;
+
+  try {
+    const response = await fetchWithTimeout(url.toString(), {
+      fetchImpl,
+      headers: {
+        "X-Naver-Client-Id": credentials.naverClientId,
+        "X-Naver-Client-Secret": credentials.naverClientSecret,
+      },
+    }, timeoutMs, { collector_name: name, source_ref: sourceRef });
+    const body = await response.json();
+    const items = normalizeArray(body?.items).map(normalizeNaverLocalItem);
+    return withDuration(completed(name, "Naver Local Search", {
+      observations: [{
+        source_id: "naver_local_search",
+        source_name: "Naver Local Search",
+        source_type: "nearby_competitor_search",
+        provider: "naver",
+        source_url: "https://developers.naver.com/docs/serviceapi/search/local/local.md",
+        source_ref: sourceRef,
+        context_type: "nearby_competitor_search",
+        metric_name: "nearby_same_category_result_count",
+        metric_value: items.length,
+        metric_unit: "results",
+        label: "Naver Local Search에서 같은 지역·업종 점포 후보가 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.",
+        region: store.region,
+        metadata: {
+          query_hash: hashText(query),
+          result_count: items.length,
+          normalized_items: items.slice(0, 5),
+          not_proven_causality: true,
+        },
+      }],
+      nearby_store_snapshots: [{
+        snapshot_date: new Date().toISOString().slice(0, 10),
+        radius_m: 500,
+        business_category: store.business_category,
+        same_category_store_count: items.length,
+        total_store_count: items.length,
+        source_id: "naver_local_search",
+        source_name: "Naver Local Search",
+        source_type: "nearby_competitor_search",
+        provider: "naver",
+        source_url: "https://developers.naver.com/docs/serviceapi/search/local/local.md",
+        source_ref: sourceRef,
+        metadata: { query_hash: hashText(query), not_proven_causality: true },
+      }],
+      raw_summary: { item_count: items.length },
+    }), startedAt);
+  } catch (error) {
+    return withDuration(failed(name, "Naver Local Search", sanitizeErrorReason(error)), startedAt);
+  }
+}
+
+async function collectNaverSearchTrend(store, credentials = {}, {
+  fetchImpl = globalThis.fetch,
+  env = process.env,
+  latestRevenueDate = null,
+  timeoutMs = DEFAULT_TIMEOUTS.naver_search_trend,
+} = {}) {
+  const name = "naver_search_trend";
+  const startedAt = Date.now();
+  const clientId = credentials.naverSearchTrendClientId || credentials.naverClientId;
+  const clientSecret = credentials.naverSearchTrendClientSecret || credentials.naverClientSecret;
+  if (!clientId || !clientSecret) return withDuration(skipped(name, "Naver DataLab", "missing_key"), startedAt);
+  const keywords = buildNaverSearchTrendKeywords(store);
+  if (keywords.length === 0) return withDuration(skipped(name, "Naver DataLab", "missing_query_context"), startedAt);
+  if (typeof fetchImpl !== "function") return withDuration(skipped(name, "Naver DataLab", "fetch_unavailable"), startedAt);
+
+  const endpoint = credentials.naverDataLabSearchTrendEndpoint || "https://openapi.naver.com/v1/datalab/search";
+  const endDate = isoDate(latestRevenueDate || new Date());
+  const startDate = addDays(endDate, -30);
+  const body = {
+    startDate,
+    endDate,
+    timeUnit: env.NAVER_DATALAB_TIME_UNIT || "date",
+    keywordGroups: [{
+      groupName: "store_category_context",
+      keywords,
+    }],
+  };
+  const sourceRef = `naver_datalab_search:query_hash:${hashText(JSON.stringify(keywords))}:${startDate}:${endDate}`;
+
+  try {
+    const response = await fetchWithTimeout(endpoint, {
+      method: "POST",
+      fetchImpl,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Naver-Client-Id": clientId,
+        "X-Naver-Client-Secret": clientSecret,
+      },
+      body: JSON.stringify(body),
+    }, timeoutMs, { collector_name: name, source_ref: sourceRef });
+    const result = await response.json();
+    const data = normalizeArray(result?.results?.[0]?.data);
+    if (data.length === 0) return withDuration(skipped(name, "Naver DataLab", "no_result"), startedAt);
+    const latest = data[data.length - 1] || {};
+    const previous = data[data.length - 2] || {};
+    const latestRatio = numberOrNull(latest.ratio);
+    const previousRatio = numberOrNull(previous.ratio);
+    const ratioChange = latestRatio !== null && previousRatio !== null ? Math.round((latestRatio - previousRatio) * 100) / 100 : null;
+    return withDuration(completed(name, "Naver DataLab", {
+      observations: [{
+        source_id: "naver_datalab_search_trend",
+        source_name: "Naver DataLab",
+        source_type: "search_trend",
+        provider: "naver",
+        source_url: "https://developers.naver.com/docs/serviceapi/datalab/search/search.md",
+        source_ref: sourceRef,
+        context_type: "search_trend",
+        metric_name: "naver_search_ratio",
+        metric_value: latestRatio,
+        metric_unit: "relative_ratio",
+        label: "검색 관심도 지표가 매출 변동 구간과 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.",
+        observation_date: latest.period || endDate,
+        region: store.region,
+        metadata: {
+          keyword_group_hash: hashText(JSON.stringify(keywords)),
+          keyword_count: keywords.length,
+          start_date: startDate,
+          end_date: endDate,
+          ratio_change: ratioChange,
+          relative_search_trend_not_absolute_demand: true,
+          not_proven_causality: true,
+        },
+      }],
+      raw_summary: { result_count: result?.results?.length || 0, data_points: data.length },
+    }), startedAt);
+  } catch (error) {
+    return withDuration(failed(name, "Naver DataLab", sanitizeErrorReason(error)), startedAt);
+  }
+}
+
+async function collectKoreanHolidayCalendar(store, credentials = {}, {
+  fetchImpl = globalThis.fetch,
+  env = process.env,
+  latestRevenueDate = null,
+  timeoutMs = DEFAULT_TIMEOUTS.korean_holiday_calendar,
+} = {}) {
+  const name = "korean_holiday_calendar";
+  const startedAt = Date.now();
+  const serviceKey = credentials.holidayServiceKey || credentials.dataGoKrServiceKey || credentials.kmaServiceKey;
+  if (!serviceKey) return withDuration(skipped(name, "Korean Astronomy Holiday API", "missing_key"), startedAt);
+  if (typeof fetchImpl !== "function") return withDuration(skipped(name, "Korean Astronomy Holiday API", "fetch_unavailable"), startedAt);
+  const baseDate = isoDate(latestRevenueDate || new Date());
+  const { url, sourceRef } = buildHolidayRequestUrl({
+    baseUrl: credentials.holidayApiBaseUrl || env.HOLIDAY_API_BASE_URL || "https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService",
+    serviceKey,
+    date: baseDate,
+  });
+
+  try {
+    const response = await fetchWithTimeout(url, { fetchImpl }, timeoutMs, { collector_name: name, source_ref: sourceRef });
+    const bodyText = await response.text();
+    const parsed = parseHolidayResponse(bodyText);
+    if (parsed.resultCode && parsed.resultCode !== "00") {
+      return withDuration(failed(name, "Korean Astronomy Holiday API", `service_result_${parsed.resultCode}`), startedAt);
+    }
+    const observations = parsed.items.map((item) => normalizeHolidayObservation(item, store, sourceRef));
+    return withDuration(completed(name, "Korean Astronomy Holiday API", {
+      observations,
+      raw_summary: {
+        result_code: parsed.resultCode || null,
+        result_msg: parsed.resultMsg || null,
+        item_count: parsed.items.length,
+        sol_year_month: baseDate.slice(0, 7),
+      },
+    }), startedAt);
+  } catch (error) {
+    return withDuration(failed(name, "Korean Astronomy Holiday API", sanitizeErrorReason(error)), startedAt);
+  }
+}
+
+async function collectTossPlaceConnectorSmoke(store, credentials = {}, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUTS.toss_place_connector_smoke } = {}) {
+  const name = "toss_place_connector_smoke";
+  const startedAt = Date.now();
+  const tossPlace = credentials.tossPlace || {};
+  if (tossPlace.credentialLoadWarning) return withDuration(skipped(name, "Toss Place connector smoke", "secret_not_configured"), startedAt);
+  if (!tossPlace.configured) return withDuration(skipped(name, "Toss Place connector smoke", tossPlace.credentialSource === "missing" ? "secret_not_configured" : "missing_credentials"), startedAt);
+  const path = tossPlace.versionPath || tossPlace.merchantPath || tossPlace.ordersPath || tossPlace.paymentsPath;
+  if (!path) return withDuration(skipped(name, "Toss Place connector smoke", "not_configured"), startedAt);
+  const client = new TossPlaceClient({ credentials: tossPlace, fetchImpl, timeoutMs });
+  const result = await client.smoke(path);
+  const status = result.status === "completed" ? completed(name, "Toss Place connector smoke", {
+    raw_summary: {
+      status_code: result.status_code || null,
+      endpoint_ref: `toss_place:endpoint_hash:${hashText(`${tossPlace.apiBaseUrl}${path}`)}`,
+      foundation_only: true,
+    },
+  }) : result.status === "failed"
+    ? failed(name, "Toss Place connector smoke", result.reason || "connector_error")
+    : skipped(name, "Toss Place connector smoke", result.reason || "not_configured");
+  status.observation_count = 0;
+  return withDuration(status, startedAt);
+}
+
+async function collectDeliveryProviderConnectorSmoke(store, credentials = {}, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUTS.delivery_provider_connector_smoke } = {}) {
+  const name = "delivery_provider_connector_smoke";
+  const startedAt = Date.now();
+  const deliveryProvider = credentials.deliveryProvider || {};
+  if (deliveryProvider.credentialLoadWarning) return withDuration(skipped(name, "Delivery provider connector smoke", "secret_not_configured"), startedAt);
+  if (!deliveryProvider.configured) return withDuration(skipped(name, "Delivery provider connector smoke", deliveryProvider.credentialSource === "missing" ? "secret_not_configured" : "missing_credentials"), startedAt);
+  const client = new DeliveryProviderClient({ credentials: deliveryProvider, fetchImpl, timeoutMs });
+  const result = await client.smoke();
+  const status = result.status === "completed" ? completed(name, "Delivery provider connector smoke", {
+    raw_summary: {
+      provider_kind: result.provider_kind,
+      normalized_row_count: result.normalized_rows?.length || 0,
+      no_raw_login_automation: true,
+    },
+  }) : result.status === "failed"
+    ? failed(name, "Delivery provider connector smoke", result.reason || "connector_error")
+    : skipped(name, "Delivery provider connector smoke", result.reason || "not_configured");
+  status.observation_count = 0;
+  return withDuration(status, startedAt);
+}
+
 function completed(name, sourceName, payload = {}) {
   return {
     name,
@@ -598,6 +908,7 @@ function summarizeCollectorResult(result) {
     source_name: result.source_name,
     observation_count: result.observation_count || 0,
     reason: result.reason || null,
+    collection_reason: result.collection_reason || null,
     duration_ms: result.duration_ms ?? null,
     freshness: result.freshness || null,
     collected_at: result.collected_at,
@@ -607,6 +918,12 @@ function summarizeCollectorResult(result) {
 function collectorPlan(name, mode, liveAvailable, source) {
   if (mode === "seed") return { collector_name: name, status: "seed_ready", source, live_available: liveAvailable };
   if (mode === "live" && !liveAvailable) return { collector_name: name, status: "skipped_missing_key", source, live_available: false };
+  return { collector_name: name, status: "live_ready", source, live_available: true };
+}
+
+function connectorPlan(name, mode, liveAvailable, source) {
+  if (mode === "seed") return { collector_name: name, status: "seed_ready", source, live_available: liveAvailable };
+  if (mode === "live" && !liveAvailable) return { collector_name: name, status: "skipped_secret_not_configured", source, live_available: false };
   return { collector_name: name, status: "live_ready", source, live_available: true };
 }
 
@@ -729,6 +1046,16 @@ function normalizeCollectorFilter(collectors) {
   return normalized.length > 0 ? normalized : null;
 }
 
+function normalizeContextCollectionReason(reason) {
+  const normalized = String(reason || "manual_refresh").trim() || "manual_refresh";
+  if (!CONTEXT_COLLECTION_REASONS.includes(normalized)) {
+    const error = new Error(`Invalid context collection reason: ${normalized}`);
+    error.code = "invalid_body";
+    throw error;
+  }
+  return normalized;
+}
+
 function logCollectorStatus(storeId, collector) {
   const payload = {
     route: "public_context_collect",
@@ -737,6 +1064,7 @@ function logCollectorStatus(storeId, collector) {
     status: collector.status,
     duration_ms: collector.duration_ms ?? null,
     reason: collector.reason || null,
+    collection_reason: collector.collection_reason || null,
   };
   console.info(JSON.stringify(payload));
 }
@@ -780,6 +1108,148 @@ function firstDate(row, keys) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
 }
 
+function buildNaverLocalQuery(store = {}) {
+  const category = textValue(store.business_category);
+  const region = textValue(store.region) || regionFromAddress(store.address_text);
+  if (!category || !region) return null;
+  return `${region} ${category}`;
+}
+
+function buildNaverSearchTrendKeywords(store = {}) {
+  const category = textValue(store.business_category);
+  const region = textValue(store.region) || regionFromAddress(store.address_text);
+  const metadata = store.metadata && typeof store.metadata === "object" && !Array.isArray(store.metadata) ? store.metadata : {};
+  const menuKeywords = Array.isArray(metadata.representative_menu_keywords)
+    ? metadata.representative_menu_keywords.map(textValue).filter(Boolean)
+    : [];
+  const keywords = [];
+  if (region && category) keywords.push(`${region} ${category}`);
+  keywords.push(...menuKeywords);
+  if (/cafe|coffee|카페|커피/i.test(category)) {
+    keywords.push("성수 카페", "디저트 카페", "소금빵", "커피");
+  }
+  if (category) keywords.push(category);
+  return [...new Set(keywords.map((keyword) => keyword.trim()).filter(Boolean))].slice(0, 20);
+}
+
+function normalizeNaverLocalItem(item = {}) {
+  return {
+    title: stripHtml(item.title),
+    category: stripHtml(item.category),
+    address: stripHtml(item.address),
+    road_address: stripHtml(item.roadAddress || item.road_address),
+    mapx: textValue(item.mapx),
+    mapy: textValue(item.mapy),
+  };
+}
+
+function stripHtml(value) {
+  return String(value || "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .trim();
+}
+
+function buildHolidayRequestUrl({ baseUrl, serviceKey, date }) {
+  const base = String(baseUrl || "").replace(/\/+$/, "");
+  const url = new URL(base.endsWith("/getRestDeInfo") ? base : `${base}/getRestDeInfo`);
+  url.searchParams.set("ServiceKey", serviceKey);
+  url.searchParams.set("solYear", date.slice(0, 4));
+  url.searchParams.set("solMonth", date.slice(5, 7));
+  url.searchParams.set("_type", "json");
+  url.searchParams.set("numOfRows", url.searchParams.get("numOfRows") || "100");
+  url.searchParams.set("pageNo", url.searchParams.get("pageNo") || "1");
+  const sanitized = new URL(url.toString());
+  sanitized.searchParams.set("ServiceKey", "***");
+  return { url: url.toString(), sourceRef: sanitized.toString() };
+}
+
+function parseHolidayResponse(bodyText) {
+  const trimmed = String(bodyText || "").trim();
+  if (!trimmed) return { resultCode: null, resultMsg: null, items: [] };
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    const json = JSON.parse(trimmed);
+    const response = json?.response || json;
+    const items = normalizeArray(response?.body?.items?.item || response?.items?.item || response?.item || []);
+    return {
+      resultCode: textValue(response?.header?.resultCode || json?.resultCode),
+      resultMsg: textValue(response?.header?.resultMsg || json?.resultMsg),
+      items,
+    };
+  }
+  const headerCode = xmlValue(trimmed, "resultCode");
+  const headerMsg = xmlValue(trimmed, "resultMsg");
+  const itemMatches = [...trimmed.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+  return {
+    resultCode: headerCode,
+    resultMsg: headerMsg,
+    items: itemMatches.map((match) => ({
+      dateName: xmlValue(match[1], "dateName"),
+      locdate: xmlValue(match[1], "locdate"),
+      isHoliday: xmlValue(match[1], "isHoliday"),
+    })),
+  };
+}
+
+function normalizeHolidayObservation(item = {}, store = {}, sourceRef) {
+  const locdate = textValue(item.locdate);
+  const observationDate = /^\d{8}$/.test(locdate) ? `${locdate.slice(0, 4)}-${locdate.slice(4, 6)}-${locdate.slice(6, 8)}` : null;
+  const dateName = textValue(item.dateName);
+  return {
+    source_id: "korean_astronomy_holiday_api",
+    source_name: "Korean Astronomy Holiday API",
+    source_type: "calendar",
+    provider: "data_go_kr_spcdeinfo",
+    source_url: "https://www.data.go.kr/",
+    source_ref: sourceRef,
+    context_type: "calendar",
+    metric_name: "holiday_or_special_day",
+    metric_value: 1,
+    metric_unit: "flag",
+    label: "공휴일/특일 일정이 매출 변동 구간과 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.",
+    observation_date: observationDate,
+    region: store.region,
+    metadata: {
+      date_name: dateName || null,
+      is_holiday: textValue(item.isHoliday) || null,
+      locdate: locdate || null,
+      not_proven_causality: true,
+    },
+  };
+}
+
+function normalizeArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value === null || typeof value === "undefined" || value === "") return [];
+  return [value];
+}
+
+function regionFromAddress(addressText) {
+  const parts = String(addressText || "").trim().split(/\s+/).filter(Boolean);
+  return parts.slice(0, 3).join(" ");
+}
+
+function isoDate(value) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const text = String(value || "");
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  if (/^\d{8}$/.test(text)) return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addDays(value, days) {
+  const date = new Date(`${isoDate(value)}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function textValue(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
 function numberOrNull(value) {
   if (value === null || typeof value === "undefined") return null;
   const normalized = String(value).replace(/,/g, "").trim();
@@ -809,16 +1279,27 @@ function hashText(value) {
 }
 
 function hasAnyLiveCredential(credentials) {
-  return Boolean(credentials?.kakaoRestApiKey || credentials?.seoulOpenDataKey || credentials?.kmaServiceKey || credentials?.dataGoKrServiceKey);
+  return Boolean(
+    credentials?.kakaoRestApiKey
+    || credentials?.seoulOpenDataKey
+    || credentials?.kmaServiceKey
+    || credentials?.dataGoKrServiceKey
+    || (credentials?.naverClientId && credentials?.naverClientSecret)
+    || credentials?.holidayServiceKey
+    || credentials?.tossPlace?.configured
+    || credentials?.deliveryProvider?.configured
+  );
 }
 
 module.exports = {
   LIVE_KEY_NAMES,
   COLLECTOR_NAMES,
+  CONTEXT_COLLECTION_REASONS,
   DEFAULT_TIMEOUTS,
   getConfiguredContextKeys,
   planStorePublicContextCollection,
   normalizeCollectorFilter,
+  normalizeContextCollectionReason,
   fetchWithTimeout,
   collectStorePublicContext,
   geocodeStoreAddress: collectKakaoStoreLocation,
@@ -831,4 +1312,11 @@ module.exports = {
   collectSeoulCommercialBenchmark,
   collectSeoulFootTrafficProxy,
   collectSeoulStoreDensityProxy,
+  collectNaverLocalCompetitorSearch,
+  collectNaverSearchTrend,
+  collectKoreanHolidayCalendar,
+  collectTossPlaceConnectorSmoke,
+  collectDeliveryProviderConnectorSmoke,
+  buildHolidayRequestUrl,
+  parseHolidayResponse,
 };

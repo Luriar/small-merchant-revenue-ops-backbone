@@ -3,13 +3,14 @@ const { randomUUID } = require("node:crypto");
 const exportData = require("./data/revenue_ops_export.json");
 const { getJwtClaimsFromEvent, normalizeClaims } = require("./revenue-ops-auth");
 const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
-const { planStorePublicContextCollection } = require("./context-collectors");
+const { planStorePublicContextCollection, normalizeContextCollectionReason } = require("./context-collectors");
 const { previewRevenueUploadPayload } = require("./revenue-upload-parsers");
 
 const DEMO_STORE_NAME = "성수 커피음료 매장";
 const DEMO_TENANT_NAME = "Demo Merchant Tenant";
 const RELIABILITY_NOTE_KO = "이 분석은 업로드된 매출 데이터와 공개 맥락 데이터를 함께 관측한 결과입니다. 인과가 확정된 것은 아니며, 실행 전 추가 확인이 필요합니다.";
 const RELIABILITY_NOTE_EN = "This analysis combines uploaded revenue data with public context signals. It does not prove causality and should be reviewed before execution.";
+const BOOTSTRAP_REASON = "store_onboarding_bootstrap";
 
 const ROLE_RANK = {
   viewer: 1,
@@ -786,6 +787,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     const latestContext = latestBy(state.contextObservations.filter((row) => row.store_id === storeId), "fetched_at");
     const latestBenchmark = latestBy(state.publicBenchmarks, "fetched_at");
     const latestCollectorRun = latestBy(state.collectorRuns.filter((row) => row.target_store_id === storeId), "created_at");
+    const latestCollectorMetadata = safeObject(latestCollectorRun?.metadata);
     const latestMartBuild = latestBy(state.martBuildRuns.filter((row) => row.store_id === storeId), "created_at");
 
     return clone({
@@ -798,6 +800,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         source_id: latestBenchmark.source_id,
       } : null,
       latest_collector_run: latestCollectorRun,
+      latest_context_collection_reason: latestCollectorMetadata.reason ?? null,
       latest_mart_build: latestMartBuild,
       context_freshness_note: latestContext
         ? "공개 맥락 데이터가 함께 관측되었습니다. 인과가 확정된 것은 아닙니다."
@@ -927,13 +930,14 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   }
 
   function ingestRevenueUpload({ appUserId, storeId, payload = {} }) {
-    const dailyRows = Array.isArray(payload.daily_rows) ? payload.daily_rows : [];
-    const itemRows = Array.isArray(payload.item_rows) ? payload.item_rows : [];
+    const prepared = prepareRevenueUploadRows(payload);
+    const dailyRows = prepared.dailyRows;
+    const itemRows = prepared.itemRows;
     const rows = [
       ...dailyRows.map((row, index) => ({ kind: "daily", row, index })),
       ...itemRows.map((row, index) => ({ kind: "item", row, index })),
     ];
-    if (rows.length === 0) {
+    if (rows.length === 0 && prepared.rejectedRows.length === 0) {
       const err = new Error("daily_rows or item_rows is required");
       err.code = "invalid_body";
       throw err;
@@ -948,10 +952,10 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       original_filename: text(payload.original_filename) || null,
       file_type: text(payload.file_type) || "json",
       status: "uploaded",
-      row_count: rows.length,
+      row_count: rows.length + prepared.rejectedRows.length,
       accepted_count: 0,
       rejected_count: 0,
-      metadata: safeObject(payload.metadata),
+      metadata: { ...safeObject(payload.metadata), ...prepared.metadata },
       created_at: timestamp,
       updated_at: timestamp,
     };
@@ -1002,6 +1006,19 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
           updated_at: timestamp,
         });
       }
+    }
+
+    for (const rejectedRow of prepared.rejectedRows) {
+      upload.rejected_count += 1;
+      state.rejectedRows.push({
+        rejected_row_id: state.rejectedRows.length + 1,
+        upload_id: upload.upload_id,
+        row_number: rejectedRow.row_number,
+        reason_code: rejectedRow.reason_code,
+        reason_message: rejectedRow.reason_message,
+        raw_row_preview: sanitizeRevenueRow(rejectedRow.raw_row_preview),
+        created_at: timestamp,
+      });
     }
 
     upload.status = upload.rejected_count === 0
@@ -1075,8 +1092,9 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     return clone({ job_run: jobRun, upload });
   }
 
-  function collectContextForStore(storeId, { mode = "seed", collectors = null } = {}) {
+  function collectContextForStore(storeId, { mode = "seed", collectors = null, reason: requestedReason = "manual_refresh" } = {}) {
     const timestamp = nowIso();
+    const reason = normalizeContextCollectionReason(requestedReason);
     const collectionPlan = planStorePublicContextCollection({ mode, collectors });
     const collectorResults = collectionPlan.collectors.map((collector) => ({
       name: collector.collector_name,
@@ -1084,6 +1102,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       source_name: collector.source,
       observation_count: 0,
       reason: "memory_store_uses_seed_context",
+      collection_reason: reason,
       duration_ms: 0,
       freshness: null,
       collected_at: timestamp,
@@ -1095,7 +1114,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       store_id: storeId,
       status: "running",
       started_at: timestamp,
-      input_payload: { mode, collectors, resolved_mode: collectionPlan.resolved_mode },
+      input_payload: { mode, collectors, reason, resolved_mode: collectionPlan.resolved_mode },
     });
     seedContextForStore(storeId, timestamp);
     const run = {
@@ -1108,6 +1127,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       error_message: null,
       metadata: {
         mode,
+        reason,
         resolved_mode: collectionPlan.resolved_mode,
         collectors: collectorResults,
         total_duration_ms: 0,
@@ -1376,11 +1396,17 @@ function normalizeDailyRow(row) {
     gross_sales_amount: money(row.gross_sales_amount),
     net_sales_amount: money(row.net_sales_amount),
     order_count: orderCount,
-    cancel_count: int(row.cancel_count, 0),
+    cancel_count: int(row.cancel_count ?? row.cancellation_count, 0),
+    cancellation_count: int(row.cancellation_count ?? row.cancel_count, 0),
     refund_amount: money(row.refund_amount),
     discount_amount: money(row.discount_amount),
+    delivery_fee_amount: money(row.delivery_fee_amount),
+    commission_amount: money(row.commission_amount),
+    settlement_amount: money(row.settlement_amount),
     payment_card_amount: money(row.payment_card_amount),
     payment_cash_amount: money(row.payment_cash_amount),
+    source_file_type: text(row.source_file_type) || null,
+    source_row_number: int(row.source_row_number, 0) || null,
   });
 }
 
@@ -1516,10 +1542,16 @@ function sanitizeRevenueRow(row) {
     "net_sales_amount",
     "order_count",
     "cancel_count",
+    "cancellation_count",
     "refund_amount",
     "discount_amount",
+    "delivery_fee_amount",
+    "commission_amount",
+    "settlement_amount",
     "payment_card_amount",
     "payment_cash_amount",
+    "source_file_type",
+    "source_row_number",
     "item_name",
     "item_category",
     "quantity",
@@ -1533,6 +1565,52 @@ function accepted(value) {
 
 function rejected(reasonCode, reasonMessage) {
   return { ok: false, reason_code: reasonCode, reason_message: reasonMessage };
+}
+
+function prepareRevenueUploadRows(payload = {}) {
+  const hasExplicitRows = Array.isArray(payload.daily_rows) || Array.isArray(payload.item_rows);
+  if (hasExplicitRows) {
+    return {
+      dailyRows: Array.isArray(payload.daily_rows) ? payload.daily_rows : [],
+      itemRows: Array.isArray(payload.item_rows) ? payload.item_rows : [],
+      rejectedRows: [],
+      metadata: {},
+    };
+  }
+  const preview = previewRevenueUploadPayload(payload);
+  return {
+    dailyRows: preview.daily_rows,
+    itemRows: preview.item_rows,
+    rejectedRows: preview.rejected_rows,
+    metadata: {
+      parser_type: preview.parser_type,
+      parser_source_type: preview.source_type,
+      detected_columns: preview.detected_columns,
+      proposed_mapping: preview.proposed_mapping,
+      xlsx_binary_supported: false,
+    },
+  };
+}
+
+function buildContextBootstrapHint(store = {}) {
+  const hasAddressText = Boolean(text(store.address_text));
+  const hasBusinessCategory = Boolean(text(store.business_category));
+  const missing = [];
+  if (!hasAddressText) missing.push("address_text");
+  if (!hasBusinessCategory) missing.push("business_category");
+  return {
+    recommended: missing.length === 0,
+    mode: "live",
+    reason: BOOTSTRAP_REASON,
+    prerequisites: {
+      has_address_text: hasAddressText,
+      has_business_category: hasBusinessCategory,
+    },
+    missing_prerequisites: missing,
+    note: missing.length === 0
+      ? "현재 수집된 데이터만으로 초기 분석을 시작할 수 있습니다."
+      : "주소와 업종이 보강되면 자동 맥락데이터 수집을 권장합니다.",
+  };
 }
 
 function latestBy(rows, key) {
@@ -1569,12 +1647,12 @@ function text(value) {
 }
 
 function money(value) {
-  const number = Number(value ?? 0);
+  const number = Number(String(value ?? 0).replace(/,/g, ""));
   return Number.isFinite(number) && number >= 0 ? Math.round(number * 100) / 100 : 0;
 }
 
 function int(value, fallback = 0) {
-  const number = Number(value ?? fallback);
+  const number = Number(String(value ?? fallback).replace(/,/g, ""));
   return Number.isInteger(number) ? number : Math.trunc(Number.isFinite(number) ? number : fallback);
 }
 
@@ -1603,6 +1681,9 @@ module.exports = {
   DEMO_TENANT_NAME,
   RELIABILITY_NOTE_KO,
   RELIABILITY_NOTE_EN,
+  BOOTSTRAP_REASON,
+  buildContextBootstrapHint,
+  prepareRevenueUploadRows,
   normalizeDailyRow,
   normalizeItemRow,
   sanitizeRevenueRow,

@@ -2,7 +2,15 @@ const { SecretsManagerClient, GetSecretValueCommand } = require("@aws-sdk/client
 
 const DIRECT_ENV_KEYS = [
   "KAKAO_REST_API_KEY",
+  "NAVER_CLIENT_ID",
+  "NAVER_CLIENT_SECRET",
+  "NAVER_SEARCH_TREND_CLIENT_ID",
+  "NAVER_SEARCH_TREND_CLIENT_SECRET",
+  "NAVER_LOCAL_SEARCH_ENDPOINT",
+  "NAVER_DATALAB_SEARCH_TREND_ENDPOINT",
   "SEOUL_OPEN_DATA_KEY",
+  "HOLIDAY_SERVICE_KEY",
+  "HOLIDAY_API_BASE_URL",
   "DATA_GO_KR_SERVICE_KEY",
   "KMA_SERVICE_KEY",
   "KMA_API_BASE_URL",
@@ -61,11 +69,22 @@ async function loadPublicContextCredentialsFromSecretsManager(secretId, options 
 
 function normalizePublicContextCredentials(source = {}, credentialSource = "missing") {
   const dataGoKrServiceKey = trimToNull(source.DATA_GO_KR_SERVICE_KEY);
+  const kmaServiceKey = trimToNull(source.KMA_SERVICE_KEY) || dataGoKrServiceKey;
+  const naverClientId = trimToNull(source.NAVER_CLIENT_ID);
+  const naverClientSecret = trimToNull(source.NAVER_CLIENT_SECRET);
   return {
     kakaoRestApiKey: trimToNull(source.KAKAO_REST_API_KEY),
+    naverClientId,
+    naverClientSecret,
+    naverSearchTrendClientId: trimToNull(source.NAVER_SEARCH_TREND_CLIENT_ID) || naverClientId,
+    naverSearchTrendClientSecret: trimToNull(source.NAVER_SEARCH_TREND_CLIENT_SECRET) || naverClientSecret,
+    naverLocalSearchEndpoint: trimToNull(source.NAVER_LOCAL_SEARCH_ENDPOINT) || "https://openapi.naver.com/v1/search/local.json",
+    naverDataLabSearchTrendEndpoint: trimToNull(source.NAVER_DATALAB_SEARCH_TREND_ENDPOINT) || "https://openapi.naver.com/v1/datalab/search",
     seoulOpenDataKey: trimToNull(source.SEOUL_OPEN_DATA_KEY),
     dataGoKrServiceKey,
-    kmaServiceKey: trimToNull(source.KMA_SERVICE_KEY) || dataGoKrServiceKey,
+    holidayServiceKey: trimToNull(source.HOLIDAY_SERVICE_KEY) || dataGoKrServiceKey || kmaServiceKey,
+    holidayApiBaseUrl: trimToNull(source.HOLIDAY_API_BASE_URL) || "https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService",
+    kmaServiceKey,
     kmaApiBaseUrl: trimToNull(source.KMA_API_BASE_URL),
     kmaForecastEndpoint: trimToNull(source.KMA_FORECAST_ENDPOINT),
     kmaNowcastEndpoint: trimToNull(source.KMA_NOWCAST_ENDPOINT),
