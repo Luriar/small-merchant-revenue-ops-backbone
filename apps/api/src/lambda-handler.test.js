@@ -42,7 +42,8 @@ test("Lambda adapter returns CORS preflight for Revenue Ops routes", async () =>
 
   assert.equal(response.statusCode, 204);
   assert.equal(response.headers["access-control-allow-origin"], "*");
-  assert.equal(response.headers["access-control-allow-methods"], "GET,PATCH");
+  assert.equal(response.headers["access-control-allow-methods"], "GET,POST,PATCH,OPTIONS");
+  assert.equal(response.headers["access-control-allow-headers"], "authorization,content-type");
 });
 
 function createHttpApiEvent({ method, rawPath, body }) {

@@ -1,0 +1,15 @@
+{
+  "synthetic_notice": "This is not real individual store revenue. It is realistic synthetic POS data calibrated by public commercial-district benchmark assumptions.",
+  "actions": [
+    {
+      "action_family": "rainy_day_delivery_boost",
+      "title": "비 오는 날 배달/포장 세트 메뉴를 테스트하세요",
+      "caution": "효과가 보장되지 않으며 인과가 확정된 것은 아닙니다."
+    },
+    {
+      "action_family": "bundle_attach_rate_recovery",
+      "title": "커피+디저트 세트 구성을 테스트하세요",
+      "caution": "추가 확인이 필요합니다."
+    }
+  ]
+}

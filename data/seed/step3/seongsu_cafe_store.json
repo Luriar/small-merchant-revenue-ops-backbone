@@ -1,0 +1,14 @@
+{
+  "store_name": "성수 커피음료 매장",
+  "tenant_name": "Demo Merchant Tenant",
+  "business_category": "cafe",
+  "region": "Seoul Seongsu",
+  "address_text": "서울 성동구 성수동 일대",
+  "timezone": "Asia/Seoul",
+  "synthetic_notice": "This is not real individual store revenue. It is realistic synthetic POS data calibrated by public commercial-district benchmark assumptions.",
+  "location_seed": {
+    "latitude": 37.5446,
+    "longitude": 127.0557,
+    "exact_location_claim": false
+  }
+}

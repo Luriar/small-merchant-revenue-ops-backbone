@@ -2,6 +2,7 @@ const { EventEmitter } = require("node:events");
 const { Readable } = require("node:stream");
 
 const { createRevenueOpsStore } = require("./revenue-ops/revenue-ops-store");
+const { createRevenueOpsSaasStore } = require("./revenue-ops/revenue-ops-saas-store");
 const { createOptionalAuroraActionStatusStoreFromEnv } = require("./revenue-ops/aurora-action-status-store");
 const {
   handleGetBriefs,
@@ -12,19 +13,34 @@ const {
   handleUpdateActionStatus,
   handleGetContext,
   handleGetPipelineMeta,
+  handleGetMe,
+  handleListStores,
+  handleCreateStore,
+  handleGetStoreBriefs,
+  handleGetStoreAnomalies,
+  handleGetStoreActions,
+  handleUpdateStoreActionStatus,
+  handleGetStoreContext,
+  handleGetStorePipelineMeta,
+  handleListRevenueUploads,
+  handleCreateRevenueUpload,
+  handleCollectStoreContext,
+  handleGetStoreCauseCandidates,
+  handleGetStoreCauseCandidate,
 } = require("./revenue-ops/revenue-ops-handler");
 const { handleGetAuroraHealth } = require("./revenue-ops/aurora-health");
 
 const revenueOpsStore = createRevenueOpsStore({
   actionStatusPersistence: createOptionalAuroraActionStatusStoreFromEnv(),
 });
+const revenueOpsSaasStore = createRevenueOpsSaasStore();
 
 async function handler(event) {
   const request = createRequestFromApiGatewayEvent(event);
   const response = new LambdaResponse();
 
   try {
-    await dispatchRevenueRequest({ request, response, store: revenueOpsStore });
+    await dispatchRevenueRequest({ request, response, store: revenueOpsStore, saasStore: revenueOpsSaasStore });
   } catch {
     response.writeHead(500, {
       "content-type": "application/json; charset=utf-8",
@@ -36,14 +52,80 @@ async function handler(event) {
   return response.toLambdaResult();
 }
 
-async function dispatchRevenueRequest({ request, response, store }) {
-  if (request.method === "OPTIONS" && request.url.startsWith("/api/v1/revenue")) {
+async function dispatchRevenueRequest({ request, response, store, saasStore = revenueOpsSaasStore }) {
+  if (request.method === "OPTIONS" && (request.url.startsWith("/api/v1/revenue") || request.url.startsWith("/api/v1/stores") || request.url.startsWith("/api/v1/me"))) {
     response.writeHead(204, {
       "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET,PATCH",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
+      "access-control-allow-headers": "authorization,content-type",
     });
     return response.end();
+  }
+
+  if (request.method === "GET" && /^\/api\/v1\/me(?:\?.*)?$/.test(request.url)) {
+    return handleGetMe({ request, response, store: saasStore });
+  }
+
+  if (request.method === "GET" && /^\/api\/v1\/stores(?:\?.*)?$/.test(request.url)) {
+    return handleListStores({ request, response, store: saasStore });
+  }
+
+  if (request.method === "POST" && /^\/api\/v1\/stores(?:\?.*)?$/.test(request.url)) {
+    return handleCreateStore({ request, response, store: saasStore });
+  }
+
+  const storeScopedMatch = request.url.match(/^\/api\/v1\/stores\/([^/?]+)\/(.+?)(?:\?.*)?$/);
+  if (storeScopedMatch) {
+    const storeId = decodeURIComponent(storeScopedMatch[1]);
+    const rest = storeScopedMatch[2];
+
+    if (request.method === "GET" && rest === "briefs") {
+      return handleGetStoreBriefs({ request, response, store: saasStore, storeId });
+    }
+    if (request.method === "GET" && rest === "anomalies") {
+      return handleGetStoreAnomalies({ request, response, store: saasStore, storeId });
+    }
+    if (request.method === "GET" && rest === "actions") {
+      return handleGetStoreActions({ request, response, store: saasStore, storeId });
+    }
+    const storeActionStatusMatch = request.method === "PATCH" ? rest.match(/^actions\/([^/?]+)\/status$/) : null;
+    if (storeActionStatusMatch) {
+      return handleUpdateStoreActionStatus({
+        request,
+        response,
+        store: saasStore,
+        storeId,
+        actionId: decodeURIComponent(storeActionStatusMatch[1]),
+      });
+    }
+    if (request.method === "GET" && rest === "context") {
+      return handleGetStoreContext({ request, response, store: saasStore, storeId });
+    }
+    if (request.method === "POST" && rest === "context/collect") {
+      return handleCollectStoreContext({ request, response, store: saasStore, storeId });
+    }
+    if (request.method === "GET" && rest === "pipeline-meta") {
+      return handleGetStorePipelineMeta({ request, response, store: saasStore, storeId });
+    }
+    if (request.method === "GET" && rest === "revenue/uploads") {
+      return handleListRevenueUploads({ request, response, store: saasStore, storeId });
+    }
+    if (request.method === "POST" && rest === "revenue/uploads") {
+      return handleCreateRevenueUpload({ request, response, store: saasStore, storeId });
+    }
+    if (request.method === "GET" && rest === "cause-candidates") {
+      return handleGetStoreCauseCandidates({ request, response, store: saasStore, storeId });
+    }
+    const causeCandidateMatch = request.method === "GET" ? rest.match(/^cause-candidates\/([^/?]+)$/) : null;
+    if (causeCandidateMatch) {
+      return handleGetStoreCauseCandidate({
+        request,
+        response,
+        store: saasStore,
+        storeId,
+        causeCandidateId: decodeURIComponent(causeCandidateMatch[1]),
+      });
+    }
   }
 
   if (request.method === "GET" && /^\/api\/v1\/revenue\/health\/aurora(?:\?.*)?$/.test(request.url)) {
@@ -115,6 +197,10 @@ function createRequestFromApiGatewayEvent(event) {
   request.method = method;
   request.url = `${rawPath}${rawQueryString}`;
   request.headers = normalizeHeaders(event?.headers ?? {});
+  request.apiGatewayEvent = event;
+  request.authClaims = event?.requestContext?.authorizer?.jwt?.claims
+    ?? event?.requestContext?.authorizer?.claims
+    ?? null;
   return request;
 }
 

@@ -22,6 +22,7 @@ const { handleTraceCreate, handleTraceDetail, handleTraceEvidences, handleTraceL
 const { createTraceStoreFromEnv } = require("./trace-store-factory");
 const { createCdcRecoveryRouteDispatcher } = require("./cdc-recovery/cdc-recovery-routes");
 const { createRevenueOpsStore } = require("./revenue-ops/revenue-ops-store");
+const { createRevenueOpsSaasStore } = require("./revenue-ops/revenue-ops-saas-store");
 const { createOptionalAuroraActionStatusStoreFromEnv } = require("./revenue-ops/aurora-action-status-store");
 const {
   handleGetBriefs,
@@ -32,10 +33,25 @@ const {
   handleUpdateActionStatus,
   handleGetContext,
   handleGetPipelineMeta,
+  handleGetMe,
+  handleListStores,
+  handleCreateStore,
+  handleGetStoreBriefs,
+  handleGetStoreAnomalies,
+  handleGetStoreActions,
+  handleUpdateStoreActionStatus,
+  handleGetStoreContext,
+  handleGetStorePipelineMeta,
+  handleListRevenueUploads,
+  handleCreateRevenueUpload,
+  handleCollectStoreContext,
+  handleGetStoreCauseCandidates,
+  handleGetStoreCauseCandidate,
 } = require("./revenue-ops/revenue-ops-handler");
 const { handleGetAuroraHealth } = require("./revenue-ops/aurora-health");
 
 const _revenueOpsStore = createRevenueOpsStore();
+const _revenueOpsSaasStore = createRevenueOpsSaasStore();
 
 function createLogger() {
   return {
@@ -54,6 +70,7 @@ function createServer({
   traceStore,
   cdcRecoveryRoutes,
   revenueOpsStore,
+  revenueOpsSaasStore,
   readPathSkeleton = false,
   logger = createLogger(),
   metrics = createNoopMetricsEmitter(),
@@ -76,6 +93,7 @@ function createServer({
     authConfig: startupConfig.authConfig,
   });
   const resolvedRevenueOpsStore = revenueOpsStore ?? _revenueOpsStore;
+  const resolvedRevenueOpsSaasStore = revenueOpsSaasStore ?? _revenueOpsSaasStore;
 
   return http.createServer((request, response) => {
     const requestContext = attachRequestContext({ request, response, logger, metrics });
@@ -92,6 +110,7 @@ function createServer({
         traceStore: resolvedTraceStore,
         cdcRecoveryRoutes: resolvedCdcRecoveryRoutes,
         revenueOpsStore: resolvedRevenueOpsStore,
+        revenueOpsSaasStore: resolvedRevenueOpsSaasStore,
         startupConfig,
         useReadPathSkeleton,
         metrics,
@@ -113,6 +132,7 @@ function dispatchRequest({
   traceStore,
   cdcRecoveryRoutes,
   revenueOpsStore,
+  revenueOpsSaasStore,
   startupConfig,
   useReadPathSkeleton,
   metrics,
@@ -356,9 +376,75 @@ function dispatchRequest({
       });
     }
 
-    if (request.method === "OPTIONS" && request.url.startsWith("/api/v1/revenue")) {
-      response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,PATCH", "access-control-allow-headers": "content-type" });
+    if (request.method === "OPTIONS" && (request.url.startsWith("/api/v1/revenue") || request.url.startsWith("/api/v1/stores") || request.url.startsWith("/api/v1/me"))) {
+      response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,PATCH,OPTIONS", "access-control-allow-headers": "authorization,content-type" });
       return response.end();
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/me(?:\?.*)?$/.test(request.url)) {
+      return handleGetMe({ request, response, store: revenueOpsSaasStore });
+    }
+
+    if (request.method === "GET" && /^\/api\/v1\/stores(?:\?.*)?$/.test(request.url)) {
+      return handleListStores({ request, response, store: revenueOpsSaasStore });
+    }
+
+    if (request.method === "POST" && /^\/api\/v1\/stores(?:\?.*)?$/.test(request.url)) {
+      return handleCreateStore({ request, response, store: revenueOpsSaasStore });
+    }
+
+    const storeScopedMatch = request.url.match(/^\/api\/v1\/stores\/([^/?]+)\/(.+?)(?:\?.*)?$/);
+    if (storeScopedMatch) {
+      const storeId = decodeURIComponent(storeScopedMatch[1]);
+      const rest = storeScopedMatch[2];
+
+      if (request.method === "GET" && rest === "briefs") {
+        return handleGetStoreBriefs({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      if (request.method === "GET" && rest === "anomalies") {
+        return handleGetStoreAnomalies({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      if (request.method === "GET" && rest === "actions") {
+        return handleGetStoreActions({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      const storeActionStatusMatch = request.method === "PATCH" ? rest.match(/^actions\/([^/?]+)\/status$/) : null;
+      if (storeActionStatusMatch) {
+        return handleUpdateStoreActionStatus({
+          request,
+          response,
+          store: revenueOpsSaasStore,
+          storeId,
+          actionId: decodeURIComponent(storeActionStatusMatch[1]),
+        });
+      }
+      if (request.method === "GET" && rest === "context") {
+        return handleGetStoreContext({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      if (request.method === "POST" && rest === "context/collect") {
+        return handleCollectStoreContext({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      if (request.method === "GET" && rest === "pipeline-meta") {
+        return handleGetStorePipelineMeta({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      if (request.method === "GET" && rest === "revenue/uploads") {
+        return handleListRevenueUploads({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      if (request.method === "POST" && rest === "revenue/uploads") {
+        return handleCreateRevenueUpload({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      if (request.method === "GET" && rest === "cause-candidates") {
+        return handleGetStoreCauseCandidates({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      const causeCandidateMatch = request.method === "GET" ? rest.match(/^cause-candidates\/([^/?]+)$/) : null;
+      if (causeCandidateMatch) {
+        return handleGetStoreCauseCandidate({
+          request,
+          response,
+          store: revenueOpsSaasStore,
+          storeId,
+          causeCandidateId: decodeURIComponent(causeCandidateMatch[1]),
+        });
+      }
     }
 
     if (request.method === "GET" && /^\/api\/v1\/revenue\/health\/aurora(?:\?.*)?$/.test(request.url)) {

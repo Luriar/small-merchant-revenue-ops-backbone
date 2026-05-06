@@ -1,0 +1,1187 @@
+const { randomUUID } = require("node:crypto");
+
+const exportData = require("./data/revenue_ops_export.json");
+const { normalizeClaims } = require("./revenue-ops-auth");
+const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
+
+const DEMO_STORE_NAME = "성수 커피음료 매장";
+const DEMO_TENANT_NAME = "Demo Merchant Tenant";
+const RELIABILITY_NOTE_KO = "이 분석은 업로드된 매출 데이터와 공개 맥락 데이터를 함께 관측한 결과입니다. 인과가 확정된 것은 아니며, 실행 전 추가 확인이 필요합니다.";
+const RELIABILITY_NOTE_EN = "This analysis combines uploaded revenue data with public context signals. It does not prove causality and should be reviewed before execution.";
+
+const ROLE_RANK = {
+  viewer: 1,
+  operator: 2,
+  admin: 3,
+  owner: 4,
+};
+
+function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date() } = {}) {
+  const state = {
+    users: new Map(),
+    tenants: new Map(),
+    tenantMembers: [],
+    stores: new Map(),
+    storeMembers: [],
+    briefs: [],
+    anomalies: [],
+    actions: [],
+    contexts: [],
+    uploads: [],
+    rawRows: [],
+    rejectedRows: [],
+    dailyFacts: [],
+    itemFacts: [],
+    contextSources: new Map(),
+    contextObservations: [],
+    publicBenchmarks: [],
+    contextLinks: [],
+    storeLocations: new Map(),
+    commercialAreaMappings: [],
+    nearbyStoreSnapshots: [],
+    collectorRuns: [],
+    causeCandidates: [],
+    causeEvidence: [],
+    outcomes: [],
+  };
+
+  function nowIso() {
+    return clock().toISOString();
+  }
+
+  function newId(prefix) {
+    return `${prefix}_${randomUUID()}`;
+  }
+
+  function resolveAppUserFromJwtClaims(claims) {
+    const normalized = normalizeClaims(claims);
+    const existing = state.users.get(normalized.cognito_sub);
+    const timestamp = nowIso();
+
+    if (existing) {
+      existing.email = normalized.email ?? existing.email;
+      existing.display_name = normalized.display_name ?? existing.display_name;
+      existing.last_login_at = timestamp;
+      existing.updated_at = timestamp;
+      return clone(existing);
+    }
+
+    const user = {
+      app_user_id: newId("usr"),
+      cognito_sub: normalized.cognito_sub,
+      email: normalized.email,
+      display_name: normalized.display_name,
+      status: "active",
+      last_login_at: timestamp,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    state.users.set(user.cognito_sub, user);
+    return clone(user);
+  }
+
+  function requireStoreAccess(appUserId, storeId, minimumRole = "viewer") {
+    const member = state.storeMembers.find((item) => (
+      item.store_id === storeId
+      && item.app_user_id === appUserId
+      && item.status === "active"
+    ));
+
+    if (!member) {
+      return null;
+    }
+
+    if ((ROLE_RANK[member.role] ?? 0) < (ROLE_RANK[minimumRole] ?? 0)) {
+      return null;
+    }
+
+    return clone(member);
+  }
+
+  function listStoresForUser(appUserId) {
+    let stores = listActiveStoresForUser(appUserId);
+    if (stores.length === 0) {
+      seedDemoStoreForUser(appUserId);
+      stores = listActiveStoresForUser(appUserId);
+    }
+    return stores;
+  }
+
+  function listActiveStoresForUser(appUserId) {
+    return state.storeMembers
+      .filter((member) => member.app_user_id === appUserId && member.status === "active")
+      .map((member) => {
+        const store = state.stores.get(member.store_id);
+        if (!store || store.status !== "active") {
+          return null;
+        }
+        const tenant = state.tenants.get(store.tenant_id);
+        return {
+          ...clone(store),
+          member_role: member.role,
+          tenant_name: tenant?.tenant_name ?? null,
+          tenant_type: tenant?.tenant_type ?? null,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }
+
+  function createStoreForUser(appUserId, payload = {}) {
+    const storeName = text(payload.store_name);
+    if (!storeName) {
+      const err = new Error("store_name is required");
+      err.code = "invalid_body";
+      throw err;
+    }
+
+    const timestamp = nowIso();
+    const tenant = {
+      tenant_id: newId("ten"),
+      tenant_name: text(payload.tenant_name) || `${storeName} Tenant`,
+      tenant_type: text(payload.tenant_type) || "merchant",
+      status: "active",
+      created_by: appUserId,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    const store = {
+      store_id: newId("store"),
+      tenant_id: tenant.tenant_id,
+      store_name: storeName,
+      store_type: text(payload.store_type) || "single_store",
+      business_category: text(payload.business_category) || null,
+      region: text(payload.region) || null,
+      address_text: text(payload.address_text) || null,
+      timezone: text(payload.timezone) || "Asia/Seoul",
+      status: "active",
+      metadata: safeObject(payload.metadata),
+      created_by: appUserId,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+
+    state.tenants.set(tenant.tenant_id, tenant);
+    state.stores.set(store.store_id, store);
+    state.tenantMembers.push({
+      tenant_id: tenant.tenant_id,
+      app_user_id: appUserId,
+      role: "owner",
+      status: "active",
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+    state.storeMembers.push({
+      store_id: store.store_id,
+      app_user_id: appUserId,
+      role: "owner",
+      status: "active",
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+
+    seedStoreScaffold(store);
+    return clone({
+      ...store,
+      member_role: "owner",
+      tenant_name: tenant.tenant_name,
+      tenant_type: tenant.tenant_type,
+    });
+  }
+
+  function seedDemoStoreForUser(appUserId) {
+    const existing = state.storeMembers
+      .filter((member) => member.app_user_id === appUserId)
+      .map((member) => state.stores.get(member.store_id))
+      .find((store) => store?.store_type === "demo" && store?.store_name === DEMO_STORE_NAME);
+
+    if (existing) {
+      return existing;
+    }
+
+    const store = createStoreForUser(appUserId, {
+      tenant_name: DEMO_TENANT_NAME,
+      tenant_type: "demo",
+      store_name: DEMO_STORE_NAME,
+      store_type: "demo",
+      business_category: "cafe",
+      region: "Seoul Seongsu",
+      address_text: "서울 성동구 성수동 일대",
+      timezone: "Asia/Seoul",
+      metadata: {
+        synthetic_notice: "Realistic synthetic POS data calibrated by public commercial-district benchmark assumptions. Not real individual store revenue.",
+      },
+    });
+    seedStoreContent(store.store_id);
+    return state.stores.get(store.store_id);
+  }
+
+  function seedStoreScaffold(store) {
+    if (!state.storeLocations.has(store.store_id)) {
+      const timestamp = nowIso();
+      state.storeLocations.set(store.store_id, {
+        store_id: store.store_id,
+        address_text: store.address_text,
+        latitude: store.store_type === "demo" ? 37.5446 : null,
+        longitude: store.store_type === "demo" ? 127.0557 : null,
+        region: store.region,
+        administrative_dong: store.store_type === "demo" ? "Seongsu-dong" : null,
+        legal_dong: store.store_type === "demo" ? "Seongsu-dong" : null,
+        geocode_provider: store.store_type === "demo" ? "manual_seed" : null,
+        geocode_status: store.store_type === "demo" ? "manual_seed" : "pending",
+        metadata: {
+          exact_location_claim: false,
+        },
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+    }
+  }
+
+  function seedStoreContent(storeId) {
+    if (state.briefs.some((item) => item.store_id === storeId)) {
+      return;
+    }
+
+    const timestamp = nowIso();
+    const store = state.stores.get(storeId);
+    seedRevenueFacts(storeId, timestamp);
+    seedContextForStore(storeId, timestamp);
+    seedCauseActionLoop(storeId, timestamp);
+
+    state.briefs.push(...(data.briefs ?? []).map((brief) => ({
+      ...clone(brief),
+      store_id: storeId,
+      store_name: store?.store_name ?? DEMO_STORE_NAME,
+      trade_area_name: store?.region ?? brief.trade_area_name,
+      service_category_name: store?.business_category ?? brief.service_category_name,
+      headline: `${store?.store_name ?? DEMO_STORE_NAME}: 매출 변화와 공개 맥락 신호가 함께 관측되었습니다`,
+      summary: "업로드된 매출 데이터와 공개 맥락 데이터를 함께 관측한 결과입니다. 가능성 높은 원인 후보가 있으나 인과가 확정된 것은 아닙니다. 추가 확인이 필요합니다.",
+      reliability_note: RELIABILITY_NOTE_KO,
+      generated_at: timestamp,
+    })));
+
+    state.anomalies.push(...(data.anomalies ?? []).map((anomaly) => ({
+      ...clone(anomaly),
+      store_id: storeId,
+      trade_area_name: store?.region ?? anomaly.trade_area_name,
+      service_category_name: store?.business_category ?? anomaly.service_category_name,
+      interpretation_note: "Revenue change pattern only. It is not proven causality.",
+    })));
+
+    state.contexts.push(...(data.context ?? []).map((context) => ({
+      ...clone(context),
+      store_id: storeId,
+      store_name: store?.store_name ?? DEMO_STORE_NAME,
+      trade_area_name: store?.region ?? context.trade_area_name,
+      service_category_name: store?.business_category ?? context.service_category_name,
+      reliability_note: RELIABILITY_NOTE_KO,
+    })));
+  }
+
+  function seedRevenueFacts(storeId, timestamp) {
+    if (state.dailyFacts.some((row) => row.store_id === storeId)) {
+      return;
+    }
+
+    const uploadId = `upload_seed_${storeId}`;
+    const dailyRows = buildSyntheticDailyRows();
+    const itemRows = buildSyntheticItemRows(dailyRows);
+
+    state.uploads.push({
+      upload_id: uploadId,
+      store_id: storeId,
+      uploaded_by: null,
+      source_type: "synthetic_seed",
+      original_filename: "seongsu_cafe_daily_revenue.csv",
+      file_type: "csv",
+      status: "accepted",
+      row_count: dailyRows.length + itemRows.length,
+      accepted_count: dailyRows.length + itemRows.length,
+      rejected_count: 0,
+      metadata: {
+        synthetic_notice: "Not real individual store revenue. Realistic synthetic POS data calibrated by public commercial-district benchmark assumptions.",
+      },
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+
+    state.dailyFacts.push(...dailyRows.map((row) => ({
+      ...row,
+      store_id: storeId,
+      source_upload_id: uploadId,
+      created_at: timestamp,
+      updated_at: timestamp,
+    })));
+    state.itemFacts.push(...itemRows.map((row) => ({
+      ...row,
+      store_id: storeId,
+      source_upload_id: uploadId,
+      created_at: timestamp,
+      updated_at: timestamp,
+    })));
+  }
+
+  function seedContextForStore(storeId, timestamp) {
+    ensureContextSource({
+      source_id: "manual_seed_weather",
+      source_name: "Manual seed weather context",
+      source_type: "weather",
+      provider: "manual_seed",
+      attribution: "Synthetic weather context for demo validation",
+      refresh_granularity: "seed",
+    });
+    ensureContextSource({
+      source_id: "manual_seed_commercial_benchmark",
+      source_name: "Manual seed commercial district benchmark",
+      source_type: "benchmark",
+      provider: "manual_seed",
+      attribution: "Synthetic public benchmark assumptions for Seongsu cafe demo",
+      refresh_granularity: "seed",
+    });
+    ensureContextSource({
+      source_id: "manual_seed_foot_traffic",
+      source_name: "Manual seed foot traffic proxy",
+      source_type: "foot_traffic",
+      provider: "manual_seed",
+      attribution: "Synthetic foot traffic proxy for demo validation",
+      refresh_granularity: "seed",
+    });
+
+    const observations = [
+      {
+        source_id: "manual_seed_weather",
+        observation_date: "2026-04-16",
+        context_type: "weather",
+        metric_name: "rainfall_mm",
+        metric_value: 38,
+        metric_unit: "mm",
+        label: "비 오는 날 오프라인 매출 하락 신호와 함께 관측되었습니다",
+        region: "Seoul Seongsu",
+      },
+      {
+        source_id: "manual_seed_foot_traffic",
+        observation_date: "2026-04-16",
+        context_type: "foot_traffic",
+        metric_name: "foot_traffic_proxy_delta_pct",
+        metric_value: -14,
+        metric_unit: "pct",
+        label: "유동인구 프록시 하락이 함께 관측되었습니다",
+        region: "Seoul Seongsu",
+      },
+      {
+        source_id: "manual_seed_commercial_benchmark",
+        observation_date: "2026-04-17",
+        context_type: "benchmark",
+        metric_name: "commercial_area_sales_delta_pct",
+        metric_value: -8,
+        metric_unit: "pct",
+        label: "상권 벤치마크 약세가 함께 관측되었습니다",
+        region: "Seoul Seongsu",
+      },
+      {
+        source_id: "manual_seed_commercial_benchmark",
+        observation_date: "2026-04-18",
+        context_type: "competition",
+        metric_name: "same_category_store_count",
+        metric_value: 61,
+        metric_unit: "stores",
+        label: "동종 업종 점포 밀도는 원인 후보일 뿐 추가 확인이 필요합니다",
+        region: "Seoul Seongsu",
+      },
+    ];
+
+    for (const observation of observations) {
+      const exists = state.contextObservations.some((row) => (
+        row.store_id === storeId
+        && row.observation_date === observation.observation_date
+        && row.context_type === observation.context_type
+        && row.metric_name === observation.metric_name
+      ));
+      if (exists) {
+        continue;
+      }
+
+      const row = {
+        observation_id: newId("ctx"),
+        store_id: storeId,
+        raw_payload: {},
+        fetched_at: timestamp,
+        created_at: timestamp,
+        ...observation,
+      };
+      state.contextObservations.push(row);
+      state.contextLinks.push({
+        store_id: storeId,
+        observation_id: row.observation_id,
+        link_type: "manual_seed",
+        strength: observation.context_type === "weather" ? "strong" : "medium",
+        created_at: timestamp,
+      });
+    }
+
+    if (!state.publicBenchmarks.some((row) => row.region === "Seoul Seongsu" && row.business_category === "cafe")) {
+      state.publicBenchmarks.push({
+        benchmark_id: newId("bench"),
+        source_id: "manual_seed_commercial_benchmark",
+        region: "Seoul Seongsu",
+        commercial_area_code: null,
+        business_category: "cafe",
+        period_start: "2026-04-01",
+        period_end: "2026-04-30",
+        sales_amount: 148000000,
+        transaction_count: 14800,
+        avg_transaction_value: 10000,
+        metadata: {
+          exact_official_area_code: false,
+          copy_guardrail: "benchmark observed together; not proven causality",
+        },
+        fetched_at: timestamp,
+        created_at: timestamp,
+      });
+    }
+
+    if (!state.commercialAreaMappings.some((row) => row.store_id === storeId)) {
+      state.commercialAreaMappings.push({
+        mapping_id: newId("area"),
+        store_id: storeId,
+        commercial_area_code: null,
+        commercial_area_name: "Seongsu commercial district seed label",
+        administrative_dong: "Seongsu-dong",
+        business_category: "cafe",
+        mapping_method: "manual_seed",
+        confidence: "medium",
+        metadata: {
+          official_code_verified: false,
+        },
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+    }
+
+    if (!state.nearbyStoreSnapshots.some((row) => row.store_id === storeId)) {
+      state.nearbyStoreSnapshots.push({
+        snapshot_id: newId("nearby"),
+        store_id: storeId,
+        snapshot_date: "2026-04-18",
+        radius_m: 500,
+        business_category: "cafe",
+        same_category_store_count: 61,
+        total_store_count: 228,
+        source_id: "manual_seed_commercial_benchmark",
+        metadata: {
+          source_mode: "manual_seed",
+          exact_competitor_locations: false,
+        },
+        created_at: timestamp,
+      });
+    }
+  }
+
+  function ensureContextSource(source) {
+    if (state.contextSources.has(source.source_id)) {
+      return;
+    }
+    const timestamp = nowIso();
+    state.contextSources.set(source.source_id, {
+      provider: null,
+      source_url: null,
+      license_type: null,
+      metadata: {},
+      created_at: timestamp,
+      updated_at: timestamp,
+      ...source,
+    });
+  }
+
+  function seedCauseActionLoop(storeId, timestamp) {
+    if (state.causeCandidates.some((row) => row.store_id === storeId)) {
+      return;
+    }
+
+    const candidates = [
+      {
+        cause_candidate_id: newId("cause"),
+        store_id: storeId,
+        candidate_type: "rainy_day_offline_drop",
+        title: "비 오는 날 오프라인 주문 하락 가능성",
+        summary: "비 오는 날과 오프라인 주문 하락이 함께 관측되었습니다. 인과가 확정된 것은 아니며 추가 확인이 필요합니다.",
+        confidence: "medium",
+        status: "active",
+        metric_name: "net_sales_amount",
+        baseline_start: "2026-03-16",
+        baseline_end: "2026-04-14",
+        compare_start: "2026-04-15",
+        compare_end: "2026-04-21",
+        observed_delta_pct: -17.6,
+        created_from: "seed_rule",
+        created_at: timestamp,
+        updated_at: timestamp,
+      },
+      {
+        cause_candidate_id: newId("cause"),
+        store_id: storeId,
+        candidate_type: "item_category_decline",
+        title: "디저트 결합률 하락 가능성",
+        summary: "커피 매출 대비 디저트 판매 비중 하락이 함께 관측되었습니다. 가능성 높은 원인 후보이며 추가 확인이 필요합니다.",
+        confidence: "medium",
+        status: "active",
+        metric_name: "item_mix_bakery_share",
+        baseline_start: "2026-03-16",
+        baseline_end: "2026-04-14",
+        compare_start: "2026-04-15",
+        compare_end: "2026-04-21",
+        observed_delta_pct: -11.2,
+        created_from: "seed_rule",
+        created_at: timestamp,
+        updated_at: timestamp,
+      },
+    ];
+    state.causeCandidates.push(...candidates);
+
+    state.causeEvidence.push(
+      {
+        evidence_id: newId("evi"),
+        cause_candidate_id: candidates[0].cause_candidate_id,
+        evidence_type: "weather",
+        strength: "medium",
+        summary: "2026-04-16 강수량 38mm와 오프라인 매출 하락이 함께 관측되었습니다.",
+        source_name: "Manual seed weather context",
+        source_ref: "manual_seed_weather",
+        metric_name: "rainfall_mm",
+        metric_value: 38,
+        metadata: { not_proven_causality: true },
+        created_at: timestamp,
+      },
+      {
+        evidence_id: newId("evi"),
+        cause_candidate_id: candidates[1].cause_candidate_id,
+        evidence_type: "item_mix",
+        strength: "medium",
+        summary: "디저트 품목 판매량 하락이 매출 하락 기간과 함께 관측되었습니다.",
+        source_name: "Synthetic POS seed",
+        source_ref: "synthetic_seed",
+        metric_name: "bakery_quantity_delta_pct",
+        metric_value: -11.2,
+        metadata: { not_proven_causality: true },
+        created_at: timestamp,
+      },
+    );
+
+    const exportedActions = data.actions ?? [];
+    const ruleActions = [
+      {
+        cause: candidates[0],
+        title: "비 오는 날 배달/포장 세트 메뉴를 테스트하세요",
+        description: "비 예보가 있는 날에 커피+디저트 포장 세트를 작게 테스트합니다.",
+        action_family: "rainy_day_delivery_boost",
+        expected_effect: "오프라인 방문 하락 구간에서 배달/포장 전환을 관측합니다.",
+      },
+      {
+        cause: candidates[1],
+        title: "커피+디저트 세트 구성을 테스트하세요",
+        description: "디저트 결합률 하락 구간에 맞춰 소금빵/휘낭시에 세트 구성을 테스트합니다.",
+        action_family: "bundle_attach_rate_recovery",
+        expected_effect: "객단가와 디저트 결합률 변화를 다음 2주 동안 관측합니다.",
+      },
+    ];
+
+    for (const item of ruleActions) {
+      upsertSeedAction({
+        storeId,
+        causeCandidateId: item.cause.cause_candidate_id,
+        actionFamily: item.action_family,
+        title: item.title,
+        description: item.description,
+        whyThisAction: `${item.cause.summary} 이 액션은 근거 기반 제안이며 효과가 보장되지는 않습니다.`,
+        expectedEffect: item.expected_effect,
+        riskNote: "인과가 확정된 것은 아닙니다. 실행 전 추가 확인이 필요합니다.",
+        timestamp,
+      });
+    }
+
+    for (const exported of exportedActions.slice(0, 4)) {
+      upsertSeedAction({
+        storeId,
+        causeCandidateId: candidates[0].cause_candidate_id,
+        actionFamily: normalizeFamily(exported.action_type),
+        title: exported.title,
+        description: exported.description,
+        whyThisAction: `${exported.why_this_action || exported.description} 관측 신호 기반의 원인 후보이며 추가 확인이 필요합니다.`,
+        expectedEffect: exported.expected_effect,
+        riskNote: exported.risk_note || "효과가 보장되지 않으며 인과가 확정된 것은 아닙니다.",
+        timestamp,
+        externalActionId: exported.action_id,
+        anomalyId: exported.anomaly_id,
+      });
+    }
+  }
+
+  function upsertSeedAction({
+    storeId,
+    causeCandidateId,
+    actionFamily,
+    title,
+    description,
+    whyThisAction,
+    expectedEffect,
+    riskNote,
+    timestamp,
+    externalActionId,
+    anomalyId,
+  }) {
+    const dedupeKey = `${storeId}:${actionFamily}:${causeCandidateId}:${normalizeText(title)}`;
+    if (state.actions.some((item) => item.store_id === storeId && item.dedupe_key === dedupeKey)) {
+      return;
+    }
+    state.actions.push({
+      action_id: externalActionId ? `${storeId}:${externalActionId}` : newId("act"),
+      store_id: storeId,
+      anomaly_id: anomalyId || null,
+      cause_candidate_id: causeCandidateId,
+      action_family: actionFamily,
+      dedupe_key: dedupeKey,
+      action_type: actionFamily,
+      title,
+      description,
+      why_this_action: whyThisAction,
+      expected_effect: expectedEffect,
+      risk_note: riskNote,
+      difficulty: "medium",
+      status: "recommended",
+      planned_start_date: null,
+      planned_end_date: null,
+      completed_at: null,
+      status_updated_by: null,
+      outcome_summary: "결과 추적 대기 중",
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+  }
+
+  function getBriefsForStore(storeId) {
+    seedStoreContent(storeId);
+    const briefs = state.briefs.filter((brief) => brief.store_id === storeId);
+    return clone(briefs.length ? briefs : [buildBriefFromFacts(storeId)]);
+  }
+
+  function getAnomaliesForStore(storeId) {
+    seedStoreContent(storeId);
+    const anomalies = state.anomalies.filter((anomaly) => anomaly.store_id === storeId);
+    return clone(anomalies.length ? anomalies : buildAnomaliesFromFacts(storeId));
+  }
+
+  function getContextForStore(storeId) {
+    seedContextForStore(storeId, nowIso());
+    return clone([
+      ...state.contexts.filter((context) => context.store_id === storeId),
+      {
+        store_id: storeId,
+        context_observations: state.contextObservations
+          .filter((row) => row.store_id === storeId)
+          .map((row) => ({
+            ...row,
+            source: state.contextSources.get(row.source_id) ?? null,
+          })),
+        benchmarks: state.publicBenchmarks.filter((row) => row.region === "Seoul Seongsu"),
+        nearby_store_snapshots: state.nearbyStoreSnapshots.filter((row) => row.store_id === storeId),
+        commercial_area_mappings: state.commercialAreaMappings.filter((row) => row.store_id === storeId),
+        reliability_note: RELIABILITY_NOTE_KO,
+        reliability_note_en: RELIABILITY_NOTE_EN,
+      },
+    ]);
+  }
+
+  function getPipelineMetaForStore(storeId) {
+    seedStoreContent(storeId);
+    const latestUpload = latestBy(state.uploads.filter((row) => row.store_id === storeId), "created_at");
+    const latestContext = latestBy(state.contextObservations.filter((row) => row.store_id === storeId), "fetched_at");
+    const latestBenchmark = latestBy(state.publicBenchmarks, "fetched_at");
+    const latestCollectorRun = latestBy(state.collectorRuns.filter((row) => row.target_store_id === storeId), "created_at");
+
+    return clone({
+      store_id: storeId,
+      latest_revenue_upload: latestUpload,
+      latest_context_observation: latestContext,
+      latest_public_benchmark_period: latestBenchmark ? {
+        period_start: latestBenchmark.period_start,
+        period_end: latestBenchmark.period_end,
+        source_id: latestBenchmark.source_id,
+      } : null,
+      latest_collector_run: latestCollectorRun,
+      bronze: ["revenue_uploads", "revenue_upload_raw_rows", "revenue_upload_rejected_rows"],
+      silver: ["revenue_daily_facts", "revenue_item_facts", "context_observations", "public_revenue_benchmarks", "store_context_links"],
+      gold: ["cause_candidates", "cause_candidate_evidence", "action_planner_items", "action_outcome_snapshots"],
+      data_reliability_note: RELIABILITY_NOTE_KO,
+      data_reliability_note_en: RELIABILITY_NOTE_EN,
+      export_compatibility: {
+        legacy_revenue_routes_remain_enabled: true,
+        store_scoped_routes_primary: true,
+      },
+    });
+  }
+
+  async function getActionsForStore(storeId) {
+    seedStoreContent(storeId);
+    return clone(state.actions
+      .filter((action) => action.store_id === storeId)
+      .map((action) => withCauseAndOutcome(action)));
+  }
+
+  async function updateActionStatusForStore({ appUserId, storeId, actionId, status, planned_start_date, planned_end_date }) {
+    if (!VALID_ACTION_STATUSES.includes(status)) {
+      const err = new Error(`Invalid status '${status}'. Valid: ${VALID_ACTION_STATUSES.join(", ")}`);
+      err.code = "invalid_status";
+      throw err;
+    }
+
+    const action = state.actions.find((item) => item.store_id === storeId && item.action_id === actionId);
+    if (!action) {
+      return null;
+    }
+
+    const timestamp = nowIso();
+    action.status = status;
+    action.planned_start_date = parseDate(planned_start_date) || action.planned_start_date;
+    action.planned_end_date = parseDate(planned_end_date) || action.planned_end_date;
+    action.status_updated_by = appUserId;
+    action.updated_at = timestamp;
+
+    if (status === "done") {
+      action.completed_at = timestamp;
+      ensureOutcomePlaceholder(action, timestamp);
+    }
+
+    return clone(withCauseAndOutcome(action));
+  }
+
+  function withCauseAndOutcome(action) {
+    const cause = state.causeCandidates.find((row) => row.cause_candidate_id === action.cause_candidate_id) ?? null;
+    const evidence = cause
+      ? state.causeEvidence.filter((row) => row.cause_candidate_id === cause.cause_candidate_id).slice(0, 3)
+      : [];
+    const outcome = latestBy(state.outcomes.filter((row) => row.action_id === action.action_id), "created_at");
+
+    return {
+      ...action,
+      cause_candidate: cause ? clone(cause) : null,
+      evidence_snippets: clone(evidence),
+      outcome_tracking: outcome ? clone(outcome) : {
+        summary: "결과 추적 대기 중",
+        summary_en: "Waiting for result window",
+      },
+    };
+  }
+
+  function ensureOutcomePlaceholder(action, timestamp) {
+    const exists = state.outcomes.some((row) => row.action_id === action.action_id);
+    if (exists) {
+      return;
+    }
+
+    state.outcomes.push({
+      outcome_id: newId("outcome"),
+      action_id: action.action_id,
+      store_id: action.store_id,
+      baseline_start: null,
+      baseline_end: null,
+      result_start: null,
+      result_end: null,
+      metric_name: "net_sales_amount",
+      baseline_value: null,
+      result_value: null,
+      observed_delta_pct: null,
+      summary: "결과 추적 대기 중. 실행 효과를 단정하지 않습니다.",
+      created_at: timestamp,
+    });
+  }
+
+  function getCauseCandidatesForStore(storeId) {
+    seedStoreContent(storeId);
+    return clone(state.causeCandidates
+      .filter((row) => row.store_id === storeId)
+      .map((candidate) => ({
+        ...candidate,
+        evidence: state.causeEvidence.filter((row) => row.cause_candidate_id === candidate.cause_candidate_id),
+      })));
+  }
+
+  function getCauseCandidateForStore(storeId, causeCandidateId) {
+    return getCauseCandidatesForStore(storeId).find((row) => row.cause_candidate_id === causeCandidateId) ?? null;
+  }
+
+  function ingestRevenueUpload({ appUserId, storeId, payload = {} }) {
+    const dailyRows = Array.isArray(payload.daily_rows) ? payload.daily_rows : [];
+    const itemRows = Array.isArray(payload.item_rows) ? payload.item_rows : [];
+    const rows = [
+      ...dailyRows.map((row, index) => ({ kind: "daily", row, index })),
+      ...itemRows.map((row, index) => ({ kind: "item", row, index })),
+    ];
+    if (rows.length === 0) {
+      const err = new Error("daily_rows or item_rows is required");
+      err.code = "invalid_body";
+      throw err;
+    }
+
+    const timestamp = nowIso();
+    const upload = {
+      upload_id: newId("upload"),
+      store_id: storeId,
+      uploaded_by: appUserId,
+      source_type: text(payload.source_type) || "manual_template",
+      original_filename: text(payload.original_filename) || null,
+      file_type: text(payload.file_type) || "json",
+      status: "uploaded",
+      row_count: rows.length,
+      accepted_count: 0,
+      rejected_count: 0,
+      metadata: safeObject(payload.metadata),
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    state.uploads.push(upload);
+
+    for (const row of rows) {
+      state.rawRows.push({
+        raw_row_id: state.rawRows.length + 1,
+        upload_id: upload.upload_id,
+        row_number: row.index + 1,
+        row_payload: sanitizeRevenueRow(row.row),
+        created_at: timestamp,
+      });
+
+      const normalized = row.kind === "daily"
+        ? normalizeDailyRow(row.row)
+        : normalizeItemRow(row.row);
+
+      if (!normalized.ok) {
+        upload.rejected_count += 1;
+        state.rejectedRows.push({
+          rejected_row_id: state.rejectedRows.length + 1,
+          upload_id: upload.upload_id,
+          row_number: row.index + 1,
+          reason_code: normalized.reason_code,
+          reason_message: normalized.reason_message,
+          raw_row_preview: sanitizeRevenueRow(row.row),
+          created_at: timestamp,
+        });
+        continue;
+      }
+
+      upload.accepted_count += 1;
+      if (row.kind === "daily") {
+        state.dailyFacts.push({
+          ...normalized.value,
+          store_id: storeId,
+          source_upload_id: upload.upload_id,
+          created_at: timestamp,
+          updated_at: timestamp,
+        });
+      } else {
+        state.itemFacts.push({
+          ...normalized.value,
+          store_id: storeId,
+          source_upload_id: upload.upload_id,
+          created_at: timestamp,
+          updated_at: timestamp,
+        });
+      }
+    }
+
+    upload.status = upload.rejected_count === 0
+      ? "accepted"
+      : upload.accepted_count > 0
+        ? "partially_accepted"
+        : "failed";
+    upload.updated_at = timestamp;
+
+    return clone({
+      upload,
+      accepted_count: upload.accepted_count,
+      rejected_count: upload.rejected_count,
+      rejected_rows: state.rejectedRows.filter((row) => row.upload_id === upload.upload_id),
+    });
+  }
+
+  function listRevenueUploadsForStore(storeId) {
+    return clone(state.uploads
+      .filter((upload) => upload.store_id === storeId)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at)));
+  }
+
+  function collectContextForStore(storeId, { mode = "seed" } = {}) {
+    const timestamp = nowIso();
+    seedContextForStore(storeId, timestamp);
+    const run = {
+      collector_run_id: newId("collector"),
+      collector_name: "collectStorePublicContext",
+      status: "completed",
+      target_store_id: storeId,
+      started_at: timestamp,
+      completed_at: timestamp,
+      error_message: null,
+      metadata: {
+        mode,
+        external_api_keys_required: false,
+        skipped_live_collectors_without_keys: true,
+      },
+      created_at: timestamp,
+    };
+    state.collectorRuns.push(run);
+    return clone({
+      collector_run: run,
+      summary: {
+        context_observation_count: state.contextObservations.filter((row) => row.store_id === storeId).length,
+        benchmark_count: state.publicBenchmarks.length,
+        nearby_snapshot_count: state.nearbyStoreSnapshots.filter((row) => row.store_id === storeId).length,
+      },
+    });
+  }
+
+  return {
+    _state: state,
+    resolveAppUserFromJwtClaims,
+    requireStoreAccess,
+    listStoresForUser,
+    createStoreForUser,
+    getBriefsForStore,
+    getAnomaliesForStore,
+    getContextForStore,
+    getPipelineMetaForStore,
+    getActionsForStore,
+    updateActionStatusForStore,
+    getCauseCandidatesForStore,
+    getCauseCandidateForStore,
+    ingestRevenueUpload,
+    listRevenueUploadsForStore,
+    collectContextForStore,
+  };
+}
+
+function normalizeDailyRow(row) {
+  const businessDate = parseDate(row?.business_date);
+  if (!businessDate) {
+    return rejected("invalid_business_date", "business_date is required in YYYY-MM-DD format");
+  }
+  const orderCount = int(row.order_count, 0);
+  if (orderCount < 0) {
+    return rejected("invalid_order_count", "order_count must be zero or greater");
+  }
+  return accepted({
+    business_date: businessDate,
+    channel: text(row.channel) || "offline_pos",
+    gross_sales_amount: money(row.gross_sales_amount),
+    net_sales_amount: money(row.net_sales_amount),
+    order_count: orderCount,
+    cancel_count: int(row.cancel_count, 0),
+    refund_amount: money(row.refund_amount),
+    discount_amount: money(row.discount_amount),
+    payment_card_amount: money(row.payment_card_amount),
+    payment_cash_amount: money(row.payment_cash_amount),
+  });
+}
+
+function normalizeItemRow(row) {
+  const businessDate = parseDate(row?.business_date);
+  if (!businessDate) {
+    return rejected("invalid_business_date", "business_date is required in YYYY-MM-DD format");
+  }
+  const itemName = text(row.item_name);
+  if (!itemName) {
+    return rejected("missing_item_name", "item_name is required");
+  }
+  return accepted({
+    business_date: businessDate,
+    channel: text(row.channel) || "offline_pos",
+    item_name: itemName,
+    item_category: text(row.item_category) || null,
+    quantity: int(row.quantity, 0),
+    gross_sales_amount: money(row.gross_sales_amount),
+    discount_amount: money(row.discount_amount),
+    net_sales_amount: money(row.net_sales_amount),
+  });
+}
+
+function buildSyntheticDailyRows() {
+  const rows = [];
+  const start = Date.UTC(2026, 2, 1);
+  for (let day = 0; day < 75; day += 1) {
+    const date = new Date(start + day * 86400000);
+    const dow = date.getUTCDay();
+    const weekend = dow === 0 || dow === 5 || dow === 6;
+    const monday = dow === 1;
+    const rainDrop = day >= 45 && day <= 51 ? 0.82 : 1;
+    const promoLift = day >= 58 && day <= 64 ? 1.11 : 1;
+    const hotLift = day >= 65 ? 1.05 : 1;
+    const baseOrders = weekend ? 126 : monday ? 78 : 96;
+    const orderCount = Math.round((baseOrders + ((day * 7) % 13) - 6) * rainDrop * promoLift);
+    const aov = (weekend ? 10200 : monday ? 8600 : 9200) + ((day * 113) % 900);
+    const gross = Math.round(orderCount * aov * hotLift);
+    const refundAmount = Math.round(gross * (0.006 + ((day % 5) * 0.002)));
+    const discountAmount = Math.round(gross * (promoLift > 1 ? 0.06 : 0.025));
+    const net = gross - refundAmount - discountAmount;
+    const card = Math.round(net * 0.88);
+    const cash = Math.round(net * 0.05);
+    rows.push({
+      business_date: date.toISOString().slice(0, 10),
+      channel: "offline_pos",
+      gross_sales_amount: gross,
+      net_sales_amount: net,
+      order_count: orderCount,
+      cancel_count: Math.max(0, Math.round(orderCount * 0.01)),
+      refund_amount: refundAmount,
+      discount_amount: discountAmount,
+      payment_card_amount: card,
+      payment_cash_amount: cash,
+    });
+  }
+  return rows;
+}
+
+function buildSyntheticItemRows(dailyRows) {
+  const mix = [
+    ["아메리카노", "coffee", 0.29, 4500],
+    ["카페라떼", "coffee", 0.18, 5400],
+    ["바닐라라떼", "coffee", 0.1, 5900],
+    ["콜드브루", "coffee", 0.09, 5600],
+    ["말차라떼", "non_coffee", 0.08, 6200],
+    ["레몬에이드", "non_coffee", 0.06, 6100],
+    ["소금빵", "bakery", 0.08, 3800],
+    ["휘낭시에", "bakery", 0.05, 3200],
+    ["크로플", "bakery", 0.04, 6800],
+    ["샌드위치", "food", 0.03, 8500],
+  ];
+
+  return dailyRows.flatMap((dayRow, index) => {
+    const anomalyFactor = index >= 45 && index <= 51 ? 0.85 : 1;
+    return mix.map(([itemName, itemCategory, share, price]) => {
+      const qty = Math.max(1, Math.round(dayRow.order_count * share * (itemCategory === "bakery" ? anomalyFactor : 1)));
+      const gross = qty * price;
+      return {
+        business_date: dayRow.business_date,
+        channel: "offline_pos",
+        item_name: itemName,
+        item_category: itemCategory,
+        quantity: qty,
+        gross_sales_amount: gross,
+        discount_amount: Math.round(gross * 0.02),
+        net_sales_amount: Math.round(gross * 0.98),
+      };
+    });
+  });
+}
+
+function buildBriefFromFacts(storeId) {
+  return {
+    brief_id: `brief_${storeId}`,
+    store_id: storeId,
+    store_name: DEMO_STORE_NAME,
+    trade_area_name: "Seoul Seongsu",
+    service_category_name: "cafe",
+    period_label: "latest upload",
+    headline: "업로드 매출과 공개 맥락 신호가 함께 관측되었습니다",
+    summary: RELIABILITY_NOTE_KO,
+    top_cause_candidates: [],
+    recommended_actions: [],
+    data_freshness: 1,
+    generated_at: new Date().toISOString(),
+  };
+}
+
+function buildAnomaliesFromFacts(storeId) {
+  return [{
+    anomaly_id: `anomaly_${storeId}_latest`,
+    store_id: storeId,
+    metric: "net_sales_amount",
+    baseline_period: "previous same weekday average",
+    compare_period: "latest upload",
+    delta_pct: 0,
+    anomaly_type: "store_revenue_pattern",
+    interpretation_note: "Store-scoped revenue pattern. Not proven causality.",
+    detected_at: new Date().toISOString(),
+  }];
+}
+
+function sanitizeRevenueRow(row) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) {
+    return {};
+  }
+  const allowed = [
+    "business_date",
+    "channel",
+    "gross_sales_amount",
+    "net_sales_amount",
+    "order_count",
+    "cancel_count",
+    "refund_amount",
+    "discount_amount",
+    "payment_card_amount",
+    "payment_cash_amount",
+    "item_name",
+    "item_category",
+    "quantity",
+  ];
+  return Object.fromEntries(allowed.filter((key) => key in row).map((key) => [key, row[key]]));
+}
+
+function accepted(value) {
+  return { ok: true, value };
+}
+
+function rejected(reasonCode, reasonMessage) {
+  return { ok: false, reason_code: reasonCode, reason_message: reasonMessage };
+}
+
+function latestBy(rows, key) {
+  return rows
+    .filter((row) => row?.[key])
+    .sort((a, b) => String(b[key]).localeCompare(String(a[key])))[0] ?? null;
+}
+
+function parseDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+  return value;
+}
+
+function text(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function money(value) {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) && number >= 0 ? Math.round(number * 100) / 100 : 0;
+}
+
+function int(value, fallback = 0) {
+  const number = Number(value ?? fallback);
+  return Number.isInteger(number) ? number : Math.trunc(Number.isFinite(number) ? number : fallback);
+}
+
+function safeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? clone(value) : {};
+}
+
+function normalizeFamily(value) {
+  const normalized = normalizeText(value);
+  if (normalized.includes("communication")) return "retention_campaign";
+  if (normalized.includes("menu")) return "menu_mix_recovery";
+  return normalized || "data_quality_check";
+}
+
+function normalizeText(value) {
+  return typeof value === "string" ? value.trim().replace(/\s+/g, "_").toLowerCase() : "";
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+module.exports = {
+  createRevenueOpsSaasStore,
+  DEMO_STORE_NAME,
+  DEMO_TENANT_NAME,
+  RELIABILITY_NOTE_KO,
+  RELIABILITY_NOTE_EN,
+};

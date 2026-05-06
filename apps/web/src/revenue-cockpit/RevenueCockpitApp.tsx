@@ -1,7 +1,19 @@
 import { useEffect, useState } from 'react';
 import './revenueCockpit.css';
 import { SCENARIO, tr, DEFAULT_STATUSES } from './revenueCockpitCopy';
-import { apiFetchActions, apiFetchAnomalies, apiFetchBriefs, apiFetchContext, apiFetchPipelineMeta, apiUpdateActionStatus } from './revenueCockpitApi';
+import {
+  apiCreateStore,
+  apiFetchActions,
+  apiFetchAnomalies,
+  apiFetchBriefs,
+  apiFetchContext,
+  apiFetchPipelineMeta,
+  apiFetchStores,
+  apiUpdateActionStatus,
+  type CreateRevenueStorePayload,
+  type RevenueStoreSummary,
+} from './revenueCockpitApi';
+import { getStoredAuthSession } from './revenueCockpitAuth';
 import { buildScenarioFromApi, wantsApiData } from './revenueCockpitData';
 import { Icon, ChromeBar } from './revenueCockpitShared';
 import { RevenueBriefView } from './RevenueBriefView';
@@ -11,6 +23,8 @@ import { DataReliabilityView } from './DataReliabilityView';
 import type { RcLang, RcTheme, RcScreen, ActionStatuses, ActionStatus, Scenario } from './revenueCockpitTypes';
 
 // ─── persistence helpers ──────────────────────────────────────────────────────
+
+const SELECTED_STORE_KEY = 'revenue_ops_selected_store_id';
 
 function loadPref<T extends string>(key: string, fallback: T, valid: readonly T[]): T {
   try {
@@ -23,6 +37,28 @@ function loadPref<T extends string>(key: string, fallback: T, valid: readonly T[
 
 function savePref(key: string, value: string) {
   try { localStorage.setItem(key, value); } catch { /* ignore */ }
+}
+
+function loadSelectedStoreId(): string | null {
+  try {
+    return sessionStorage.getItem(SELECTED_STORE_KEY) || localStorage.getItem(SELECTED_STORE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveSelectedStoreId(storeId: string | null) {
+  try {
+    if (storeId) {
+      sessionStorage.setItem(SELECTED_STORE_KEY, storeId);
+      localStorage.setItem(SELECTED_STORE_KEY, storeId);
+    } else {
+      sessionStorage.removeItem(SELECTED_STORE_KEY);
+      localStorage.removeItem(SELECTED_STORE_KEY);
+    }
+  } catch {
+    // ignore storage failures
+  }
 }
 
 function resolveTheme(theme: RcTheme): 'light' | 'dark' {
@@ -85,6 +121,99 @@ function RcHeader({ lang, scenario, screen, onSetScreen }: HeaderProps) {
   );
 }
 
+interface StoreSwitcherProps {
+  lang: RcLang;
+  stores: RevenueStoreSummary[];
+  selectedStoreId: string | null;
+  loading: boolean;
+  notice: string | null;
+  showCreate: boolean;
+  form: CreateRevenueStorePayload;
+  onSelectStore: (storeId: string) => void;
+  onToggleCreate: () => void;
+  onChangeForm: (patch: Partial<CreateRevenueStorePayload>) => void;
+  onCreateStore: () => void;
+}
+
+function StoreSwitcher({
+  lang,
+  stores,
+  selectedStoreId,
+  loading,
+  notice,
+  showCreate,
+  form,
+  onSelectStore,
+  onToggleCreate,
+  onChangeForm,
+  onCreateStore,
+}: StoreSwitcherProps) {
+  return (
+    <section className="rc-store-switcher" aria-label={lang === 'ko' ? '가게 선택' : 'Store'}>
+      <div className="rc-store-switcher-row">
+        <label className="rc-store-label" htmlFor="rc-store-select">{lang === 'ko' ? '가게 선택' : 'Store'}</label>
+        <select
+          id="rc-store-select"
+          className="rc-store-select"
+          value={selectedStoreId ?? ''}
+          disabled={loading || stores.length === 0}
+          onChange={event => onSelectStore(event.target.value)}
+        >
+          {stores.length === 0 && (
+            <option value="">{lang === 'ko' ? '등록된 가게 없음' : 'No stores'}</option>
+          )}
+          {stores.map(store => (
+            <option key={store.store_id} value={store.store_id}>
+              {store.store_name}{store.region ? ` · ${store.region}` : ''}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="rc-store-button" onClick={onToggleCreate}>
+          {lang === 'ko' ? '새 가게 등록' : 'Add store'}
+        </button>
+        {notice && <span className="rc-store-notice">{notice}</span>}
+      </div>
+      {(showCreate || stores.length === 0) && (
+        <div className="rc-store-create">
+          <input
+            className="rc-store-input"
+            value={form.store_name}
+            placeholder={lang === 'ko' ? '가게 이름' : 'Store name'}
+            onChange={event => onChangeForm({ store_name: event.target.value })}
+          />
+          <input
+            className="rc-store-input"
+            value={form.tenant_name ?? ''}
+            placeholder={lang === 'ko' ? '테넌트 이름' : 'Tenant name'}
+            onChange={event => onChangeForm({ tenant_name: event.target.value })}
+          />
+          <input
+            className="rc-store-input"
+            value={form.business_category ?? ''}
+            placeholder={lang === 'ko' ? '업종' : 'Category'}
+            onChange={event => onChangeForm({ business_category: event.target.value })}
+          />
+          <input
+            className="rc-store-input"
+            value={form.region ?? ''}
+            placeholder={lang === 'ko' ? '지역' : 'Region'}
+            onChange={event => onChangeForm({ region: event.target.value })}
+          />
+          <input
+            className="rc-store-input rc-store-input-wide"
+            value={form.address_text ?? ''}
+            placeholder={lang === 'ko' ? '주소' : 'Address'}
+            onChange={event => onChangeForm({ address_text: event.target.value })}
+          />
+          <button type="button" className="rc-store-button rc-store-button-primary" onClick={onCreateStore}>
+            {lang === 'ko' ? '등록' : 'Create'}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ─── main surface ─────────────────────────────────────────────────────────────
 
 export function RevenueCockpitApp() {
@@ -100,9 +229,25 @@ export function RevenueCockpitApp() {
   });
   const [apiNotice, setApiNotice] = useState<'loading' | 'fallback' | 'patch-saving' | 'patch-saved' | 'patch-local' | 'patch-failed' | null>(() => wantsApiData() ? 'loading' : null);
   const [authReloadTick, setAuthReloadTick] = useState(0);
+  const [stores, setStores] = useState<RevenueStoreSummary[]>([]);
+  const [selectedStoreId, setSelectedStoreIdState] = useState<string | null>(() => loadSelectedStoreId());
+  const [storeLoading, setStoreLoading] = useState(false);
+  const [storeNotice, setStoreNotice] = useState<string | null>(null);
+  const [showCreateStore, setShowCreateStore] = useState(false);
+  const [storeForm, setStoreForm] = useState<CreateRevenueStorePayload>({
+    store_name: '',
+    tenant_name: '',
+    business_category: '',
+    region: '',
+    address_text: '',
+  });
 
   useEffect(() => {
     const handleAuthChanged = () => {
+      if (!getStoredAuthSession()) {
+        setStores([]);
+        setSelectedStoreId(null);
+      }
       setAuthReloadTick(tick => tick + 1);
     };
 
@@ -114,6 +259,10 @@ export function RevenueCockpitApp() {
 
   const setLang = (l: RcLang) => { setLangState(l); savePref('rc-lang', l); };
   const setTheme = (t: RcTheme) => { setThemeState(t); savePref('rc-theme', t); setEffectiveTheme(resolveTheme(t)); };
+  const setSelectedStoreId = (storeId: string | null) => {
+    setSelectedStoreIdState(storeId);
+    saveSelectedStoreId(storeId);
+  };
 
   function isActionStatus(value: unknown): value is ActionStatus {
     return value === 'recommended' || value === 'selected' || value === 'planned' || value === 'done' || value === 'dismissed';
@@ -137,14 +286,14 @@ export function RevenueCockpitApp() {
 
     setApiNotice('patch-saving');
 
-    apiUpdateActionStatus(id, s)
+    apiUpdateActionStatus(id, s, selectedStoreId ?? undefined)
       .then(async envelope => {
         if (envelope.action?.action_id && isActionStatus(envelope.action.status)) {
           setStatuses(prev => ({ ...prev, [envelope.action!.action_id!]: envelope.action!.status as ActionStatus }));
         }
 
         try {
-          const actionsEnvelope = await apiFetchActions();
+          const actionsEnvelope = await apiFetchActions(selectedStoreId ?? undefined);
           mergeActionStatusesFromEnvelope(actionsEnvelope);
         } catch {
           // PATCH succeeded, but refetch failed. Keep optimistic state and show persistence result below.
@@ -185,13 +334,64 @@ export function RevenueCockpitApp() {
     }
 
     let cancelled = false;
+    const session = getStoredAuthSession();
+    if (!session) {
+      setStores([]);
+      setSelectedStoreId(null);
+      return;
+    }
+
+    setStoreLoading(true);
+    setStoreNotice(lang === 'ko' ? '가게 목록을 불러오는 중입니다.' : 'Loading stores.');
+
+    apiFetchStores()
+      .then(envelope => {
+        if (cancelled) return;
+        const nextStores = envelope.stores ?? [];
+        setStores(nextStores);
+        const saved = loadSelectedStoreId();
+        const nextSelected = nextStores.find(store => store.store_id === saved)?.store_id
+          ?? nextStores[0]?.store_id
+          ?? null;
+        setSelectedStoreId(nextSelected);
+        setStoreNotice(nextStores.length === 0
+          ? (lang === 'ko' ? '등록된 가게가 없습니다.' : 'No stores yet.')
+          : null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setStores([]);
+        setSelectedStoreId(null);
+        setStoreNotice(lang === 'ko' ? '가게 목록을 불러오지 못했습니다.' : 'Could not load stores.');
+      })
+      .finally(() => {
+        if (!cancelled) setStoreLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [apiMode, authReloadTick, lang]);
+
+  useEffect(() => {
+    if (!apiMode) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('code') && params.has('state') && authReloadTick === 0) {
+      setApiNotice('loading');
+      return;
+    }
+
+    let cancelled = false;
+    const storeId = selectedStoreId ?? undefined;
+    if (getStoredAuthSession() && !storeId) {
+      return;
+    }
 
     Promise.all([
-      apiFetchBriefs(),
-      apiFetchAnomalies(),
-      apiFetchActions(),
-      apiFetchContext(),
-      apiFetchPipelineMeta(),
+      apiFetchBriefs(storeId),
+      apiFetchAnomalies(storeId),
+      apiFetchActions(storeId),
+      apiFetchContext(storeId),
+      apiFetchPipelineMeta(storeId),
     ])
       .then(([briefsEnvelope, anomaliesEnvelope, actionsEnvelope, contextEnvelope, pipelineMetaEnvelope]) => {
         if (cancelled) return;
@@ -214,7 +414,38 @@ export function RevenueCockpitApp() {
       });
 
     return () => { cancelled = true; };
-  }, [apiMode, authReloadTick]);
+  }, [apiMode, authReloadTick, selectedStoreId]);
+
+  function handleCreateStore() {
+    if (!storeForm.store_name.trim()) {
+      setStoreNotice(lang === 'ko' ? '가게 이름을 입력하세요.' : 'Enter a store name.');
+      return;
+    }
+
+    setStoreLoading(true);
+    setStoreNotice(lang === 'ko' ? '가게를 등록하는 중입니다.' : 'Creating store.');
+    apiCreateStore({
+      store_name: storeForm.store_name.trim(),
+      tenant_name: storeForm.tenant_name?.trim() || undefined,
+      business_category: storeForm.business_category?.trim() || undefined,
+      region: storeForm.region?.trim() || undefined,
+      address_text: storeForm.address_text?.trim() || undefined,
+    })
+      .then(envelope => {
+        const created = envelope.store;
+        if (!created) throw new Error('missing store');
+        setStores(prev => [...prev.filter(store => store.store_id !== created.store_id), created]);
+        setSelectedStoreId(created.store_id);
+        setStoreForm({ store_name: '', tenant_name: '', business_category: '', region: '', address_text: '' });
+        setShowCreateStore(false);
+        setStoreNotice(lang === 'ko' ? '가게가 등록되었습니다.' : 'Store created.');
+        window.setTimeout(() => setStoreNotice(null), 2000);
+      })
+      .catch(() => {
+        setStoreNotice(lang === 'ko' ? '가게 등록에 실패했습니다.' : 'Could not create store.');
+      })
+      .finally(() => setStoreLoading(false));
+  }
 
   const chromeLabel = lang === 'ko'
     ? '매출 코크핏 — 근거 기반 액션 브리프'
@@ -237,6 +468,21 @@ export function RevenueCockpitApp() {
     <div className="rc-root" data-theme={effectiveTheme}>
       <ChromeBar lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} label={chromeLabel}/>
       <RcHeader lang={lang} scenario={scenario} screen={screen} onSetScreen={setScreen}/>
+      {apiMode && getStoredAuthSession() && (
+        <StoreSwitcher
+          lang={lang}
+          stores={stores}
+          selectedStoreId={selectedStoreId}
+          loading={storeLoading}
+          notice={storeNotice}
+          showCreate={showCreateStore}
+          form={storeForm}
+          onSelectStore={setSelectedStoreId}
+          onToggleCreate={() => setShowCreateStore(value => !value)}
+          onChangeForm={patch => setStoreForm(prev => ({ ...prev, ...patch }))}
+          onCreateStore={handleCreateStore}
+        />
+      )}
       {noticeCopy && (
         <div className="rc-api-notice">
           <Icon name="shield" size={12}/>

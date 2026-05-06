@@ -66,6 +66,7 @@ export function getStoredAuthSession(): RevenueAuthSession | null {
 
 export function clearStoredAuthSession() {
   sessionStorage.removeItem(TOKENS_KEY);
+  sessionStorage.removeItem('revenue_ops_selected_store_id');
 }
 
 export function markRevenueLogoutRedirect() {

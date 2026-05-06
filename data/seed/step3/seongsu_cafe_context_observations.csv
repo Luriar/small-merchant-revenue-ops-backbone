@@ -1,0 +1,8 @@
+observation_date,source_id,context_type,metric_name,metric_value,metric_unit,label,region
+2026-04-15,manual_seed_weather,weather,rainfall_mm,22,mm,Rain signal observed together with lower offline orders,Seoul Seongsu
+2026-04-16,manual_seed_weather,weather,rainfall_mm,38,mm,Rain-day offline drop candidate cause; requires additional confirmation,Seoul Seongsu
+2026-04-17,manual_seed_foot_traffic,foot_traffic,foot_traffic_proxy_delta_pct,-14,pct,Foot traffic proxy softened during revenue drop window,Seoul Seongsu
+2026-04-18,manual_seed_benchmark,benchmark,commercial_area_sales_delta_pct,-8,pct,Commercial district benchmark downturn observed together,Seoul Seongsu
+2026-04-20,manual_seed_event,event,local_popup_event_count,2,count,Nearby popup/event activity may change visit patterns,Seoul Seongsu
+2026-05-03,manual_seed_holiday,holiday,weekend_or_holiday,1,boolean,Weekend/holiday label for comparison,Seoul Seongsu
+2026-05-08,manual_seed_competition,competition,same_category_store_count,61,stores,"Nearby same-category density is a context signal, not proven causality",Seoul Seongsu
