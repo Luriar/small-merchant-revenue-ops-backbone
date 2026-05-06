@@ -1,167 +1,117 @@
 # Small Merchant Revenue Ops Backbone
 
-Release-to-issue traceability 기반 Event-Driven Product Ops Backbone에서 출발해, M3-M6에서는 소상공인 매출 변화 설명과 실행 액션 제안을 보여주는 Revenue Ops 포트폴리오 데모로 패키징한 프로젝트입니다.
+Release-to-issue traceability 기반 Event-Driven Product Ops Backbone에서 출발해, M6에서는 소상공인 Revenue Ops SaaS runtime과 cockpit으로 제품화한 프로젝트입니다.
 
-## Problem
-
-소상공인은 POS, 주문, 매출, 상권 데이터를 어느 정도 가지고 있어도 "왜 매출이 변했는지"와 "이번 주에 어떤 액션을 검토해야 하는지"를 빠르게 판단하기 어렵습니다.
-
-이 프로젝트는 매출 변화 신호를 구조화하고, 함께 관측된 컨텍스트 근거와 실행 액션 후보, 데이터 신뢰도까지 한 화면 흐름으로 연결하는 것을 목표로 합니다. 단, 현재 구현은 인과관계 확정이나 매출 회복 보장이 아니라 의사결정 지원 데모입니다.
-
-## Current Scope
-
-### M3: Revenue Ops Medallion Foundation
-
-- 서울시 상권/매출/생활인구/점포/날씨/공휴일/지역행사 기반 샘플 파이프라인
-- Bronze/Silver/Gold medallion 구조
-- 매출 이상 탐지, 원인 근거 후보 연결, 액션 카탈로그 매핑
-- Revenue Brief와 pipeline reliability 산출물 생성
-
-### M4: Gold to API and Cockpit
-
-- Gold parquet 결과를 deterministic JSON artifact로 export
-- `apps/api/src/revenue-ops/` Revenue Ops API foundation
-- standalone `#revenue-cockpit` frontend
-- Revenue Brief, Cause Evidence, Action Planner, Data Reliability 화면
-
-### M5: Engineering Hardening
-
-- deterministic export/test hygiene
-- `#revenue-cockpit?data=api` API mode
-- API failure -> demo fallback
-- Action Planner `PATCH /api/v1/revenue/actions/:id/status` wiring
-- Revenue Ops API Node tests
-- `npm run validate:m5:engineering` validation script
-- AWS deployment readiness document
-
-### M6: Portfolio Packaging
-
-- README, demo guide, screenshot checklist, route/use guide
-- architecture overview
-- presentation/interview narrative
-- final validation and closure reports
-
-## Architecture
+핵심 흐름:
 
 ```text
-M3 medallion/gold data
-  -> scripts/export_gold_to_json.py
-  -> apps/api/src/revenue-ops/data/revenue_ops_export.json
-  -> Revenue Ops API (/api/v1/revenue/*)
-  -> #revenue-cockpit frontend
+store registration
+  -> revenue/POS upload
+  -> public/private context collection
+  -> normalized evidence observations
+  -> candidate causes
+  -> action planner
+  -> action status/result tracking
 ```
 
-The API currently reads static/export-backed JSON and keeps Action Planner status changes in memory for the local demo. The frontend can run in pure demo mode or request API-backed data and fall back to demo data if the API is unavailable.
+인과관계를 확정하지 않습니다. 화면과 API copy는 `함께 관측되었습니다`, `가능성 높은 원인 후보`, `추가 확인이 필요합니다`, `인과가 확정된 것은 아닙니다`를 기준으로 합니다.
 
-## Demo Modes
+## Current Live Capabilities
 
-- `#revenue-cockpit`: default standalone cockpit using bundled demo/static data.
-- `#revenue-cockpit?data=api`: API mode. The frontend fetches `/api/v1/revenue/briefs`, `/anomalies`, `/actions`, `/context`, and `/pipeline-meta`.
-- API failure fallback: if API mode cannot load data, the cockpit shows a notice and reverts to bundled demo data.
+- API Gateway + Cognito + Lambda + Aurora 기반 Revenue API
+- Lambda private subnet + Aurora access
+- `single_nat` VPC egress profile
+- Seoul Open Data TCP 8088 egress
+- Secrets Manager 기반 public context credential loading
+- Store-scoped Revenue Ops APIs
+- Store onboarding 후 automatic context bootstrap
+- Revenue upload/preview, rejected rows, reprocess skeleton
+- Context collectors with timeout-safe partial results
+- Action Planner status tracking
+- `#revenue-cockpit` frontend with KO/EN and theme switch
 
-Other existing hash routes remain available:
+Verified live before this packaging pass:
 
-- `#traceability`
-- `#changes`
-- `#issues`
-- `#runs`
+- Kakao/KMA/Seoul full live context collection: 5 completed, 0 skipped, 0 failed
+- Naver Local smoke: HTTP 200, item_count 5
+- Naver DataLab smoke: HTTP 200, result_count 2
+- Korean holiday API HTTPS smoke: HTTP 200, resultCode 00
 
-## Intentionally Not Implemented Yet
-
-- No real AWS deployment has been performed.
-- No `terraform apply` has been run for this M6 portfolio state.
-- No real Aurora runtime persistence is connected for Revenue Ops action status.
-- No live external context API collection is implemented.
-- Current context data is static/export-backed from the M3 Gold/export path, not live API fetch.
-
-## Local Run
-
-Install dependencies first if needed:
-
-```bash
-npm install
-pip install -r requirements-pipelines.txt
-```
-
-Run the web app:
-
-```bash
-npm --prefix apps/web run dev
-```
-
-Open the Vite URL and use one of:
+## Architecture Summary
 
 ```text
 #revenue-cockpit
-#revenue-cockpit?data=api
+  -> API Gateway + Cognito
+  -> Revenue API Lambda in VPC private subnets
+  -> Aurora operational SaaS tables
+  -> NAT egress for public context APIs
+  -> collector_runs / context_observations / action planner
 ```
 
-Run the API for API mode:
+Aurora는 운영 정본입니다. ClickHouse는 기준 문서상 분석/집계/CDC read-model layer이며, 이번 M6 pass에서는 신규 ClickHouse/Terraform 변경을 하지 않습니다.
+
+## Live Collector List
+
+- Kakao geocoding
+- KMA weather
+- Seoul commercial benchmark
+- Seoul foot traffic proxy
+- Seoul store density proxy
+- Naver Local Search
+- Naver DataLab
+- Korean holiday calendar
+- Toss Place connector smoke foundation
+- Delivery provider connector smoke foundation
+
+Toss Place는 foundation only입니다. 사업자 등록/공식 credential 없이 real live integration으로 주장하지 않습니다.
+
+Delivery apps는 CSV upload/parser와 provider skeleton 우선입니다. Baemin/CoupangEats raw login credentials를 저장하지 않고 direct login automation을 구현하지 않습니다.
+
+## Demo Route
 
 ```bash
+npm --prefix apps/web run dev
 PORT=3000 node apps/api/src/server.js
 ```
 
-Note: `apps/api/package.json` is not present, so the API currently uses the Node entrypoint directly rather than an API package script. The web Vite config proxies `/api` to `http://127.0.0.1:3000`.
+Open:
 
-Run the M3 sample pipeline:
-
-```bash
-python -m pipelines.orchestration.run_local_medallion_pipeline \
-  --use-samples --target-year 2024 --target-quarter 4
+```text
+#revenue-cockpit?data=api
 ```
 
-Export Gold data to JSON:
-
-```bash
-python3 scripts/export_gold_to_json.py
-```
+API mode가 실패하면 bundled demo data로 fallback합니다.
 
 ## Validation
 
-Discovered safe local validation scripts:
+Common checks:
 
 ```bash
+node --test apps/api/src/revenue-ops/context-collectors.test.js
+node --test apps/api/src/revenue-ops/revenue-ops-saas-routes.test.js
+node --test apps/api/src/revenue-ops/revenue-upload-parsers.test.js
 npm --prefix apps/web run check
 npm --prefix apps/web run build
-python3 -m pytest tests/ -q
-node --test apps/api/src/**/*.test.js
-npm run validate:m5:engineering
+node scripts/validate_step3_lambda_package_manifest.js
 ```
 
-`npm run validate:m5:engineering` runs the web type check, web build, Python tests, and Node API tests. It may leave generated validation artifacts dirty, especially `apps/web/tsconfig.tsbuildinfo`.
+Do not run `terraform apply` as part of M6 packaging validation.
 
-Do not run AWS mutating commands, `terraform apply`, or deployment commands as part of M6 validation.
+## M6 Docs
 
-## Documentation
+- [M6 live smoke result](docs/m6_live_smoke_result_kr.md)
+- [M6 architecture overview](docs/m6_architecture_overview_kr.md)
+- [M6 demo guide](docs/m6_demo_guide_kr.md)
+- [M6 screenshot checklist](docs/m6_screenshot_checklist_kr.md)
+- [M6 presentation/interview narrative](docs/m6_presentation_interview_narrative_kr.md)
+- [M6 route/use guide](docs/m6_route_use_guide_kr.md)
+- [M6 cost/runtime profile](docs/m6_cost_runtime_profile_kr.md)
+- [Public context live collectors](docs/public_context_live_collectors_kr.md)
 
-- M3 completion: [docs/m3_completion_checklist_kr.md](docs/m3_completion_checklist_kr.md)
-- M4 closure: [docs/m4_final_closure_summary_kr.md](docs/m4_final_closure_summary_kr.md)
-- M5 AWS readiness: [docs/m5_aws_deployment_readiness_kr.md](docs/m5_aws_deployment_readiness_kr.md)
-- M6 demo guide: [docs/m6_demo_guide_kr.md](docs/m6_demo_guide_kr.md)
-- M6 screenshot checklist: [docs/m6_screenshot_checklist_kr.md](docs/m6_screenshot_checklist_kr.md)
-- M6 route/use guide: [docs/m6_route_use_guide_kr.md](docs/m6_route_use_guide_kr.md)
-- M6 architecture overview: [docs/m6_architecture_overview_kr.md](docs/m6_architecture_overview_kr.md)
-- M6 presentation/interview narrative: [docs/m6_presentation_interview_narrative_kr.md](docs/m6_presentation_interview_narrative_kr.md)
-- M6 final validation report: [docs/m6_final_validation_report_kr.md](docs/m6_final_validation_report_kr.md)
-- M6 closure summary: [docs/m6_closure_summary_kr.md](docs/m6_closure_summary_kr.md)
+## Known Limitations
 
-## Portfolio Positioning
-
-This is best presented as a complete local portfolio slice:
-
-1. M3 proves the data foundation: medallion pipeline, Gold mart, anomaly/evidence/action generation.
-2. M4 proves productization: JSON export, API foundation, and merchant-facing cockpit.
-3. M5 proves engineering reliability: API mode, fallback, status PATCH, tests, validation, AWS readiness.
-4. M6 proves communication readiness: demo script, architecture narrative, screenshots, and honest closure.
-
-## Roadmap
-
-Future production work should be treated as a new milestone, not as completed M6 scope:
-
-- live merchant ingestion from POS/order/sales systems
-- scheduled external context collectors
-- Aurora persistence for action tracking and operational state
-- deployed API/frontend on AWS
-- production observability, alerting, and runbooks
-- stronger identity, tenant isolation, and access control
+- Naver/Holiday live collectors require deployed secret/env state for repeat smoke.
+- Toss Place needs valid business/developer registration and official credentials before live integration.
+- Binary XLSX parsing is documented as a follow-up; CSV and normalized rows are supported first.
+- Platform-scale async collector architecture with SQS/EventBridge/S3 is a future milestone.
+- No hard causality claim is made from observed context signals.

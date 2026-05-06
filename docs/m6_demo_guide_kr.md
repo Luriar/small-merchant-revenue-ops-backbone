@@ -1,107 +1,82 @@
-# M6 데모 가이드
+# M6 Demo Guide
 
-## 1. 데모 목표
+## 1. 데모 메시지
 
-M6 데모의 목표는 새 기능을 보여주는 것이 아니라, M3/M4/M5에서 완성한 Revenue Ops 흐름을 포트폴리오와 인터뷰에서 명확하게 설명하는 것이다.
+이 서비스는 소상공인이 매출 변화 후 `무엇이 함께 관측되었고`, `어떤 원인 후보를 추가 확인해야 하며`, `이번 주 어떤 액션을 실행 후보로 둘지` 판단하게 돕는 Revenue Ops SaaS다.
 
-핵심 메시지:
+인과관계나 매출 회복을 단정하지 않는다.
 
-- 소상공인은 매출 변화 원인과 다음 액션을 빠르게 판단하기 어렵다.
-- 이 프로젝트는 Gold 데이터에서 매출 이상, 함께 관측된 근거 후보, 실행 액션, 데이터 신뢰도를 연결한다.
-- 현재 데모는 static/export-backed 데이터와 로컬 API 기반이며, AWS 배포/Aurora persistence/live external API collection은 아직 구현하지 않았다.
+## 2. 실행
 
-## 2. Pre-demo Checks
-
-데모 전 확인:
-
-- `git status --short`로 예기치 않은 구현 변경이 없는지 확인한다.
-- `npm run validate:m5:engineering`이 통과하는지 확인한다.
-- validation 후 `apps/web/tsconfig.tsbuildinfo`가 dirty가 될 수 있음을 인지한다.
-- API mode를 보여줄 경우 API와 web을 둘 다 실행한다.
-- fallback을 보여줄 경우 API를 끄거나 API 없이 `#revenue-cockpit?data=api`를 연다.
-
-## 3. 실행 방법
-
-웹 실행:
+Web:
 
 ```bash
 npm --prefix apps/web run dev
 ```
 
-API 실행:
+Local API:
 
 ```bash
 PORT=3000 node apps/api/src/server.js
 ```
 
-주의: `apps/api/package.json`은 현재 없다. API는 package script가 아니라 `apps/api/src/server.js` Node entrypoint로 실행한다. Vite dev server는 `/api` 요청을 `http://127.0.0.1:3000`으로 proxy한다.
-
-## 4. 열어야 할 화면
-
-기본 데모/static mode:
-
-```text
-#revenue-cockpit
-```
-
-API mode:
+화면:
 
 ```text
 #revenue-cockpit?data=api
 ```
 
-API mode에서 API fetch가 실패하면 화면 상단에 안내가 뜨고 bundled demo data로 fallback한다.
+AWS live API를 볼 때는 배포된 frontend 설정의 `VITE_REVENUE_API_BASE_URL` 또는 기본 API endpoint를 사용한다.
 
-## 5. Presenter Talk Track
+## 3. Demo Flow
 
-### Revenue Cockpit Overview
+1. Login
+   - Cognito 로그인 상태를 확인한다.
+   - API mode에서 store switcher가 표시되는지 확인한다.
 
-"이 화면은 일반 BI 대시보드가 아니라 소상공인이 바로 판단할 수 있는 Revenue Brief입니다. 매출 변화 결론을 먼저 보여주고, 함께 관측된 신호와 이번 주 검토할 액션까지 이어 줍니다."
+2. Register my store
+   - `새 가게 등록`에서 store name, business category, region, address를 입력한다.
+   - 응답의 `context_bootstrap_hint.recommended = true` 조건이면 frontend가 자동으로 context collection을 호출한다.
 
-### Context Data Meaning
+3. Auto context bootstrap
+   - onboarding panel에서 다음 상태를 설명한다.
+   - 가게 등록 완료
+   - 위치 맥락 수집 중
+   - 날씨 맥락 수집 중
+   - 주변 상권 맥락 수집 중
+   - 검색/공휴일 맥락 수집 중
+   - 초기 분석 준비 완료
+   - 일부 실패가 있어도 `현재 수집된 데이터만으로 초기 분석을 시작할 수 있습니다` 문구를 보여준다.
 
-"현재 컨텍스트는 M3 Gold/export에서 나온 static 데이터입니다. 날씨, 상권, 점포, 생활인구 같은 신호를 함께 관측된 근거 후보로 보여주지만, 인과관계를 확정한다고 말하지 않습니다."
+4. Upload/register revenue data
+   - `/api/v1/stores/:storeId/revenue/uploads/preview`로 CSV preview를 보여준다.
+   - `/api/v1/stores/:storeId/revenue/uploads`로 daily POS 또는 delivery CSV rows를 등록한다.
+   - Baemin/CoupangEats는 CSV parser 우선이며 raw login credentials를 저장하지 않는다.
 
-### Action Planner
+5. Revenue Cockpit
+   - Revenue Brief에서 매출 변화와 candidate cause count를 설명한다.
+   - “함께 관측되었습니다”와 “인과가 확정된 것은 아닙니다”를 명확히 말한다.
 
-"Action Planner는 추천 액션을 `recommended`, `selected`, `planned`, `done`, `dismissed` 상태로 관리합니다. M5에서 API mode일 때 상태 변경이 `PATCH /api/v1/revenue/actions/:id/status`로 연결되도록 보강했습니다. 로컬 데모에서는 in-memory 상태입니다."
+6. Cause Evidence
+   - source_name, freshness, status가 있는 context evidence를 보여준다.
+   - 기술 ID는 Data Reliability의 세부 보기로 보낸다.
 
-### API Mode
+7. Action Planner
+   - recommended -> selected/planned/done 상태 변경을 보여준다.
+   - done은 outcome tracking placeholder를 생성하지만 실행 효과를 단정하지 않는다.
 
-"`#revenue-cockpit?data=api`는 프론트가 `/api/v1/revenue/*`를 호출해서 JSON export 기반 데이터를 받아오는 모드입니다. 기본 `#revenue-cockpit`은 API 없이도 보여줄 수 있는 demo/static mode입니다."
+8. Pipeline Health
+   - Kakao/KMA/Seoul/Naver/Holiday 상태를 보여준다.
+   - Toss Place와 Delivery provider는 foundation only 또는 missing credential 상태로 설명한다.
 
-### Fallback Behavior
+## 4. 말하면 안 되는 것
 
-"API mode에서 API가 내려가 있거나 호출에 실패하면 데모가 깨지지 않도록 bundled demo data로 fallback합니다. 포트폴리오 시연 안정성을 위한 설계입니다."
+- Toss Place real live integration 완료
+- Baemin/CoupangEats direct login automation 구현
+- 특정 원인이 매출 변화를 일으켰다는 확정 표현
+- TCP 80 egress 추가 필요
+- Aurora public exposure
 
-### Current Limitations
+## 5. 3분 요약 스크립트
 
-"아직 AWS에 실제 배포하지 않았고, Terraform apply도 하지 않았습니다. Revenue Ops action status는 Aurora에 persistence하지 않았고, 외부 컨텍스트 API를 실시간으로 수집하지 않습니다. 이 프로젝트의 현재 완성점은 로컬에서 검증 가능한 Revenue Ops portfolio slice입니다."
-
-## 6. 3분 데모 Flow
-
-1. `#revenue-cockpit`을 연다.
-2. Revenue Brief에서 매출 하락 요약과 원인 후보 수를 설명한다.
-3. Action Planner에서 액션 하나의 상태를 변경한다.
-4. Data Reliability에서 데이터 한계와 static/export-backed 경계를 짚는다.
-5. `#revenue-cockpit?data=api`가 API mode임을 짧게 설명한다.
-
-## 7. 5분 데모 Flow
-
-1. 문제 정의를 20초로 설명한다.
-2. Revenue Brief에서 결론-first 구조를 설명한다.
-3. Cause Evidence에서 "함께 관측된 신호" 표현을 강조한다.
-4. Action Planner에서 상태 변경을 보여준다.
-5. Data Reliability에서 커버리지와 한계를 보여준다.
-6. API mode와 fallback behavior를 설명한다.
-
-## 8. 10분 데모 Flow
-
-1. M3 -> M4 -> M5 -> M6 흐름을 설명한다.
-2. `#revenue-cockpit` 기본 데모를 연다.
-3. Revenue Brief, Cause Evidence, Action Planner, Data Reliability 네 탭을 차례로 보여준다.
-4. 별도 터미널에서 API를 실행하고 `#revenue-cockpit?data=api`를 연다.
-5. Action Planner status PATCH 흐름을 설명한다.
-6. API를 끄거나 API 없이 API mode를 열어 fallback을 설명한다.
-7. README와 M6 docs를 열어 packaging/validation/documentation readiness를 보여준다.
-8. 마지막에 아직 하지 않은 것: AWS 배포, Terraform apply, Aurora persistence, live external collection을 명확히 말한다.
+“POS만 보면 매출이 올랐는지 내렸는지는 보이지만 왜 그런지와 무엇을 해야 하는지는 바로 나오지 않습니다. 이 cockpit은 가게 등록 후 공개 맥락을 자동 수집하고, 매출 데이터와 함께 관측된 날씨, 상권, 주변 점포, 검색 관심도, 공휴일 신호를 정리합니다. 여기서 제시하는 것은 가능성 높은 원인 후보와 evidence-backed suggestion이며, 인과가 확정된 것은 아닙니다. 액션은 상태와 결과 추적까지 이어지지만 실행 효과를 단정하지 않습니다.”

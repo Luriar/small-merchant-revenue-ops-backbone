@@ -1,106 +1,79 @@
 # M6 Architecture Overview
 
-## 1. Implemented Now
+## 1. 제품 정의
 
-현재 구현은 M3 Gold/export data를 Revenue Ops API와 standalone cockpit으로 연결하는 로컬 포트폴리오 아키텍처다.
+이 프로젝트는 소상공인 Revenue Ops SaaS를 M6 기준으로 제품화한 slice다. 흐름은 `store registration -> revenue/POS upload -> public/private context collection -> normalized evidence observations -> candidate causes -> action planner -> action status/result tracking`이다.
+
+단순 매출 대시보드가 아니라 매출 변화와 함께 관측된 맥락 신호를 근거 카드와 실행 액션 후보로 연결한다. 인과는 확정하지 않는다.
+
+## 2. Runtime Architecture
 
 ```text
-M3 medallion/gold
-  -> deterministic JSON export
-  -> Revenue Ops API
-  -> #revenue-cockpit API mode
-  -> fallback to demo data
+Frontend #revenue-cockpit
+  -> API Gateway + Cognito authorizer
+  -> Revenue API Lambda
+  -> Aurora PostgreSQL operational SaaS tables
+  -> public context collectors via NAT egress
+  -> context observations / collector_runs / job_runs / action planner
 ```
 
-## 2. Data Flow
+구현된 AWS runtime:
 
-1. M3 pipeline이 Bronze/Silver/Gold 구조로 public commerce/context sample data를 처리한다.
-2. Gold mart에서 revenue brief, anomaly, evidence, action, context, pipeline metadata가 생성된다.
-3. `scripts/export_gold_to_json.py`가 Gold 결과를 deterministic JSON artifact로 변환한다.
-4. JSON artifact는 `apps/api/src/revenue-ops/data/revenue_ops_export.json`에 위치한다.
-5. Revenue Ops API는 `/api/v1/revenue/*` endpoint로 export-backed 데이터를 제공한다.
-6. `#revenue-cockpit?data=api`는 API를 호출해 화면 scenario를 구성한다.
-7. API 호출 실패 시 frontend는 bundled demo data로 fallback한다.
+- API Gateway + Cognito auth
+- Lambda in VPC private subnets
+- Aurora access from Lambda
+- `single_nat` egress profile
+- Seoul Open Data TCP 8088 egress
+- Secrets Manager 기반 public context credential loading
+- timeout-safe partial collector result
 
-## 3. API Layer Responsibility
+## 3. Data Responsibility
 
-API layer의 현재 책임:
+- Aurora: 운영 정본. stores, revenue uploads, context observations, collector/job runs, action status를 보관한다.
+- ClickHouse: 기준 문서상 분석/집계/CDC read-model layer다. 이번 M6 packaging pass에서는 신규 ClickHouse 변경을 하지 않는다.
+- Frontend: Cognito login 후 store-scoped API를 사용하고, API 실패 시 demo fallback을 유지한다.
 
-- export-backed JSON 로드
-- briefs/anomalies/actions/context/pipeline-meta 응답 제공
-- action status update validation
-- 로컬 demo용 in-memory action status 관리
-- safe error response와 route test coverage 유지
+## 4. Collector Flow
 
-현재 API layer가 하지 않는 것:
+Context collection은 `/api/v1/stores/:storeId/context/collect`에서 시작한다.
 
-- Revenue Ops action status를 Aurora에 영구 저장
-- live external API를 호출해 context를 수집
-- AWS Lambda/API Gateway로 배포
+Collector set:
 
-## 4. Frontend Responsibility
+- Kakao geocoding
+- KMA weather
+- Seoul commercial benchmark
+- Seoul foot traffic proxy
+- Seoul store density proxy
+- Naver Local Search
+- Naver DataLab
+- Korean holiday calendar
+- Toss Place connector smoke foundation
+- Delivery provider connector smoke foundation
 
-Frontend의 현재 책임:
+각 collector는 `completed`, `skipped`, `failed`를 독립적으로 기록한다. 하나가 timeout/403/missing credential이어도 전체 onboarding은 멈추지 않는다.
 
-- standalone `#revenue-cockpit` 경험 제공
-- demo/static mode와 API mode 분리
-- API failure fallback
-- Revenue Brief, Cause Evidence, Action Planner, Data Reliability 표시
-- Action Planner 상태 변경 UI와 API PATCH 요청
-- KO/EN, Light/Dark/System 전환
+## 5. Evidence Flow
 
-## 5. Validation/Test Layer
+Live collector 결과는 `context_sources`, `context_observations`, `nearby_store_snapshots`, `public_revenue_benchmarks`, `collector_runs.metadata`에 정규화된다.
 
-현재 validation layer:
+문구 원칙:
 
-- `npm --prefix apps/web run check`: TypeScript check
-- `npm --prefix apps/web run build`: production build
-- `python3 -m pytest tests/ -q`: M3/export/pipeline 관련 Python tests
-- `node --test apps/api/src/**/*.test.js`: Node API tests
-- `npm run validate:m5:engineering`: 위 검증을 묶는 M5 validation wrapper
+- 함께 관측되었습니다
+- 가능성 높은 원인 후보
+- 추가 확인이 필요합니다
+- 인과가 확정된 것은 아닙니다
+- 실행 효과를 단정하지 않습니다
 
-validation은 로컬 검증만 수행한다. AWS resource mutation, Terraform apply, deployment는 포함하지 않는다.
+## 6. Why Not Platform-Scale Async Yet
 
-## 6. AWS Readiness Boundary
+M6는 초기 유료 SaaS runtime 검증 단계다. API Gateway/Lambda/Aurora와 NAT 기반 live collector가 실제 동작하는지를 먼저 닫는다.
 
-`docs/m5_aws_deployment_readiness_kr.md`는 AWS 배포 경로와 선행 조건을 정리한 readiness 문서다.
+아직 하지 않는 것:
 
-현재 repo state에서 실제로 수행하지 않은 것:
+- Terraform/SQS/EventBridge 기반 platform-scale collector orchestration
+- public collector Lambda + S3/SQS + VPC writer 분리
+- multi-AZ NAT 확대
+- Toss Place 실연동 claim
+- Delivery app direct login automation
 
-- AWS deployment
-- Terraform apply
-- Aurora runtime connection
-- production API hosting
-- live external context collector
-
-## 7. Future Production Expansion
-
-미래 production architecture 후보:
-
-- POS/order/sales live ingestion
-- external context collectors for weather/events/commerce signals
-- Aurora persistence for action status and operational state
-- scheduled pipeline orchestration
-- deployed frontend on Amplify or S3 + CloudFront
-- API Gateway + Lambda or containerized API
-- observability, alerting, runbook, rollback workflow
-- tenant/account model and access control
-
-## 8. Separation of Claims
-
-Implemented now:
-
-- medallion foundation
-- Gold to JSON export
-- local Revenue Ops API
-- standalone cockpit
-- API mode and fallback
-- local validation
-- portfolio documentation
-
-Future production expansion:
-
-- real deployment
-- real persistence
-- live collection
-- multi-tenant production operations
+이 확장은 비용/운영/보안 결정을 동반하므로 다음 milestone에서 다룬다.
