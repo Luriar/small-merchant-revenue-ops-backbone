@@ -51,13 +51,40 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
   return JSON.parse(atob(padded));
 }
 
+function isUsableJwt(token: unknown): token is string {
+  if (typeof token !== 'string' || token.split('.').length < 3) return false;
+
+  try {
+    const claims = decodeJwtPayload(token);
+    const exp = typeof claims.exp === 'number' ? claims.exp : null;
+    if (!exp) return true;
+    return exp * 1000 > Date.now() + 30_000;
+  } catch {
+    return false;
+  }
+}
+
+export function getStoredCognitoToken(): string | null {
+  const raw = sessionStorage.getItem(TOKENS_KEY);
+  if (!raw) return null;
+
+  try {
+    const session = JSON.parse(raw) as Partial<RevenueAuthSession>;
+    if (isUsableJwt(session.id_token)) return session.id_token;
+    if (isUsableJwt(session.access_token)) return session.access_token;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function getStoredAuthSession(): RevenueAuthSession | null {
   const raw = sessionStorage.getItem(TOKENS_KEY);
   if (!raw) return null;
 
   try {
     const session = JSON.parse(raw) as RevenueAuthSession;
-    if (!session.access_token || !session.id_token) return null;
+    if (!getStoredCognitoToken()) return null;
     return session;
   } catch {
     return null;

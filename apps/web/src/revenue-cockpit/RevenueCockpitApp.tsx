@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import './revenueCockpit.css';
 import { SCENARIO, tr, DEFAULT_STATUSES } from './revenueCockpitCopy';
 import {
@@ -10,10 +11,11 @@ import {
   apiFetchPipelineMeta,
   apiFetchStores,
   apiUpdateActionStatus,
+  RevenueApiError,
   type CreateRevenueStorePayload,
   type RevenueStoreSummary,
 } from './revenueCockpitApi';
-import { getStoredAuthSession } from './revenueCockpitAuth';
+import { getStoredCognitoToken } from './revenueCockpitAuth';
 import { buildScenarioFromApi, wantsApiData } from './revenueCockpitData';
 import { Icon, ChromeBar } from './revenueCockpitShared';
 import { RevenueBriefView } from './RevenueBriefView';
@@ -75,9 +77,10 @@ interface HeaderProps {
   scenario: Scenario;
   screen: RcScreen;
   onSetScreen: (s: RcScreen) => void;
+  storeSwitcher?: ReactNode;
 }
 
-function RcHeader({ lang, scenario, screen, onSetScreen }: HeaderProps) {
+function RcHeader({ lang, scenario, screen, onSetScreen, storeSwitcher }: HeaderProps) {
   const items: Array<{ id: RcScreen; label: string }> = [
     { id: 'brief',       label: tr('navBrief', lang) },
     { id: 'evidence',    label: tr('navEvidence', lang) },
@@ -85,14 +88,14 @@ function RcHeader({ lang, scenario, screen, onSetScreen }: HeaderProps) {
     { id: 'reliability', label: tr('navReliability', lang) },
   ];
   return (
-    <header style={{
+    <header className="rc-header" style={{
       display: 'flex', alignItems: 'flex-end', gap: 24,
       padding: '12px 32px 0',
       borderBottom: '1px solid var(--rc-rule)',
       background: 'var(--rc-surface-0)',
       flexShrink: 0,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 10 }}>
+      <div className="rc-header-brand" style={{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 10 }}>
         <div style={{
           width: 22, height: 22, borderRadius: 6, background: 'var(--rc-accent)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
@@ -105,6 +108,7 @@ function RcHeader({ lang, scenario, screen, onSetScreen }: HeaderProps) {
         <span style={{ fontSize: 11, color: 'var(--rc-fg-dim)', borderLeft: '1px solid var(--rc-rule)', paddingLeft: 10, marginLeft: 4 }}>
           {scenario.area[lang]} · {scenario.category[lang]} · {scenario.compare[lang]}
         </span>
+        {storeSwitcher}
       </div>
       <nav style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
         {items.map(it => (
@@ -133,6 +137,7 @@ interface StoreSwitcherProps {
   onToggleCreate: () => void;
   onChangeForm: (patch: Partial<CreateRevenueStorePayload>) => void;
   onCreateStore: () => void;
+  compact?: boolean;
 }
 
 function StoreSwitcher({
@@ -147,9 +152,10 @@ function StoreSwitcher({
   onToggleCreate,
   onChangeForm,
   onCreateStore,
+  compact = false,
 }: StoreSwitcherProps) {
   return (
-    <section className="rc-store-switcher" aria-label={lang === 'ko' ? '가게 선택' : 'Store'}>
+    <section className={compact ? 'rc-store-switcher rc-store-switcher-compact' : 'rc-store-switcher'} aria-label={lang === 'ko' ? '가게 선택' : 'Store'}>
       <div className="rc-store-switcher-row">
         <label className="rc-store-label" htmlFor="rc-store-select">{lang === 'ko' ? '가게 선택' : 'Store'}</label>
         <select
@@ -164,7 +170,7 @@ function StoreSwitcher({
           )}
           {stores.map(store => (
             <option key={store.store_id} value={store.store_id}>
-              {store.store_name}{store.region ? ` · ${store.region}` : ''}
+              {formatStoreOption(store)}
             </option>
           ))}
         </select>
@@ -214,6 +220,32 @@ function StoreSwitcher({
   );
 }
 
+function formatStoreOption(store: RevenueStoreSummary): string {
+  const parts = [
+    store.store_name,
+    store.business_category || store.store_type,
+    store.region,
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function chooseInitialStore(stores: RevenueStoreSummary[], saved: string | null): string | null {
+  const savedStore = stores.find(store => store.store_id === saved);
+  if (savedStore) return savedStore.store_id;
+
+  const nonDemoStores = stores
+    .map((store, index) => ({
+      store,
+      score: Number.isFinite(Date.parse(store.created_at ?? ''))
+        ? Date.parse(store.created_at ?? '')
+        : index,
+    }))
+    .filter(item => item.store.store_type !== 'demo')
+    .sort((a, b) => b.score - a.score);
+
+  return nonDemoStores[0]?.store.store_id ?? stores[0]?.store_id ?? null;
+}
+
 // ─── main surface ─────────────────────────────────────────────────────────────
 
 export function RevenueCockpitApp() {
@@ -227,7 +259,7 @@ export function RevenueCockpitApp() {
     const params = new URLSearchParams(window.location.search);
     return wantsApiData() || (params.has('code') && params.has('state'));
   });
-  const [apiNotice, setApiNotice] = useState<'loading' | 'fallback' | 'patch-saving' | 'patch-saved' | 'patch-local' | 'patch-failed' | null>(() => wantsApiData() ? 'loading' : null);
+  const [apiNotice, setApiNotice] = useState<'loading' | 'fallback' | 'auth-expired' | 'patch-saving' | 'patch-saved' | 'patch-local' | 'patch-failed' | null>(() => wantsApiData() ? 'loading' : null);
   const [authReloadTick, setAuthReloadTick] = useState(0);
   const [stores, setStores] = useState<RevenueStoreSummary[]>([]);
   const [selectedStoreId, setSelectedStoreIdState] = useState<string | null>(() => loadSelectedStoreId());
@@ -244,7 +276,7 @@ export function RevenueCockpitApp() {
 
   useEffect(() => {
     const handleAuthChanged = () => {
-      if (!getStoredAuthSession()) {
+      if (!getStoredCognitoToken()) {
         setStores([]);
         setSelectedStoreId(null);
       }
@@ -334,10 +366,12 @@ export function RevenueCockpitApp() {
     }
 
     let cancelled = false;
-    const session = getStoredAuthSession();
-    if (!session) {
+    const token = getStoredCognitoToken();
+    if (!token) {
       setStores([]);
       setSelectedStoreId(null);
+      setStoreNotice(lang === 'ko' ? '로그인이 만료되었습니다. 다시 로그인해주세요.' : 'Login expired. Please sign in again.');
+      setApiNotice('auth-expired');
       return;
     }
 
@@ -350,19 +384,22 @@ export function RevenueCockpitApp() {
         const nextStores = envelope.stores ?? [];
         setStores(nextStores);
         const saved = loadSelectedStoreId();
-        const nextSelected = nextStores.find(store => store.store_id === saved)?.store_id
-          ?? nextStores[0]?.store_id
-          ?? null;
+        const nextSelected = chooseInitialStore(nextStores, saved);
         setSelectedStoreId(nextSelected);
         setStoreNotice(nextStores.length === 0
           ? (lang === 'ko' ? '등록된 가게가 없습니다.' : 'No stores yet.')
           : null);
       })
-      .catch(() => {
+      .catch(error => {
         if (cancelled) return;
+        console.error('Revenue Cockpit store list API failed.', error);
         setStores([]);
         setSelectedStoreId(null);
-        setStoreNotice(lang === 'ko' ? '가게 목록을 불러오지 못했습니다.' : 'Could not load stores.');
+        const authExpired = error instanceof RevenueApiError && error.status === 401;
+        setStoreNotice(authExpired
+          ? (lang === 'ko' ? '로그인이 만료되었습니다. 다시 로그인해주세요.' : 'Login expired. Please sign in again.')
+          : (lang === 'ko' ? '가게 목록을 불러오지 못했습니다.' : 'Could not load stores.'));
+        if (authExpired) setApiNotice('auth-expired');
       })
       .finally(() => {
         if (!cancelled) setStoreLoading(false);
@@ -382,7 +419,7 @@ export function RevenueCockpitApp() {
 
     let cancelled = false;
     const storeId = selectedStoreId ?? undefined;
-    if (getStoredAuthSession() && !storeId) {
+    if (getStoredCognitoToken() && !storeId) {
       return;
     }
 
@@ -454,7 +491,9 @@ export function RevenueCockpitApp() {
     ? (lang === 'ko' ? 'API 데이터를 확인하는 중입니다.' : 'Checking API data.')
     : apiNotice === 'fallback'
       ? (lang === 'ko' ? 'API 데이터를 불러오지 못해 데모 데이터를 표시합니다.' : 'Could not load API data. Showing demo data instead.')
-      : apiNotice === 'patch-saving'
+      : apiNotice === 'auth-expired'
+        ? (lang === 'ko' ? '로그인이 만료되었습니다. 다시 로그인해주세요.' : 'Login expired. Please sign in again.')
+        : apiNotice === 'patch-saving'
         ? (lang === 'ko' ? '상태 변경을 Aurora에 저장하는 중입니다.' : 'Saving the status to Aurora.')
         : apiNotice === 'patch-saved'
           ? (lang === 'ko' ? '상태 변경이 Aurora에 저장되었습니다.' : 'Status saved to Aurora.')
@@ -467,22 +506,28 @@ export function RevenueCockpitApp() {
   return (
     <div className="rc-root" data-theme={effectiveTheme}>
       <ChromeBar lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} label={chromeLabel}/>
-      <RcHeader lang={lang} scenario={scenario} screen={screen} onSetScreen={setScreen}/>
-      {apiMode && getStoredAuthSession() && (
-        <StoreSwitcher
-          lang={lang}
-          stores={stores}
-          selectedStoreId={selectedStoreId}
-          loading={storeLoading}
-          notice={storeNotice}
-          showCreate={showCreateStore}
-          form={storeForm}
-          onSelectStore={setSelectedStoreId}
-          onToggleCreate={() => setShowCreateStore(value => !value)}
-          onChangeForm={patch => setStoreForm(prev => ({ ...prev, ...patch }))}
-          onCreateStore={handleCreateStore}
-        />
-      )}
+      <RcHeader
+        lang={lang}
+        scenario={scenario}
+        screen={screen}
+        onSetScreen={setScreen}
+        storeSwitcher={apiMode && getStoredCognitoToken() ? (
+          <StoreSwitcher
+            lang={lang}
+            stores={stores}
+            selectedStoreId={selectedStoreId}
+            loading={storeLoading}
+            notice={storeNotice}
+            showCreate={showCreateStore}
+            form={storeForm}
+            onSelectStore={setSelectedStoreId}
+            onToggleCreate={() => setShowCreateStore(value => !value)}
+            onChangeForm={patch => setStoreForm(prev => ({ ...prev, ...patch }))}
+            onCreateStore={handleCreateStore}
+            compact
+          />
+        ) : null}
+      />
       {noticeCopy && (
         <div className="rc-api-notice">
           <Icon name="shield" size={12}/>

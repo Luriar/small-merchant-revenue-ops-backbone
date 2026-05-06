@@ -138,6 +138,15 @@
   line-height: 1.4;
 }
 
+.rc-header {
+  flex-wrap: wrap;
+}
+
+.rc-header-brand {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .rc-store-switcher {
   display: flex;
   flex-direction: column;
@@ -145,6 +154,57 @@
   padding: 9px 32px;
   border-bottom: 1px solid var(--rc-rule);
   background: var(--rc-surface-0);
+}
+
+.rc-store-switcher-compact {
+  display: inline-flex;
+  width: auto;
+  min-width: min(420px, 100%);
+  max-width: 720px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.rc-store-switcher-compact .rc-store-switcher-row {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.rc-store-switcher-compact .rc-store-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.rc-store-switcher-compact .rc-store-select {
+  min-width: 260px;
+  max-width: min(420px, 44vw);
+  height: 32px;
+  border-color: var(--rc-rule-strong);
+  background: var(--rc-surface-1);
+  color: var(--rc-fg-strong);
+  box-shadow: var(--rc-shadow-sm);
+}
+
+.rc-store-switcher-compact .rc-store-button {
+  height: 32px;
+  white-space: nowrap;
+}
+
+.rc-store-switcher-compact .rc-store-notice {
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rc-store-switcher-compact .rc-store-create {
+  width: 100%;
+  padding: 8px 0 2px 0;
 }
 
 .rc-store-switcher-row,

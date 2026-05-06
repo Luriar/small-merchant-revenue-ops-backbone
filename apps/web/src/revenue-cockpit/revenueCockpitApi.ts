@@ -1,4 +1,4 @@
-import { getStoredAuthSession } from './revenueCockpitAuth';
+import { getStoredCognitoToken } from './revenueCockpitAuth';
 
 const DEFAULT_API_ORIGIN = 'https://7q8hxxta67.execute-api.ap-northeast-2.amazonaws.com';
 const API_ROOT = '/api/v1';
@@ -23,6 +23,7 @@ export interface RevenueStoreSummary {
   timezone?: string;
   member_role?: string;
   status?: string;
+  created_at?: string;
 }
 
 export interface CreateRevenueStorePayload {
@@ -44,13 +45,23 @@ export interface ActionStatusUpdateEnvelope {
 
 function withAuthHeaders(headers?: HeadersInit): Headers {
   const merged = new Headers(headers);
-  const session = getStoredAuthSession();
+  const token = getStoredCognitoToken();
 
-  if (session?.access_token && !merged.has('Authorization')) {
-    merged.set('Authorization', `${session.token_type || 'Bearer'} ${session.access_token}`);
+  if (token && !merged.has('Authorization')) {
+    merged.set('Authorization', `Bearer ${token}`);
   }
 
   return merged;
+}
+
+export class RevenueApiError extends Error {
+  readonly status: number;
+
+  constructor(label: string, status: number) {
+    super(`${label} ${status}`);
+    this.name = 'RevenueApiError';
+    this.status = status;
+  }
 }
 
 async function fetchJson(url: string, init: RequestInit = {}, label = url) {
@@ -60,7 +71,7 @@ async function fetchJson(url: string, init: RequestInit = {}, label = url) {
   });
 
   if (!res.ok) {
-    throw new Error(`${label} ${res.status}`);
+    throw new RevenueApiError(label, res.status);
   }
 
   return res.json();
