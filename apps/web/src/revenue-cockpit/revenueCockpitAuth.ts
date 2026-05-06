@@ -144,7 +144,13 @@ export async function handleCognitoRedirectIfPresent(): Promise<RevenueAuthSessi
   sessionStorage.removeItem(VERIFIER_KEY);
   sessionStorage.removeItem(STATE_KEY);
 
-  window.location.replace(`${window.location.origin}/#revenue-cockpit?data=api`);
+  window.history.replaceState(null, '', `${window.location.origin}/#revenue-cockpit?data=api`);
+  window.dispatchEvent(new CustomEvent('revenue-ops-auth-changed', {
+    detail: {
+      email: session.email,
+      saved_at: session.saved_at,
+    },
+  }));
 
   return session;
 }

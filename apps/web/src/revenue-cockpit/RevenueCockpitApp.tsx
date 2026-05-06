@@ -94,8 +94,23 @@ export function RevenueCockpitApp() {
   const [screen, setScreen] = useState<RcScreen>('brief');
   const [scenario, setScenario] = useState<Scenario>(() => SCENARIO);
   const [statuses, setStatuses] = useState<ActionStatuses>(() => ({ ...DEFAULT_STATUSES }));
-  const [apiMode] = useState(() => wantsApiData());
+  const [apiMode] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return wantsApiData() || (params.has('code') && params.has('state'));
+  });
   const [apiNotice, setApiNotice] = useState<'loading' | 'fallback' | 'patch-saving' | 'patch-saved' | 'patch-local' | 'patch-failed' | null>(() => wantsApiData() ? 'loading' : null);
+  const [authReloadTick, setAuthReloadTick] = useState(0);
+
+  useEffect(() => {
+    const handleAuthChanged = () => {
+      setAuthReloadTick(tick => tick + 1);
+    };
+
+    window.addEventListener('revenue-ops-auth-changed', handleAuthChanged);
+    return () => {
+      window.removeEventListener('revenue-ops-auth-changed', handleAuthChanged);
+    };
+  }, []);
 
   const setLang = (l: RcLang) => { setLangState(l); savePref('rc-lang', l); };
   const setTheme = (t: RcTheme) => { setThemeState(t); savePref('rc-theme', t); setEffectiveTheme(resolveTheme(t)); };
@@ -162,6 +177,13 @@ export function RevenueCockpitApp() {
 
   useEffect(() => {
     if (!apiMode) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('code') && params.has('state') && authReloadTick === 0) {
+      setApiNotice('loading');
+      return;
+    }
+
     let cancelled = false;
 
     Promise.all([
@@ -192,7 +214,7 @@ export function RevenueCockpitApp() {
       });
 
     return () => { cancelled = true; };
-  }, [apiMode]);
+  }, [apiMode, authReloadTick]);
 
   const chromeLabel = lang === 'ko'
     ? '매출 코크핏 — 근거 기반 액션 브리프'
