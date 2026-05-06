@@ -84,6 +84,36 @@ output "aurora_network_private_subnet_ids" {
   value       = module.aurora_network.private_subnet_ids
 }
 
+output "vpc_egress_profile" {
+  description = "Configured Revenue Ops VPC egress profile."
+  value       = module.aurora_network.vpc_egress_profile
+}
+
+output "aurora_network_public_subnet_ids" {
+  description = "Public NAT subnet IDs. Empty when vpc_egress_profile is none."
+  value       = module.aurora_network.public_subnet_ids
+}
+
+output "aurora_network_nat_gateway_ids" {
+  description = "NAT Gateway IDs. Empty when vpc_egress_profile is none."
+  value       = module.aurora_network.nat_gateway_ids
+}
+
+output "aurora_network_nat_eip_public_ips" {
+  description = "NAT Elastic IP public addresses. Empty when vpc_egress_profile is none."
+  value       = module.aurora_network.nat_eip_public_ips
+}
+
+output "aurora_network_lambda_private_route_table_ids" {
+  description = "Route table IDs associated with Lambda private subnets."
+  value       = module.aurora_network.lambda_private_route_table_ids
+}
+
+output "aurora_network_lambda_private_subnet_ids" {
+  description = "Private subnet IDs used by the Revenue Ops Lambda."
+  value       = module.aurora_network.lambda_private_subnet_ids
+}
+
 output "aurora_network_lambda_security_group_id" {
   description = "Security group intended for future Lambda-to-Aurora runtime access. Null when network foundation disabled."
   value       = module.aurora_network.lambda_security_group_id

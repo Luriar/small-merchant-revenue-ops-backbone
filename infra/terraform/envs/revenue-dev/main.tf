@@ -166,7 +166,9 @@ module "aurora_network" {
   name_prefix          = local.name_prefix
   vpc_cidr             = var.aurora_network_vpc_cidr
   private_subnet_cidrs = var.aurora_network_private_subnet_cidrs
+  public_subnet_cidrs  = var.aurora_network_public_subnet_cidrs
   availability_zones   = var.aurora_network_availability_zones
+  vpc_egress_profile   = var.vpc_egress_profile
   tags                 = local.common_tags
 }
 

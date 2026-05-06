@@ -24,6 +24,28 @@ variable "private_subnet_cidrs" {
   }
 }
 
+variable "public_subnet_cidrs" {
+  type        = list(string)
+  default     = ["10.42.10.0/24", "10.42.11.0/24"]
+  description = "Public subnet CIDRs used only when vpc_egress_profile is single_nat or multi_az_nat."
+
+  validation {
+    condition     = length(var.public_subnet_cidrs) >= 2
+    error_message = "At least two public subnet CIDRs are required so multi_az_nat can match private subnet AZs."
+  }
+}
+
+variable "vpc_egress_profile" {
+  type        = string
+  default     = "none"
+  description = "Outbound internet egress profile for VPC-attached collector Lambdas: none, single_nat, or multi_az_nat."
+
+  validation {
+    condition     = contains(["none", "single_nat", "multi_az_nat"], var.vpc_egress_profile)
+    error_message = "vpc_egress_profile must be one of: none, single_nat, multi_az_nat."
+  }
+}
+
 variable "availability_zones" {
   type        = list(string)
   default     = []

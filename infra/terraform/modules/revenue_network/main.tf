@@ -16,6 +16,21 @@ locals {
   selected_availability_zones = !var.enable_network ? [] : (
     length(var.availability_zones) > 0 ? var.availability_zones : slice(data.aws_availability_zones.available[0].names, 0, length(var.private_subnet_cidrs))
   )
+  egress_enabled          = var.enable_network && var.vpc_egress_profile != "none"
+  multi_az_nat_enabled    = var.enable_network && var.vpc_egress_profile == "multi_az_nat"
+  nat_public_subnet_count = !local.egress_enabled ? 0 : (var.vpc_egress_profile == "single_nat" ? 1 : length(var.private_subnet_cidrs))
+  public_subnets = local.egress_enabled ? {
+    for index, cidr in slice(var.public_subnet_cidrs, 0, local.nat_public_subnet_count) : tostring(index) => {
+      cidr = cidr
+      az   = local.selected_availability_zones[index]
+    }
+  } : {}
+  nat_gateway_keys = local.egress_enabled ? keys(local.public_subnets) : []
+  private_route_table_ids = local.multi_az_nat_enabled ? [
+    for key in sort(keys(aws_route_table.private_az)) : aws_route_table.private_az[key].id
+    ] : (
+    var.enable_network ? [aws_route_table.private[0].id] : []
+  )
 }
 
 resource "aws_vpc" "main" {
@@ -66,7 +81,112 @@ resource "aws_route_table_association" "private" {
   for_each = aws_subnet.private
 
   subnet_id      = each.value.id
-  route_table_id = aws_route_table.private[0].id
+  route_table_id = local.multi_az_nat_enabled ? aws_route_table.private_az[each.key].id : aws_route_table.private[0].id
+}
+
+resource "aws_internet_gateway" "egress" {
+  count = local.egress_enabled ? 1 : 0
+
+  vpc_id = aws_vpc.main[0].id
+
+  tags = merge(var.tags, {
+    Name    = "${var.name_prefix}-public-egress"
+    Purpose = "revenue-ops-public-context-egress"
+  })
+}
+
+resource "aws_subnet" "public" {
+  for_each = local.public_subnets
+
+  vpc_id                  = aws_vpc.main[0].id
+  cidr_block              = each.value.cidr
+  availability_zone       = each.value.az
+  map_public_ip_on_launch = true
+
+  tags = merge(var.tags, {
+    Name    = "${var.name_prefix}-public-egress-${tonumber(each.key) + 1}"
+    Purpose = "revenue-ops-public-nat-subnet"
+    Tier    = "public"
+  })
+}
+
+resource "aws_route_table" "public" {
+  count = local.egress_enabled ? 1 : 0
+
+  vpc_id = aws_vpc.main[0].id
+
+  tags = merge(var.tags, {
+    Name    = "${var.name_prefix}-public-egress"
+    Purpose = "revenue-ops-public-egress-routes"
+  })
+}
+
+resource "aws_route" "public_default_to_igw" {
+  count = local.egress_enabled ? 1 : 0
+
+  route_table_id         = aws_route_table.public[0].id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.egress[0].id
+}
+
+resource "aws_route_table_association" "public" {
+  for_each = aws_subnet.public
+
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.public[0].id
+}
+
+resource "aws_eip" "nat" {
+  for_each = toset(local.nat_gateway_keys)
+
+  domain = "vpc"
+
+  tags = merge(var.tags, {
+    Name    = "${var.name_prefix}-nat-${tonumber(each.key) + 1}"
+    Purpose = "revenue-ops-public-context-egress"
+  })
+}
+
+resource "aws_nat_gateway" "egress" {
+  for_each = aws_eip.nat
+
+  allocation_id = each.value.id
+  subnet_id     = aws_subnet.public[each.key].id
+
+  tags = merge(var.tags, {
+    Name    = "${var.name_prefix}-nat-${tonumber(each.key) + 1}"
+    Purpose = "revenue-ops-public-context-egress"
+  })
+
+  depends_on = [aws_route.public_default_to_igw]
+}
+
+resource "aws_route" "private_default_to_single_nat" {
+  count = var.enable_network && var.vpc_egress_profile == "single_nat" ? 1 : 0
+
+  route_table_id         = aws_route_table.private[0].id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.egress["0"].id
+}
+
+resource "aws_route_table" "private_az" {
+  for_each = local.multi_az_nat_enabled ? aws_subnet.private : {}
+
+  vpc_id = aws_vpc.main[0].id
+
+  tags = merge(var.tags, {
+    Name    = "${var.name_prefix}-aurora-private-${tonumber(each.key) + 1}"
+    Purpose = "revenue-ops-private-nat-routes"
+    Tier    = "private"
+  })
+}
+
+resource "aws_route" "private_default_to_az_nat" {
+  for_each = local.multi_az_nat_enabled ? aws_route_table.private_az : {}
+
+  route_table_id         = each.value.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.egress[each.key].id
 }
 
 resource "aws_security_group" "lambda" {
@@ -179,7 +299,7 @@ resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main[0].id
   service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.private[0].id]
+  route_table_ids   = local.private_route_table_ids
 
   tags = merge(var.tags, {
     Name    = "${var.name_prefix}-s3-endpoint"
@@ -197,4 +317,16 @@ resource "aws_security_group_rule" "lambda_to_s3_egress" {
   security_group_id = aws_security_group.lambda[0].id
   prefix_list_ids   = [aws_vpc_endpoint.s3[0].prefix_list_id]
   description       = "Allow Lambda security group to reach S3 through the gateway endpoint prefix list."
+}
+
+resource "aws_security_group_rule" "lambda_to_public_https_egress" {
+  count = local.egress_enabled ? 1 : 0
+
+  type              = "egress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  security_group_id = aws_security_group.lambda[0].id
+  cidr_blocks       = ["0.0.0.0/0"]
+  description       = "Allow Revenue Ops collector Lambda HTTPS egress through NAT for public context APIs."
 }
