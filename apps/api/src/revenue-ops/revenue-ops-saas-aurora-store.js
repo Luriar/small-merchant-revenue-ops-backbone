@@ -493,9 +493,15 @@ function createAuroraRevenueOpsSaasStore({
           store_id, commercial_area_name, administrative_dong, business_category,
           mapping_method, confidence, metadata
         )
-        VALUES ($1, 'Seongsu commercial district seed label', 'Seongsu-dong', $2,
-          'manual_seed', 'medium', '{"official_code_verified": false}'::jsonb)
-        ON CONFLICT DO NOTHING
+        SELECT $1, 'Seongsu commercial district seed label', 'Seongsu-dong', $2,
+          'manual_seed', 'medium', '{"official_code_verified": false}'::jsonb
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM commercial_area_mappings
+          WHERE store_id = $1
+            AND commercial_area_name = 'Seongsu commercial district seed label'
+            AND mapping_method = 'manual_seed'
+        )
       `,
       [store.store_id, store.business_category],
     );
@@ -578,7 +584,425 @@ function createAuroraRevenueOpsSaasStore({
     }
   }
 
+  async function ensureCauseCandidatesForStore(storeId) {
+    return withTransaction((client) => ensureCauseCandidatesForStoreWithClient(client, storeId));
+  }
+
+  async function ensureCauseCandidatesForStoreWithClient(client, storeId) {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`cause-actions:${storeId}`]);
+    const store = await getStoreWithClient(client, storeId);
+    if (!store) return [];
+    const existingAny = await client.query("SELECT 1 FROM cause_candidates WHERE store_id = $1 LIMIT 1", [storeId]);
+    if (store.store_type === "demo" && existingAny.rows[0]) {
+      return selectCauseCandidatesWithClient(client, storeId);
+    }
+
+    const signals = await buildCauseCandidateSignalsWithClient(client, store);
+    for (const signal of signals) {
+      const existing = await client.query(
+        `
+          SELECT *
+          FROM cause_candidates
+          WHERE store_id = $1
+            AND candidate_type = $2
+            AND title = $3
+          LIMIT 1
+        `,
+        [storeId, signal.candidate_type, signal.title],
+      );
+      let candidate = existing.rows[0];
+      if (!candidate) {
+        const inserted = await client.query(
+          `
+            INSERT INTO cause_candidates (
+              store_id, candidate_type, title, summary, confidence, metric_name,
+              baseline_start, baseline_end, compare_start, compare_end,
+              observed_delta_pct, created_from
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            RETURNING *
+          `,
+          [
+            storeId,
+            signal.candidate_type,
+            signal.title,
+            signal.summary,
+            signal.confidence,
+            signal.metric_name,
+            signal.baseline_start,
+            signal.baseline_end,
+            signal.compare_start,
+            signal.compare_end,
+            signal.observed_delta_pct,
+            signal.created_from,
+          ],
+        );
+        candidate = inserted.rows[0];
+      }
+
+      for (const evidence of signal.evidence) {
+        await ensureCauseEvidenceWithClient(client, candidate.cause_candidate_id, evidence);
+      }
+    }
+
+    return selectCauseCandidatesWithClient(client, storeId);
+  }
+
+  async function ensureCauseEvidenceWithClient(client, causeCandidateId, evidence) {
+    const existing = await client.query(
+      `
+        SELECT 1
+        FROM cause_candidate_evidence
+        WHERE cause_candidate_id = $1
+          AND evidence_type = $2
+          AND COALESCE(source_ref, '') = COALESCE($3, '')
+          AND COALESCE(metric_name, '') = COALESCE($4, '')
+        LIMIT 1
+      `,
+      [causeCandidateId, evidence.evidence_type, evidence.source_ref ?? null, evidence.metric_name ?? null],
+    );
+    if (existing.rows[0]) return;
+
+    await client.query(
+      `
+        INSERT INTO cause_candidate_evidence (
+          cause_candidate_id, evidence_type, strength, summary, source_name,
+          source_ref, metric_name, metric_value, metadata
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+      `,
+      [
+        causeCandidateId,
+        evidence.evidence_type,
+        evidence.strength,
+        evidence.summary,
+        evidence.source_name ?? null,
+        evidence.source_ref ?? null,
+        evidence.metric_name ?? null,
+        evidence.metric_value ?? null,
+        JSON.stringify(safeObject(evidence.metadata)),
+      ],
+    );
+  }
+
+  async function buildCauseCandidateSignalsWithClient(client, store) {
+    const stats = await client.query(
+      `
+        SELECT
+          count(*)::int AS day_count,
+          min(business_date)::text AS min_date,
+          max(business_date)::text AS max_date,
+          avg(net_sales_amount)::numeric AS avg_net_sales,
+          min(net_sales_amount)::numeric AS min_net_sales,
+          avg(order_count)::numeric AS avg_order_count,
+          min(order_count)::numeric AS min_order_count,
+          (
+            SELECT business_date::text
+            FROM revenue_daily_facts
+            WHERE store_id = $1
+            ORDER BY net_sales_amount ASC, business_date ASC
+            LIMIT 1
+          ) AS lowest_sales_date
+        FROM revenue_daily_facts
+        WHERE store_id = $1
+      `,
+      [store.store_id],
+    );
+    const revenue = stats.rows[0] ?? {};
+    const context = await client.query(
+      `
+        SELECT co.*, cs.source_name
+        FROM context_observations co
+        LEFT JOIN context_sources cs ON cs.source_id = co.source_id
+        WHERE co.store_id = $1
+        ORDER BY co.observation_date DESC NULLS LAST, co.created_at DESC
+      `,
+      [store.store_id],
+    );
+    const itemCategory = await client.query(
+      `
+        SELECT item_category, sum(quantity)::numeric AS quantity, sum(net_sales_amount)::numeric AS net_sales_amount
+        FROM revenue_item_facts
+        WHERE store_id = $1 AND item_category IS NOT NULL
+        GROUP BY item_category
+        ORDER BY sum(net_sales_amount) ASC NULLS LAST
+        LIMIT 1
+      `,
+      [store.store_id],
+    );
+    const nearby = await client.query(
+      "SELECT * FROM nearby_store_snapshots WHERE store_id = $1 ORDER BY snapshot_date DESC LIMIT 1",
+      [store.store_id],
+    );
+
+    const byType = new Map();
+    for (const row of context.rows) {
+      if (!byType.has(row.context_type)) byType.set(row.context_type, row);
+    }
+    const weather = byType.get("weather");
+    const benchmark = byType.get("benchmark");
+    const footTraffic = byType.get("foot_traffic");
+    const competition = byType.get("competition") ?? nearby.rows[0];
+    const dayCount = Number(revenue.day_count ?? 0);
+    const minNet = Number(revenue.min_net_sales ?? 0);
+    const avgNet = Number(revenue.avg_net_sales ?? 0);
+    const observedDelta = avgNet > 0 ? percentageDelta(minNet, avgNet) : null;
+    const periodStart = revenue.min_date ?? null;
+    const periodEnd = revenue.max_date ?? null;
+    const compareDate = revenue.lowest_sales_date ?? periodEnd;
+    const evidence = [];
+
+    if (dayCount > 0) {
+      evidence.push({
+        evidence_type: "revenue_change",
+        strength: Math.abs(Number(observedDelta ?? 0)) >= 15 ? "strong" : "medium",
+        summary: `업로드된 매출 데이터에서 최저 매출일과 평균 매출 차이가 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.`,
+        source_name: "Aurora revenue_daily_facts",
+        source_ref: `revenue_daily_facts:${store.store_id}`,
+        metric_name: "net_sales_amount",
+        metric_value: minNet || null,
+        metadata: { day_count: dayCount, avg_net_sales: avgNet || null, not_proven_causality: true },
+      });
+    }
+    if (weather) evidence.push(contextEvidence(weather, "weather", "medium"));
+    if (benchmark) evidence.push(contextEvidence(benchmark, "benchmark", "medium"));
+    if (footTraffic) evidence.push(contextEvidence(footTraffic, "foot_traffic", "medium"));
+    if (competition) {
+      evidence.push({
+        evidence_type: "competition",
+        strength: "weak",
+        summary: `동종 업종 밀도 신호가 함께 관측되었습니다. 가능성 높은 원인 후보일 뿐 추가 확인이 필요합니다.`,
+        source_name: competition.source_name ?? "Nearby store snapshot seed",
+        source_ref: competition.observation_id ?? competition.snapshot_id ?? `nearby_store_snapshots:${store.store_id}`,
+        metric_name: competition.metric_name ?? "same_category_store_count",
+        metric_value: competition.metric_value ?? competition.same_category_store_count ?? null,
+        metadata: { not_proven_causality: true },
+      });
+    }
+
+    const signals = [];
+    if (dayCount > 0) {
+      signals.push({
+        candidate_type: weather ? "rainy_day_offline_drop" : "order_count_decline",
+        title: weather ? "비 오는 날 오프라인 주문 하락 가능성" : "주문수 하락 가능성",
+        summary: weather
+          ? "비 오는 날과 매출/주문 하락 신호가 함께 관측되었습니다. 인과가 확정된 것은 아니며 추가 확인이 필요합니다."
+          : "업로드된 매출 데이터에서 주문수와 매출 변화가 함께 관측되었습니다. 가능성 높은 원인 후보이며 추가 확인이 필요합니다.",
+        confidence: weather ? "medium" : "weak",
+        metric_name: weather ? "net_sales_amount" : "order_count",
+        baseline_start: periodStart,
+        baseline_end: periodEnd,
+        compare_start: compareDate,
+        compare_end: compareDate,
+        observed_delta_pct: observedDelta,
+        created_from: "revenue_mart",
+        evidence: evidence.length ? evidence : fallbackProjectionEvidence(store),
+      });
+    }
+    if (benchmark) {
+      signals.push({
+        candidate_type: "benchmark_downturn",
+        title: "상권 벤치마크 약세 가능성",
+        summary: "상권 벤치마크 약세와 매장 매출 변화가 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.",
+        confidence: "weak",
+        metric_name: benchmark.metric_name,
+        baseline_start: periodStart,
+        baseline_end: periodEnd,
+        compare_start: benchmark.observation_date ?? compareDate,
+        compare_end: benchmark.observation_date ?? compareDate,
+        observed_delta_pct: benchmark.metric_value,
+        created_from: "revenue_mart",
+        evidence: [contextEvidence(benchmark, "benchmark", "medium")],
+      });
+    }
+    if (footTraffic) {
+      signals.push({
+        candidate_type: "foot_traffic_drop",
+        title: "유동인구 프록시 하락 가능성",
+        summary: "유동인구 프록시 하락과 매출 변화가 함께 관측되었습니다. 추가 확인이 필요합니다.",
+        confidence: "weak",
+        metric_name: footTraffic.metric_name,
+        baseline_start: periodStart,
+        baseline_end: periodEnd,
+        compare_start: footTraffic.observation_date ?? compareDate,
+        compare_end: footTraffic.observation_date ?? compareDate,
+        observed_delta_pct: footTraffic.metric_value,
+        created_from: "revenue_mart",
+        evidence: [contextEvidence(footTraffic, "foot_traffic", "medium")],
+      });
+    }
+    if (itemCategory.rows[0]) {
+      const item = itemCategory.rows[0];
+      signals.push({
+        candidate_type: "item_category_decline",
+        title: `${item.item_category} 품목 믹스 점검 필요`,
+        summary: "품목별 매출 데이터가 매출 변화 구간과 함께 관측되었습니다. 품목 믹스 원인 후보는 추가 확인이 필요합니다.",
+        confidence: "weak",
+        metric_name: "item_category_net_sales_amount",
+        baseline_start: periodStart,
+        baseline_end: periodEnd,
+        compare_start: compareDate,
+        compare_end: compareDate,
+        observed_delta_pct: null,
+        created_from: "revenue_mart",
+        evidence: [{
+          evidence_type: "revenue_change",
+          strength: "weak",
+          summary: `${item.item_category} 품목 매출 신호가 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.`,
+          source_name: "Aurora revenue_item_facts",
+          source_ref: `revenue_item_facts:${store.store_id}:${item.item_category}`,
+          metric_name: "item_category_net_sales_amount",
+          metric_value: item.net_sales_amount,
+          metadata: { quantity: item.quantity, not_proven_causality: true },
+        }],
+      });
+    }
+
+    if (signals.length === 0) {
+      signals.push({
+        candidate_type: "other",
+        title: "매출 데이터 품질 점검 필요",
+        summary: "원인 후보 생성을 위해 업로드 매출 데이터와 공개 맥락 데이터의 추가 확인이 필요합니다.",
+        confidence: "weak",
+        metric_name: "data_readiness",
+        baseline_start: null,
+        baseline_end: null,
+        compare_start: null,
+        compare_end: null,
+        observed_delta_pct: null,
+        created_from: "future_ai",
+        evidence: fallbackProjectionEvidence(store),
+      });
+    }
+
+    return signals;
+  }
+
+  function contextEvidence(row, evidenceType, strength) {
+    return {
+      evidence_type: evidenceType,
+      strength,
+      summary: `${row.label ?? row.metric_name}. 인과가 확정된 것은 아닙니다.`,
+      source_name: row.source_name ?? row.source_id,
+      source_ref: row.observation_id ?? row.source_id,
+      metric_name: row.metric_name,
+      metric_value: row.metric_value,
+      metadata: { observation_date: row.observation_date, not_proven_causality: true },
+    };
+  }
+
+  function fallbackProjectionEvidence(store) {
+    return [{
+      evidence_type: "revenue_change",
+      strength: "weak",
+      summary: "기존 브리프 원인 후보와 매출 변화 신호가 함께 관측되었습니다. 추가 확인이 필요합니다.",
+      source_name: "Revenue brief projection fallback",
+      source_ref: `brief_projection:${store.store_id}`,
+      metric_name: "data_readiness",
+      metric_value: null,
+      metadata: { not_proven_causality: true },
+    }];
+  }
+
+  async function ensureActionPlannerItemsForStore(storeId) {
+    return withTransaction((client) => ensureActionPlannerItemsForStoreWithClient(client, storeId));
+  }
+
+  async function ensureActionPlannerItemsForStoreWithClient(client, storeId) {
+    const candidates = await ensureCauseCandidatesForStoreWithClient(client, storeId);
+    for (const candidate of candidates) {
+      const action = actionForCauseCandidate(storeId, candidate);
+      await client.query(
+        `
+          INSERT INTO action_planner_items (
+            store_id, cause_candidate_id, action_family, dedupe_key, title,
+            description, why_this_action, expected_effect, risk_note,
+            difficulty, status, outcome_summary
+          )
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'recommended','결과 추적 대기 중')
+          ON CONFLICT (store_id, dedupe_key) DO NOTHING
+        `,
+        [
+          storeId,
+          candidate.cause_candidate_id,
+          action.action_family,
+          action.dedupe_key,
+          action.title,
+          action.description,
+          action.why_this_action,
+          action.expected_effect,
+          action.risk_note,
+          action.difficulty,
+        ],
+      );
+    }
+    const result = await client.query("SELECT * FROM action_planner_items WHERE store_id = $1 ORDER BY updated_at DESC", [storeId]);
+    return result.rows;
+  }
+
+  function actionForCauseCandidate(storeId, candidate) {
+    const defaults = {
+      action_family: "data_quality_check",
+      title: "매출/맥락 데이터 품질을 먼저 점검하세요",
+      description: "원인 후보를 실행 액션으로 옮기기 전에 업로드 기간, 누락일, 공개 맥락 연결을 확인합니다.",
+      expected_effect: "다음 분석에서 근거 품질과 실행 우선순위가 더 명확해지는지 관측합니다.",
+      difficulty: "low",
+    };
+    const byType = {
+      rainy_day_offline_drop: {
+        action_family: "rainy_day_delivery_boost",
+        title: "비 오는 날 배달/포장 세트 메뉴를 테스트하세요",
+        description: "비 예보가 있는 날에 커피+디저트 포장 세트를 작게 테스트합니다.",
+        expected_effect: "오프라인 방문 하락 구간에서 배달/포장 전환과 주문수 변화를 관측합니다.",
+        difficulty: "medium",
+      },
+      item_category_decline: {
+        action_family: "bundle_attach_rate_recovery",
+        title: "커피+디저트 세트 구성을 테스트하세요",
+        description: "품목 믹스 변화 구간에 맞춰 세트 구성을 작게 테스트합니다.",
+        expected_effect: "객단가와 결합률 변화를 다음 측정 기간에 관측합니다.",
+        difficulty: "medium",
+      },
+      aov_decline: {
+        action_family: "upsell_menu_test",
+        title: "1,000~2,000원 추가 옵션을 테스트하세요",
+        description: "주문 흐름에서 부담이 작은 옵션 또는 사이드 메뉴 추천을 테스트합니다.",
+        expected_effect: "객단가와 취소율 변화를 함께 관측합니다.",
+        difficulty: "medium",
+      },
+      benchmark_downturn: {
+        action_family: "benchmark_watch",
+        title: "상권 약세 구간에서는 재방문 액션을 우선 검토하세요",
+        description: "신규 유입 확대보다 재방문 쿠폰/스탬프 액션을 작은 범위로 테스트합니다.",
+        expected_effect: "재방문 주문수와 매출 방어 정도를 관측합니다.",
+        difficulty: "medium",
+      },
+      order_count_decline: {
+        action_family: "offpeak_promotion",
+        title: "하락 시간대에 맞춘 짧은 프로모션을 테스트하세요",
+        description: "주문수 하락 구간에 한정해 짧은 메뉴 프로모션을 실행합니다.",
+        expected_effect: "주문수 회복 여부를 다음 측정 기간에 관측합니다.",
+        difficulty: "medium",
+      },
+      foot_traffic_drop: {
+        action_family: "offpeak_promotion",
+        title: "유동인구 약세 시간대에 맞춘 짧은 프로모션을 테스트하세요",
+        description: "유동인구 프록시 약세 구간과 겹치는 시간대에 작게 테스트합니다.",
+        expected_effect: "주문수와 객단가 변화를 함께 관측합니다.",
+        difficulty: "medium",
+      },
+    };
+    const selected = byType[candidate.candidate_type] ?? defaults;
+    return {
+      ...selected,
+      dedupe_key: `${storeId}:${selected.action_family}:${candidate.candidate_type}:${candidate.metric_name ?? "metric"}`,
+      why_this_action: `${candidate.summary} 이 액션은 근거 기반 제안이며 효과가 보장되지는 않습니다.`,
+      risk_note: "인과가 확정된 것은 아닙니다. 실행 전 추가 확인이 필요합니다.",
+    };
+  }
+
   async function getBriefsForStore(storeId) {
+    await ensureActionPlannerItemsForStore(storeId);
     const store = await getStore(storeId);
     const latest = await query(
       "SELECT max(business_date) AS latest_date, count(*)::int AS day_count FROM revenue_daily_facts WHERE store_id = $1",
@@ -636,6 +1060,7 @@ function createAuroraRevenueOpsSaasStore({
   }
 
   async function getActionsForStore(storeId) {
+    await ensureActionPlannerItemsForStore(storeId);
     const result = await query(
       `
         SELECT
@@ -854,6 +1279,9 @@ function createAuroraRevenueOpsSaasStore({
         idempotency_key: `revenue.upload:${upload.upload_id}`,
         payload: { accepted_count: acceptedCount, rejected_count: rejectedCount },
       });
+      if (acceptedCount > 0) {
+        await ensureActionPlannerItemsForStoreWithClient(client, storeId);
+      }
       return {
         upload: updated.rows[0],
         accepted_count: acceptedCount,
@@ -944,6 +1372,7 @@ function createAuroraRevenueOpsSaasStore({
       });
       const store = await getStoreWithClient(client, storeId);
       await seedContextWithClient(client, store);
+      await ensureActionPlannerItemsForStoreWithClient(client, storeId);
       const collector = await client.query(
         `
           INSERT INTO collector_runs (
@@ -1003,7 +1432,12 @@ function createAuroraRevenueOpsSaasStore({
   }
 
   async function getCauseCandidatesForStore(storeId) {
-    const result = await query(
+    await ensureCauseCandidatesForStore(storeId);
+    return selectCauseCandidatesWithClient({ query }, storeId);
+  }
+
+  async function selectCauseCandidatesWithClient(client, storeId) {
+    const result = await client.query(
       `
         SELECT c.*,
           COALESCE(json_agg(e ORDER BY e.created_at) FILTER (WHERE e.evidence_id IS NOT NULL), '[]') AS evidence
@@ -1250,6 +1684,8 @@ function createAuroraRevenueOpsSaasStore({
     getContextForStore,
     collectContextForStore,
     getPipelineMetaForStore,
+    ensureCauseCandidatesForStore,
+    ensureActionPlannerItemsForStore,
     getCauseCandidatesForStore,
     getCauseCandidateForStore,
     createOutboxEvent,

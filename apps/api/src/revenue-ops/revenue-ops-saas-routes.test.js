@@ -226,6 +226,159 @@ test("context seed collector works without external API keys and updates pipelin
   assert.equal(meta.value.pipeline_meta.data_reliability_note.includes("인과가 확정된 것"), true);
 });
 
+test("new store upload and context collect persist generated cause candidates and actions idempotently", async () => {
+  const server = createTestServer();
+  const authSub = "new-store-pipeline-owner";
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub,
+    input: {
+      store_name: "연남 테스트 카페",
+      tenant_name: "Yeonnam Test Tenant",
+      business_category: "cafe",
+      region: "Seoul Yeonnam",
+      address_text: "서울 마포구 연남동",
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const storeId = created.value.store.store_id;
+
+  const upload = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub,
+    input: {
+      source_type: "manual_template",
+      original_filename: "new_store_seed.json",
+      daily_rows: [
+        {
+          business_date: "2026-05-01",
+          channel: "offline_pos",
+          gross_sales_amount: 1250000,
+          net_sales_amount: 1180000,
+          order_count: 82,
+          cancel_count: 1,
+          refund_amount: 12000,
+          discount_amount: 58000,
+          payment_card_amount: 1080000,
+          payment_cash_amount: 100000,
+        },
+        {
+          business_date: "2026-05-02",
+          channel: "offline_pos",
+          gross_sales_amount: 1520000,
+          net_sales_amount: 1460000,
+          order_count: 121,
+          cancel_count: 1,
+          refund_amount: 8000,
+          discount_amount: 52000,
+          payment_card_amount: 1320000,
+          payment_cash_amount: 90000,
+        },
+      ],
+      item_rows: [
+        {
+          business_date: "2026-05-01",
+          channel: "offline_pos",
+          item_name: "아메리카노",
+          item_category: "coffee",
+          quantity: 41,
+          gross_sales_amount: 184500,
+          discount_amount: 0,
+          net_sales_amount: 184500,
+        },
+      ],
+    },
+  });
+  assert.equal(upload.statusCode, 201);
+  assert.equal(upload.value.upload.status, "accepted");
+
+  const firstCollect = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/context/collect`,
+    authSub,
+    input: { mode: "seed" },
+  });
+  assert.equal(firstCollect.statusCode, 202);
+
+  const firstContext = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/context`,
+    authSub,
+  });
+  const firstContextSummary = contextSummary(firstContext.value.context[0]);
+
+  const secondCollect = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/context/collect`,
+    authSub,
+    input: { mode: "seed" },
+  });
+  assert.equal(secondCollect.statusCode, 202);
+
+  const secondContext = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/context`,
+    authSub,
+  });
+  assert.deepEqual(contextSummary(secondContext.value.context[0]), firstContextSummary);
+
+  const firstCandidates = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/cause-candidates`,
+    authSub,
+  });
+  assert.equal(firstCandidates.statusCode, 200);
+  assert.equal(firstCandidates.value.cause_candidates.length > 0, true);
+  assert.ok(firstCandidates.value.cause_candidates[0].evidence.length > 0);
+
+  const secondCandidates = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/cause-candidates`,
+    authSub,
+  });
+  assert.equal(secondCandidates.value.cause_candidates.length, firstCandidates.value.cause_candidates.length);
+
+  const firstActions = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/actions`,
+    authSub,
+  });
+  assert.equal(firstActions.statusCode, 200);
+  assert.equal(firstActions.value.actions.length > 0, true);
+  assert.ok(firstActions.value.actions[0].cause_candidate);
+  assert.equal(firstActions.value.actions[0].status, "recommended");
+
+  const secondActions = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/actions`,
+    authSub,
+  });
+  assert.equal(secondActions.value.actions.length, firstActions.value.actions.length);
+
+  const patched = await requestJson({
+    server,
+    method: "PATCH",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/actions/${encodeURIComponent(firstActions.value.actions[0].action_id)}/status`,
+    authSub,
+    input: { status: "done" },
+  });
+  assert.equal(patched.statusCode, 200);
+  assert.equal(patched.value.action.status, "done");
+  assert.equal(patched.value.action.outcome_tracking.summary.includes("결과 추적 대기 중"), true);
+});
+
 test("store-scoped OPTIONS preflight returns 204", async () => {
   const server = createTestServer();
   const response = await dispatchServerRequest({
@@ -334,6 +487,14 @@ function dispatchServerRequest({ server, method, routePath, headers, content }) 
 
 function createSilentLogger() {
   return { info() {} };
+}
+
+function contextSummary(context) {
+  return {
+    observations: context.context_observations.length,
+    mappings: context.commercial_area_mappings.length,
+    snapshots: context.nearby_store_snapshots.length,
+  };
 }
 
 class FakeResponse extends EventEmitter {

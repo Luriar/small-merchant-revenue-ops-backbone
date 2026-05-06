@@ -669,8 +669,86 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     });
   }
 
+  function ensureCauseCandidatesForStore(storeId) {
+    const timestamp = nowIso();
+    seedContextForStore(storeId, timestamp);
+    if (!state.causeCandidates.some((row) => row.store_id === storeId)) {
+      seedCauseActionLoop(storeId, timestamp);
+    }
+    return clone(state.causeCandidates
+      .filter((row) => row.store_id === storeId)
+      .map((candidate) => ({
+        ...candidate,
+        evidence: state.causeEvidence.filter((row) => row.cause_candidate_id === candidate.cause_candidate_id),
+      })));
+  }
+
+  function ensureActionPlannerItemsForStore(storeId) {
+    const timestamp = nowIso();
+    const candidates = ensureCauseCandidatesForStore(storeId);
+    for (const candidate of candidates) {
+      const action = actionForCauseCandidate(candidate);
+      upsertSeedAction({
+        storeId,
+        causeCandidateId: candidate.cause_candidate_id,
+        actionFamily: action.action_family,
+        title: action.title,
+        description: action.description,
+        whyThisAction: `${candidate.summary} 이 액션은 근거 기반 제안이며 효과가 보장되지는 않습니다.`,
+        expectedEffect: action.expected_effect,
+        riskNote: "인과가 확정된 것은 아닙니다. 실행 전 추가 확인이 필요합니다.",
+        timestamp,
+      });
+    }
+    return clone(state.actions
+      .filter((action) => action.store_id === storeId)
+      .map((action) => withCauseAndOutcome(action)));
+  }
+
+  function actionForCauseCandidate(candidate) {
+    const byType = {
+      rainy_day_offline_drop: {
+        action_family: "rainy_day_delivery_boost",
+        title: "비 오는 날 배달/포장 세트 메뉴를 테스트하세요",
+        description: "비 예보가 있는 날에 커피+디저트 포장 세트를 작게 테스트합니다.",
+        expected_effect: "오프라인 방문 하락 구간에서 배달/포장 전환과 주문수 변화를 관측합니다.",
+      },
+      item_category_decline: {
+        action_family: "bundle_attach_rate_recovery",
+        title: "커피+디저트 세트 구성을 테스트하세요",
+        description: "품목 믹스 변화 구간에 맞춰 세트 구성을 작게 테스트합니다.",
+        expected_effect: "객단가와 결합률 변화를 다음 측정 기간에 관측합니다.",
+      },
+      benchmark_downturn: {
+        action_family: "benchmark_watch",
+        title: "상권 약세 구간에서는 재방문 액션을 우선 검토하세요",
+        description: "신규 유입 확대보다 재방문 쿠폰/스탬프 액션을 작은 범위로 테스트합니다.",
+        expected_effect: "재방문 주문수와 매출 방어 정도를 관측합니다.",
+      },
+      order_count_decline: {
+        action_family: "offpeak_promotion",
+        title: "하락 시간대에 맞춘 짧은 프로모션을 테스트하세요",
+        description: "주문수 하락 구간에 한정해 짧은 메뉴 프로모션을 실행합니다.",
+        expected_effect: "주문수 회복 여부를 다음 측정 기간에 관측합니다.",
+      },
+      foot_traffic_drop: {
+        action_family: "offpeak_promotion",
+        title: "유동인구 약세 시간대에 맞춘 짧은 프로모션을 테스트하세요",
+        description: "유동인구 프록시 약세 구간과 겹치는 시간대에 작게 테스트합니다.",
+        expected_effect: "주문수와 객단가 변화를 함께 관측합니다.",
+      },
+    };
+    return byType[candidate.candidate_type] ?? {
+      action_family: "data_quality_check",
+      title: "매출/맥락 데이터 품질을 먼저 점검하세요",
+      description: "원인 후보를 실행 액션으로 옮기기 전에 업로드 기간, 누락일, 공개 맥락 연결을 확인합니다.",
+      expected_effect: "다음 분석에서 근거 품질과 실행 우선순위가 더 명확해지는지 관측합니다.",
+    };
+  }
+
   function getBriefsForStore(storeId) {
     seedStoreContent(storeId);
+    ensureActionPlannerItemsForStore(storeId);
     const briefs = state.briefs.filter((brief) => brief.store_id === storeId);
     return clone(briefs.length ? briefs : [buildBriefFromFacts(storeId)]);
   }
@@ -737,10 +815,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   }
 
   async function getActionsForStore(storeId) {
-    seedStoreContent(storeId);
-    return clone(state.actions
-      .filter((action) => action.store_id === storeId)
-      .map((action) => withCauseAndOutcome(action)));
+    return ensureActionPlannerItemsForStore(storeId);
   }
 
   async function updateActionStatusForStore({ appUserId, storeId, actionId, status, planned_start_date, planned_end_date }) {
@@ -844,13 +919,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   }
 
   function getCauseCandidatesForStore(storeId) {
-    seedStoreContent(storeId);
-    return clone(state.causeCandidates
-      .filter((row) => row.store_id === storeId)
-      .map((candidate) => ({
-        ...candidate,
-        evidence: state.causeEvidence.filter((row) => row.cause_candidate_id === candidate.cause_candidate_id),
-      })));
+    return ensureCauseCandidatesForStore(storeId);
   }
 
   function getCauseCandidateForStore(storeId, causeCandidateId) {
@@ -953,6 +1022,9 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         rejected_count: upload.rejected_count,
       },
     });
+    if (upload.accepted_count > 0) {
+      ensureActionPlannerItemsForStore(storeId);
+    }
 
     return clone({
       upload,
@@ -1041,6 +1113,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         collector_run_id: run.collector_run_id,
       },
     });
+    ensureActionPlannerItemsForStore(storeId);
     return clone({
       collector_run: run,
       job_run: state.jobRuns.find((row) => row.job_run_id === jobRun.job_run_id),
@@ -1240,6 +1313,8 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     getAnomaliesForStore,
     getContextForStore,
     getPipelineMetaForStore,
+    ensureCauseCandidatesForStore,
+    ensureActionPlannerItemsForStore,
     getActionsForStore,
     updateActionStatusForStore,
     getCauseCandidatesForStore,
