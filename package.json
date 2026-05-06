@@ -37,6 +37,7 @@
     "validate:m5:engineering": "bash scripts/validate_m5_engineering_closure.sh"
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1043.0",
     "pg": "^8.20.0"
   }
 }

@@ -137,6 +137,9 @@ resource "aws_lambda_function" "api" {
     variables = merge(
       var.artifact_bucket_name != null ? { ARTIFACT_BUCKET = var.artifact_bucket_name } : {},
       var.aurora_secret_arn != null ? { AURORA_SECRET_ARN = var.aurora_secret_arn } : {},
+      var.aurora_cluster_endpoint != null ? { AURORA_CLUSTER_ENDPOINT = var.aurora_cluster_endpoint } : {},
+      var.aurora_database_name != null ? { AURORA_DATABASE_NAME = var.aurora_database_name } : {},
+      var.aurora_secret_arn != null ? { AURORA_PORT = tostring(var.aurora_port) } : {},
       var.cognito_user_pool_id != null ? { COGNITO_POOL_ID = var.cognito_user_pool_id } : {},
     )
   }

@@ -12,6 +12,7 @@ const {
   handleGetContext,
   handleGetPipelineMeta,
 } = require("./revenue-ops/revenue-ops-handler");
+const { handleGetAuroraHealth } = require("./revenue-ops/aurora-health");
 
 const revenueOpsStore = createRevenueOpsStore();
 
@@ -40,6 +41,10 @@ async function dispatchRevenueRequest({ request, response, store }) {
       "access-control-allow-headers": "content-type",
     });
     return response.end();
+  }
+
+  if (request.method === "GET" && /^\/api\/v1\/revenue\/health\/aurora(?:\?.*)?$/.test(request.url)) {
+    return handleGetAuroraHealth({ response });
   }
 
   if (request.method === "GET" && /^\/api\/v1\/revenue\/briefs(?:\?.*)?$/.test(request.url)) {

@@ -247,6 +247,9 @@ module "revenue_api" {
   artifact_bucket_name          = module.artifacts.artifact_bucket_name
   artifact_bucket_arn           = module.artifacts.artifact_bucket_arn
   aurora_secret_arn             = module.aurora.master_secret_arn
+  aurora_cluster_endpoint       = module.aurora.cluster_endpoint
+  aurora_database_name          = var.aurora_database_name
+  aurora_port                   = 5432
   lambda_vpc_subnet_ids         = var.enable_api_lambda_vpc_access ? module.aurora_network.private_subnet_ids : []
   lambda_vpc_security_group_ids = var.enable_api_lambda_vpc_access ? [module.aurora_network.lambda_security_group_id] : []
   cognito_user_pool_id          = var.enable_api_jwt_authorizer ? module.auth.user_pool_id : null

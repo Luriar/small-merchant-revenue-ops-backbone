@@ -49,6 +49,24 @@ variable "aurora_secret_arn" {
   description = "Aurora credential secret ARN. Optional until Aurora persistence is enabled."
 }
 
+variable "aurora_cluster_endpoint" {
+  type        = string
+  default     = null
+  description = "Aurora writer cluster endpoint. Optional until Aurora connectivity smoke is enabled."
+}
+
+variable "aurora_database_name" {
+  type        = string
+  default     = null
+  description = "Aurora database name. Optional until Aurora connectivity smoke is enabled."
+}
+
+variable "aurora_port" {
+  type        = number
+  default     = 5432
+  description = "Aurora PostgreSQL port."
+}
+
 variable "lambda_vpc_subnet_ids" {
   type        = list(string)
   default     = []
