@@ -159,6 +159,17 @@ module "secrets" {
 # foundation is disabled (use_kms defaults to false; KMS is unused in that path).
 # ─────────────────────────────────────────────────────────────────────────────
 
+module "aurora_network" {
+  source = "../../modules/revenue_network"
+
+  enable_network       = var.enable_aurora_network_foundation
+  name_prefix          = local.name_prefix
+  vpc_cidr             = var.aurora_network_vpc_cidr
+  private_subnet_cidrs = var.aurora_network_private_subnet_cidrs
+  availability_zones   = var.aurora_network_availability_zones
+  tags                 = local.common_tags
+}
+
 module "artifacts" {
   source = "../../modules/revenue_artifacts"
 
@@ -224,10 +235,10 @@ module "revenue_api" {
   artifact_bucket_name        = module.artifacts.artifact_bucket_name
   artifact_bucket_arn         = module.artifacts.artifact_bucket_arn
   aurora_secret_arn           = module.aurora.master_secret_arn
-  cognito_user_pool_id        = module.auth.user_pool_id
-  cognito_user_pool_arn       = module.auth.user_pool_arn
-  cognito_user_pool_client_id = module.auth.web_client_id
-  enable_cognito_authorizer   = var.enable_auth
+  cognito_user_pool_id        = var.enable_api_jwt_authorizer ? module.auth.user_pool_id : null
+  cognito_user_pool_arn       = var.enable_api_jwt_authorizer ? module.auth.user_pool_arn : null
+  cognito_user_pool_client_id = var.enable_api_jwt_authorizer ? module.auth.web_client_id : null
+  enable_cognito_authorizer   = var.enable_api_jwt_authorizer
   custom_domain_name          = var.api_custom_domain_name
   acm_certificate_arn         = var.api_acm_certificate_arn
   hosted_zone_id              = var.api_hosted_zone_id

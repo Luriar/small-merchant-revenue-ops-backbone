@@ -74,6 +74,26 @@ output "cognito_user_pool_id" {
   value       = module.auth.user_pool_id
 }
 
+output "aurora_network_vpc_id" {
+  description = "Revenue Ops-owned VPC ID for Aurora. Null when network foundation disabled."
+  value       = module.aurora_network.vpc_id
+}
+
+output "aurora_network_private_subnet_ids" {
+  description = "Private isolated subnet IDs for Aurora. Empty list when network foundation disabled."
+  value       = module.aurora_network.private_subnet_ids
+}
+
+output "aurora_network_lambda_security_group_id" {
+  description = "Security group intended for future Lambda-to-Aurora runtime access. Null when network foundation disabled."
+  value       = module.aurora_network.lambda_security_group_id
+}
+
+output "aurora_network_aurora_security_group_id" {
+  description = "Security group intended for Aurora, allowing PostgreSQL only from the Lambda security group. Null when network foundation disabled."
+  value       = module.aurora_network.aurora_security_group_id
+}
+
 output "aurora_cluster_endpoint" {
   description = "Aurora Serverless v2 writer endpoint. Null when disabled."
   value       = module.aurora.cluster_endpoint

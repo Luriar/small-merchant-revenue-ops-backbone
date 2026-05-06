@@ -720,3 +720,101 @@ Still intentionally disabled:
 - live external collector
 - POS real ingestion
 - Product Ops/productops resources
+
+## 19. 2026-05-06 STEP 2-E-A Auth Split + Network Plan Update
+
+STEP 2-E-A was performed as plan-only. No apply or destroy was run.
+
+Implemented Terraform split:
+
+- Added `enable_api_jwt_authorizer` in revenue-dev, default `false`.
+- `enable_auth = true` now creates Cognito resources.
+- `enable_api_jwt_authorizer = false` keeps API Gateway route auth at `NONE`.
+- API module Cognito IDs are passed only when `enable_api_jwt_authorizer = true`, preventing Cognito-only plans from changing Lambda env or API route auth.
+
+Current route state:
+
+```text
+module.revenue_api.aws_apigatewayv2_route.revenue[0]
+authorization_type = "NONE"
+authorizer_id      = null
+```
+
+Cognito-only local ignored tfvars:
+
+```text
+infra/terraform/envs/revenue-dev/terraform.step2e.auth-only.tfvars
+```
+
+Cognito-only plan:
+
+```text
+Plan: 2 to add, 0 to change, 0 to destroy.
+create module.auth.aws_cognito_user_pool.main[0]
+create module.auth.aws_cognito_user_pool_client.web[0]
+```
+
+Counts:
+
+```json
+{"create":2,"update":0,"delete":0,"replace":0}
+```
+
+API route remains `NONE` in the Cognito-only plan.
+
+Added plan-only Revenue Ops network foundation module:
+
+- `infra/terraform/modules/revenue_network`
+- gate: `enable_aurora_network_foundation`
+- no NAT gateway
+- no internet gateway
+- no public DB access
+- two isolated private subnets
+- Lambda SG and Aurora SG with PostgreSQL-only SG-to-SG access
+
+Network-only local ignored tfvars:
+
+```text
+infra/terraform/envs/revenue-dev/terraform.step2e.network.tfvars
+```
+
+Network-only plan:
+
+```text
+Plan: 10 to add, 0 to change, 0 to destroy.
+```
+
+Resource changes:
+
+```text
+create module.aurora_network.aws_vpc.main[0]
+create module.aurora_network.aws_subnet.private["0"]
+create module.aurora_network.aws_subnet.private["1"]
+create module.aurora_network.aws_route_table.private[0]
+create module.aurora_network.aws_route_table_association.private["0"]
+create module.aurora_network.aws_route_table_association.private["1"]
+create module.aurora_network.aws_security_group.lambda[0]
+create module.aurora_network.aws_security_group.aurora[0]
+create module.aurora_network.aws_security_group_rule.lambda_to_aurora_egress[0]
+create module.aurora_network.aws_security_group_rule.aurora_from_lambda_ingress[0]
+```
+
+Counts:
+
+```json
+{"create":10,"update":0,"delete":0,"replace":0}
+```
+
+Aurora remains disabled. API JWT enforcement remains disabled. ETL/pipeline/schedule/live collector/POS ingestion remain disabled.
+
+Next safe sequence:
+
+1. Apply network foundation only after explicit approval and fresh 0-destroy/0-replace plan.
+2. Plan Aurora foundation using reviewed network outputs.
+3. Wire application persistence.
+4. Implement Cognito frontend login/token handling.
+5. Enable API JWT enforcement only after frontend auth is ready.
+
+Detailed report:
+
+- `docs/step2e_a_auth_network_foundation_plan_kr.md`

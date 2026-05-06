@@ -64,10 +64,22 @@ variable "enable_auth" {
   description = "Enable the Cognito auth foundation."
 }
 
+variable "enable_api_jwt_authorizer" {
+  type        = bool
+  default     = false
+  description = "Enable API Gateway JWT enforcement for Revenue API routes. Keep false while Cognito resources exist but frontend login/token flow is not wired."
+}
+
 variable "enable_aurora" {
   type        = bool
   default     = false
   description = "Enable the Aurora Serverless v2 persistence foundation."
+}
+
+variable "enable_aurora_network_foundation" {
+  type        = bool
+  default     = false
+  description = "Enable the Revenue Ops-owned isolated VPC/subnet/security-group foundation for Aurora. Does not create Aurora/RDS."
 }
 
 variable "enable_artifacts" {
@@ -210,6 +222,29 @@ variable "aurora_allowed_security_group_ids" {
   type        = list(string)
   default     = []
   description = "Security groups allowed to connect to Aurora."
+}
+
+variable "aurora_network_vpc_cidr" {
+  type        = string
+  default     = "10.42.0.0/20"
+  description = "CIDR block for the dedicated Revenue Ops Aurora network foundation."
+}
+
+variable "aurora_network_private_subnet_cidrs" {
+  type        = list(string)
+  default     = ["10.42.0.0/24", "10.42.1.0/24"]
+  description = "Two private isolated subnet CIDRs for the Revenue Ops Aurora network foundation."
+
+  validation {
+    condition     = length(var.aurora_network_private_subnet_cidrs) >= 2
+    error_message = "At least two private subnet CIDRs are required for the Aurora network foundation."
+  }
+}
+
+variable "aurora_network_availability_zones" {
+  type        = list(string)
+  default     = []
+  description = "Optional explicit AZ names for Aurora private subnets. Defaults to the first two available AZs in the region."
 }
 
 variable "aurora_database_name" {

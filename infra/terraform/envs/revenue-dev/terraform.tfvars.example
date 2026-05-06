@@ -6,7 +6,9 @@ enable_schedule            = false
 enable_frontend            = false
 enable_api                 = false
 enable_auth                = false
+enable_api_jwt_authorizer  = false # Keep false until frontend Cognito login/token flow is ready.
 enable_aurora              = false
+enable_aurora_network_foundation = false
 enable_artifacts           = false
 enable_saas_observability  = false
 data_lake_bucket_name      = "revenue-ops-data-lake-dev-YOURACCOUNTID"
@@ -36,6 +38,12 @@ cognito_domain_prefix = null
 aurora_vpc_id                     = null
 aurora_private_subnet_ids         = []
 aurora_allowed_security_group_ids = []
+aurora_network_vpc_cidr           = "10.42.0.0/20"
+aurora_network_private_subnet_cidrs = [
+  "10.42.0.0/24",
+  "10.42.1.0/24",
+]
+aurora_network_availability_zones = []
 aurora_database_name              = "revenue_ops"
 aurora_master_username            = "revenue_ops_admin"
 aurora_min_acu                    = 0.5
