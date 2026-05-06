@@ -5,6 +5,7 @@ const {
   collectKakaoStoreLocation,
   collectKmaWeather,
   collectSeoulCommercialBenchmark,
+  collectSeoulFootTrafficProxy,
   collectStorePublicContext,
   parseKmaWeatherResponse,
   planStorePublicContextCollection,
@@ -25,8 +26,8 @@ test("context collector plan falls back to seed without live API keys", () => {
 test("context collector plan marks missing live keys as skipped", () => {
   const plan = planStorePublicContextCollection({ mode: "live", env: { KMA_SERVICE_KEY: "present" } });
   assert.equal(plan.resolved_mode, "live");
-  assert.equal(plan.collectors.find((collector) => collector.collector_name === "weather").status, "live_ready");
-  assert.equal(plan.collectors.find((collector) => collector.collector_name === "geocoding").status, "skipped_missing_key");
+  assert.equal(plan.collectors.find((collector) => collector.collector_name === "kma_weather").status, "live_ready");
+  assert.equal(plan.collectors.find((collector) => collector.collector_name === "kakao_geocoding").status, "skipped_missing_key");
 });
 
 test("public context credentials load from env and mask values for logs", () => {
@@ -170,6 +171,129 @@ test("auto live collection falls back safely when all live collectors skip", asy
   assert.equal(result.collectors.every((collector) => collector.status === "skipped"), true);
 });
 
+test("Kakao and KMA collectors return failed request_timeout when fetch hangs", async () => {
+  const store = {
+    store_id: "store-timeout",
+    address_text: "서울 성동구 성수동",
+    region: "Seoul Seongsu",
+    business_category: "cafe",
+  };
+
+  const kakao = await collectKakaoStoreLocation(store, { kakaoRestApiKey: "kakao-secret" }, {
+    fetchImpl: neverResolvingFetch(),
+    timeoutMs: 5,
+  });
+  assert.equal(kakao.status, "failed");
+  assert.equal(kakao.reason, "request_timeout");
+  assert.equal(kakao.observation_count, 0);
+  assert.equal(kakao.duration_ms >= 0, true);
+
+  const kma = await collectKmaWeather(store, {
+    kmaServiceKey: "kma-secret",
+    kmaNowcastEndpoint: "https://example.test/kma",
+    kmaDefaultNx: "61",
+    kmaDefaultNy: "125",
+  }, {
+    env: {},
+    fetchImpl: neverResolvingFetch(),
+    timeoutMs: 5,
+  });
+  assert.equal(kma.status, "failed");
+  assert.equal(kma.reason, "request_timeout");
+  assert.equal(kma.observation_count, 0);
+});
+
+test("Seoul timeout fails only that collector and other collectors continue", async () => {
+  const store = { store_id: "store-1", region: "Seoul Seongsu", business_category: "cafe" };
+  const commercial = await collectSeoulCommercialBenchmark(store, {
+    seoulOpenDataKey: "seoul-secret",
+    seoulCommercialSalesEndpoint: "CommercialSales",
+  }, {
+    fetchImpl: neverResolvingFetch(),
+    timeoutMs: 5,
+  });
+  assert.equal(commercial.status, "failed");
+  assert.equal(commercial.reason, "request_timeout");
+
+  const footTraffic = await collectSeoulFootTrafficProxy(store, {
+    seoulOpenDataKey: "seoul-secret",
+  }, {
+    fetchImpl: mockJsonFetch({}),
+    timeoutMs: 5,
+  });
+  assert.equal(footTraffic.status, "skipped");
+  assert.equal(footTraffic.reason, "endpoint_not_configured");
+});
+
+test("live collection supports mixed results, collector filter, and safe source refs", async () => {
+  const store = {
+    store_id: "store-mixed",
+    address_text: "서울 성동구 성수동",
+    region: "Seoul Seongsu",
+    business_category: "cafe",
+  };
+  const credentials = {
+    kakaoRestApiKey: "kakao-secret",
+    kmaServiceKey: "kma-secret",
+    kmaNowcastEndpoint: "https://example.test/kma",
+    kmaDefaultNx: "61",
+    kmaDefaultNy: "125",
+    seoulOpenDataKey: "seoul-secret",
+    seoulCommercialSalesEndpoint: "CommercialSales",
+  };
+  const result = await collectStorePublicContext({
+    store,
+    mode: "live",
+    env: {
+      KAKAO_COLLECTOR_TIMEOUT_MS: "50",
+      KMA_COLLECTOR_TIMEOUT_MS: "50",
+      SEOUL_COLLECTOR_TIMEOUT_MS: "5",
+      PUBLIC_CONTEXT_GLOBAL_BUDGET_MS: "500",
+    },
+    credentials,
+    fetchImpl: mixedFetch({
+      kakaoBody: {
+        documents: [{
+          x: "127.0557",
+          y: "37.5446",
+          address_name: "서울 성동구 성수동",
+          address: { region_2depth_name: "성동구", region_3depth_name: "성수동" },
+          road_address: { address_name: "서울 성동구 성수로" },
+        }],
+      },
+      kmaText: JSON.stringify({
+        response: { body: { items: { item: [{ category: "RN1", obsrValue: "2.1" }] } } },
+      }),
+    }),
+  });
+
+  assert.equal(result.completed_collector_count, 2);
+  assert.equal(result.skipped_collector_count, 2);
+  assert.equal(result.failed_collector_count, 1);
+  assert.equal(result.timed_out_collector_count, 1);
+  assert.equal(result.collectors.find((collector) => collector.name === "seoul_commercial_benchmark").reason, "request_timeout");
+  assert.equal(JSON.stringify(result).includes("kakao-secret"), false);
+  assert.equal(JSON.stringify(result).includes("kma-secret"), false);
+  assert.equal(JSON.stringify(result).includes("seoul-secret"), false);
+
+  const filtered = await collectStorePublicContext({
+    store,
+    mode: "live",
+    env: {
+      KAKAO_COLLECTOR_TIMEOUT_MS: "50",
+      KMA_COLLECTOR_TIMEOUT_MS: "50",
+      PUBLIC_CONTEXT_GLOBAL_BUDGET_MS: "500",
+    },
+    credentials,
+    collectors: ["kakao_geocoding", "kma_weather"],
+    fetchImpl: mixedFetch({
+      kakaoBody: { documents: [{ x: "127", y: "37", address: {}, road_address: {} }] },
+      kmaText: JSON.stringify({ response: { body: { items: { item: [{ category: "T1H", obsrValue: "20" }] } } } }),
+    }),
+  });
+  assert.deepEqual(filtered.collectors.map((collector) => collector.name).sort(), ["kakao_geocoding", "kma_weather"]);
+});
+
 function mockJsonFetch(body, { ok = true, status = 200 } = {}) {
   return async () => ({
     ok,
@@ -186,4 +310,39 @@ function mockTextFetch(bodyText, { ok = true, status = 200 } = {}) {
     json: async () => JSON.parse(bodyText),
     text: async () => bodyText,
   });
+}
+
+function neverResolvingFetch() {
+  return async () => new Promise(() => {});
+}
+
+function mixedFetch({ kakaoBody, kmaText }) {
+  return async (url) => {
+    const textUrl = String(url);
+    if (textUrl.includes("dapi.kakao.com")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => kakaoBody,
+        text: async () => JSON.stringify(kakaoBody),
+      };
+    }
+    if (textUrl.includes("kma")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => JSON.parse(kmaText),
+        text: async () => kmaText,
+      };
+    }
+    if (textUrl.includes("CommercialSales")) {
+      return new Promise(() => {});
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ row: [] }),
+      text: async () => JSON.stringify({ row: [] }),
+    };
+  };
 }

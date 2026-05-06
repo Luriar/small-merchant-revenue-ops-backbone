@@ -1359,14 +1359,14 @@ function createAuroraRevenueOpsSaasStore({
     }];
   }
 
-  async function collectContextForStore(storeId, { mode = "seed" } = {}) {
+  async function collectContextForStore(storeId, { mode = "seed", collectors = null } = {}) {
     return withTransaction(async (client) => {
       const store = await getStoreWithClient(client, storeId);
       if (!store) return null;
       const storeLocation = await getStoreLocationWithClient(client, storeId);
       const latestRevenueDate = await getLatestRevenueDateWithClient(client, storeId);
       const credentials = await loadPublicContextCredentials({ env });
-      const collectionPlan = planStorePublicContextCollection({ mode, env, credentials });
+      const collectionPlan = planStorePublicContextCollection({ mode, env, credentials, collectors });
       const job = await createJobRunWithClient(client, {
         job_type: "context_collect",
         target_kind: "store",
@@ -1374,7 +1374,7 @@ function createAuroraRevenueOpsSaasStore({
         store_id: storeId,
         status: "running",
         started_at: new Date(),
-        input_payload: { mode, resolved_mode: collectionPlan.resolved_mode },
+        input_payload: { mode, collectors, resolved_mode: collectionPlan.resolved_mode },
       });
       const liveResult = await collectStorePublicContext({
         store,
@@ -1383,6 +1383,7 @@ function createAuroraRevenueOpsSaasStore({
         credentials,
         storeLocation,
         latestRevenueDate,
+        collectors,
       });
       const livePersisted = await persistLiveContextResultWithClient(client, store, liveResult);
       const seedFallbackUsed = mode === "seed" || liveResult.seed_fallback_recommended;
@@ -1393,6 +1394,7 @@ function createAuroraRevenueOpsSaasStore({
       const completedCount = liveResult.collectors?.filter((collector) => collector.status === "completed").length ?? 0;
       const failedCount = liveResult.collectors?.filter((collector) => collector.status === "failed").length ?? 0;
       const skippedCount = liveResult.collectors?.filter((collector) => collector.status === "skipped").length ?? 0;
+      const timedOutCount = liveResult.collectors?.filter((collector) => collector.reason === "request_timeout").length ?? 0;
       const collectorStatus = seedFallbackUsed || completedCount > 0
         ? "completed"
         : failedCount > 0
@@ -1413,9 +1415,12 @@ function createAuroraRevenueOpsSaasStore({
           credential_source: credentials.credentialSource,
           credential_load_warning: credentials.credentialLoadWarning ?? null,
           collectors: liveResult.collectors,
+          total_duration_ms: liveResult.total_duration_ms,
+          global_budget_ms: liveResult.global_budget_ms,
           completed_collector_count: completedCount,
           skipped_collector_count: skippedCount,
           failed_collector_count: failedCount,
+          timed_out_collector_count: timedOutCount,
           seed_fallback_used: seedFallbackUsed,
           persisted: livePersisted,
           external_api_keys_required: false,
@@ -1429,6 +1434,8 @@ function createAuroraRevenueOpsSaasStore({
         result_summary: {
           collector_run_id: collector.rows[0].collector_run_id,
           collectors: liveResult.collectors,
+          total_duration_ms: liveResult.total_duration_ms,
+          global_budget_ms: liveResult.global_budget_ms,
           seed_fallback_used: seedFallbackUsed,
         },
       });
@@ -1442,6 +1449,9 @@ function createAuroraRevenueOpsSaasStore({
           completed_collector_count: completedCount,
           skipped_collector_count: skippedCount,
           failed_collector_count: failedCount,
+          timed_out_collector_count: timedOutCount,
+          total_duration_ms: liveResult.total_duration_ms,
+          global_budget_ms: liveResult.global_budget_ms,
           collector_plan: collectionPlan,
           collectors: liveResult.collectors,
           seed_fallback_used: seedFallbackUsed,
@@ -1474,6 +1484,7 @@ function createAuroraRevenueOpsSaasStore({
       completed_collector_count: collectorMeta.completed_collector_count ?? collectors.filter((collector) => collector.status === "completed").length,
       skipped_collector_count: collectorMeta.skipped_collector_count ?? collectors.filter((collector) => collector.status === "skipped").length,
       failed_collector_count: collectorMeta.failed_collector_count ?? collectors.filter((collector) => collector.status === "failed").length,
+      timed_out_collector_count: collectorMeta.timed_out_collector_count ?? collectors.filter((collector) => collector.reason === "request_timeout").length,
       latest_live_context_collected_at: latestLiveCollector?.collected_at ?? null,
       latest_mart_build: latestMartBuild,
       context_freshness_note: latestContext

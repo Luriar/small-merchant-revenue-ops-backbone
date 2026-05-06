@@ -226,6 +226,84 @@ test("context seed collector works without external API keys and updates pipelin
   assert.equal(meta.value.pipeline_meta.data_reliability_note.includes("인과가 확정된 것"), true);
 });
 
+test("context collect validates collector filter and returns 202-shaped filtered result", async () => {
+  const server = createTestServer();
+  const stores = await requestJson({ server, method: "GET", routePath: "/api/v1/stores", authSub: "filter-owner" });
+  const storeId = stores.value.stores[0].store_id;
+
+  const filtered = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/context/collect`,
+    authSub: "filter-owner",
+    input: { mode: "live", collectors: ["kakao_geocoding", "kma_weather"] },
+  });
+  assert.equal(filtered.statusCode, 202);
+  assert.equal(Array.isArray(filtered.value.summary.collectors), true);
+  assert.deepEqual(filtered.value.summary.collectors.map((collector) => collector.name).sort(), ["kakao_geocoding", "kma_weather"]);
+  assert.equal(typeof filtered.value.summary.completed_collector_count, "number");
+  assert.equal(typeof filtered.value.summary.skipped_collector_count, "number");
+  assert.equal(typeof filtered.value.summary.failed_collector_count, "number");
+
+  const invalid = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/context/collect`,
+    authSub: "filter-owner",
+    input: { mode: "live", collectors: ["unknown_collector"] },
+  });
+  assert.equal(invalid.statusCode, 400);
+  assert.equal(invalid.value.error.code, "bad_request");
+});
+
+test("context collect route still returns 202-shaped response when collectors fail partially", async () => {
+  const baseStore = createRevenueOpsSaasStore();
+  const server = createTestServer({
+    revenueOpsSaasStore: {
+      ...baseStore,
+      collectContextForStore: async (storeId) => ({
+        collector_run: {
+          collector_run_id: "collector-partial",
+          collector_name: "collectStorePublicContext",
+          status: "failed",
+          target_store_id: storeId,
+          metadata: {},
+        },
+        job_run: {
+          job_run_id: "job-partial",
+          status: "failed",
+          store_id: storeId,
+        },
+        summary: {
+          completed_collector_count: 1,
+          skipped_collector_count: 1,
+          failed_collector_count: 1,
+          timed_out_collector_count: 1,
+          collectors: [
+            { name: "kakao_geocoding", status: "completed", reason: null, duration_ms: 12 },
+            { name: "kma_weather", status: "failed", reason: "request_timeout", duration_ms: 5000 },
+            { name: "seoul_foot_traffic_proxy", status: "skipped", reason: "endpoint_not_configured", duration_ms: 0 },
+          ],
+        },
+      }),
+    },
+  });
+  const stores = await requestJson({ server, method: "GET", routePath: "/api/v1/stores", authSub: "partial-owner" });
+  const storeId = stores.value.stores[0].store_id;
+
+  const collect = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/context/collect`,
+    authSub: "partial-owner",
+    input: { mode: "live" },
+  });
+  assert.equal(collect.statusCode, 202);
+  assert.equal(collect.value.summary.completed_collector_count, 1);
+  assert.equal(collect.value.summary.failed_collector_count, 1);
+  assert.equal(collect.value.summary.collectors.find((collector) => collector.name === "kma_weather").reason, "request_timeout");
+});
+
 test("new store upload and context collect persist generated cause candidates and actions idempotently", async () => {
   const server = createTestServer();
   const authSub = "new-store-pipeline-owner";
@@ -461,7 +539,7 @@ async function requestJson({ server, method, routePath, input, authSub, authEmai
   };
 }
 
-function createTestServer() {
+function createTestServer(overrides = {}) {
   return createServer({
     changeStore: {},
     eventStore: {},
@@ -471,6 +549,7 @@ function createTestServer() {
     revenueOpsStore: createRevenueOpsStore(),
     revenueOpsSaasStore: createRevenueOpsSaasStore(),
     logger: createSilentLogger(),
+    ...overrides,
   });
 }
 

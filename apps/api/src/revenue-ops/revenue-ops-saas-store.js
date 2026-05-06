@@ -1075,9 +1075,19 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     return clone({ job_run: jobRun, upload });
   }
 
-  function collectContextForStore(storeId, { mode = "seed" } = {}) {
+  function collectContextForStore(storeId, { mode = "seed", collectors = null } = {}) {
     const timestamp = nowIso();
-    const collectionPlan = planStorePublicContextCollection({ mode });
+    const collectionPlan = planStorePublicContextCollection({ mode, collectors });
+    const collectorResults = collectionPlan.collectors.map((collector) => ({
+      name: collector.collector_name,
+      status: "skipped",
+      source_name: collector.source,
+      observation_count: 0,
+      reason: "memory_store_uses_seed_context",
+      duration_ms: 0,
+      freshness: null,
+      collected_at: timestamp,
+    }));
     const jobRun = createJobRun({
       job_type: "context_collect",
       target_kind: "store",
@@ -1085,7 +1095,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       store_id: storeId,
       status: "running",
       started_at: timestamp,
-      input_payload: { mode, resolved_mode: collectionPlan.resolved_mode },
+      input_payload: { mode, collectors, resolved_mode: collectionPlan.resolved_mode },
     });
     seedContextForStore(storeId, timestamp);
     const run = {
@@ -1099,7 +1109,13 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       metadata: {
         mode,
         resolved_mode: collectionPlan.resolved_mode,
-        collectors: collectionPlan.collectors,
+        collectors: collectorResults,
+        total_duration_ms: 0,
+        global_budget_ms: 20000,
+        completed_collector_count: 0,
+        skipped_collector_count: collectorResults.length,
+        failed_collector_count: 0,
+        timed_out_collector_count: 0,
         external_api_keys_required: false,
         skipped_live_collectors_without_keys: true,
       },
@@ -1121,6 +1137,13 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         context_observation_count: state.contextObservations.filter((row) => row.store_id === storeId).length,
         benchmark_count: state.publicBenchmarks.length,
         nearby_snapshot_count: state.nearbyStoreSnapshots.filter((row) => row.store_id === storeId).length,
+        completed_collector_count: 0,
+        skipped_collector_count: collectorResults.length,
+        failed_collector_count: 0,
+        timed_out_collector_count: 0,
+        total_duration_ms: 0,
+        global_budget_ms: 20000,
+        collectors: collectorResults,
         collector_plan: collectionPlan,
       },
     });

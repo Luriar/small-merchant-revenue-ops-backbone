@@ -9,30 +9,48 @@ const LIVE_KEY_NAMES = [
   "NAVER_CLIENT_SECRET",
 ];
 
+const COLLECTOR_NAMES = [
+  "kakao_geocoding",
+  "kma_weather",
+  "seoul_commercial_benchmark",
+  "seoul_foot_traffic_proxy",
+  "seoul_store_density_proxy",
+];
+
+const DEFAULT_TIMEOUTS = {
+  kakao_geocoding: 4000,
+  kma_weather: 5000,
+  seoul_commercial_benchmark: 5000,
+  seoul_foot_traffic_proxy: 5000,
+  seoul_store_density_proxy: 5000,
+  global_budget: 20000,
+};
+
 function getConfiguredContextKeys(env = process.env) {
   return LIVE_KEY_NAMES.filter((name) => Boolean(env[name]));
 }
 
-function planStorePublicContextCollection({ mode = "auto", env = process.env, credentials = null } = {}) {
+function planStorePublicContextCollection({ mode = "auto", env = process.env, credentials = null, collectors = null } = {}) {
+  const collectorFilter = normalizeCollectorFilter(collectors);
   const configuredKeys = getConfiguredContextKeys(env);
   const liveAvailable = configuredKeys.length > 0 || hasAnyLiveCredential(credentials);
   const hasKma = Boolean(env.KMA_SERVICE_KEY || env.DATA_GO_KR_SERVICE_KEY || credentials?.kmaServiceKey);
   const hasSeoul = Boolean(env.SEOUL_OPEN_DATA_KEY || credentials?.seoulOpenDataKey);
   const hasKakao = Boolean(env.KAKAO_REST_API_KEY || credentials?.kakaoRestApiKey);
   const resolvedMode = mode === "auto" ? (liveAvailable ? "live" : "seed") : mode;
+  const plannedCollectors = [
+    collectorPlan("kakao_geocoding", resolvedMode, hasKakao, "Kakao Local API"),
+    collectorPlan("kma_weather", resolvedMode, hasKma, "KMA weather"),
+    collectorPlan("seoul_commercial_benchmark", resolvedMode, hasSeoul, "Seoul commercial district benchmark"),
+    collectorPlan("seoul_foot_traffic_proxy", resolvedMode, hasSeoul, "Seoul living population/subway proxy"),
+    collectorPlan("seoul_store_density_proxy", resolvedMode, hasSeoul, "Seoul store density proxy"),
+  ];
   return {
     requested_mode: mode,
     resolved_mode: resolvedMode,
     live_keys_present: configuredKeys,
     safe_to_run_without_keys: true,
-    collectors: [
-      collectorPlan("holiday", resolvedMode, true, "Korean holiday calendar"),
-      collectorPlan("weather", resolvedMode, hasKma, "KMA weather"),
-      collectorPlan("commercial_benchmark", resolvedMode, hasSeoul, "Seoul commercial district benchmark"),
-      collectorPlan("geocoding", resolvedMode, hasKakao, "Kakao Local API"),
-      collectorPlan("foot_traffic_proxy", resolvedMode, hasSeoul, "Seoul living population/subway proxy"),
-      collectorPlan("nearby_store_density", resolvedMode, hasSeoul, "Seoul store density proxy"),
-    ],
+    collectors: collectorFilter ? plannedCollectors.filter((collector) => collectorFilter.includes(collector.collector_name)) : plannedCollectors,
   };
 }
 
@@ -44,79 +62,129 @@ async function collectStorePublicContext({
   fetchImpl = globalThis.fetch,
   storeLocation = null,
   latestRevenueDate = null,
+  collectors = null,
 } = {}) {
-  const plan = planStorePublicContextCollection({ mode, env, credentials });
+  const startedAt = Date.now();
+  const globalBudgetMs = readPositiveInt(env.PUBLIC_CONTEXT_GLOBAL_BUDGET_MS, DEFAULT_TIMEOUTS.global_budget);
+  const collectorFilter = normalizeCollectorFilter(collectors);
+  const plan = planStorePublicContextCollection({ mode, env, credentials, collectors: collectorFilter });
   if (plan.resolved_mode === "seed") {
+    const seedCollectors = plan.collectors.map((collector) => ({
+      name: collector.collector_name,
+      status: "skipped",
+      source_name: collector.source,
+      observation_count: 0,
+      reason: "seed_mode_uses_deterministic_seed_writer",
+      duration_ms: 0,
+      freshness: null,
+      collected_at: new Date().toISOString(),
+    }));
     return {
       requested_mode: mode,
       resolved_mode: "seed",
-      collectors: plan.collectors.map((collector) => ({
-        name: collector.collector_name,
-        status: "skipped",
-        source_name: collector.source,
-        observation_count: 0,
-        reason: "seed_mode_uses_deterministic_seed_writer",
-        collected_at: new Date().toISOString(),
-      })),
+      collectors: seedCollectors,
       observations: [],
       benchmarks: [],
       nearby_store_snapshots: [],
       commercial_area_mappings: [],
       store_location: null,
       seed_fallback_recommended: true,
+      completed_collector_count: 0,
+      skipped_collector_count: seedCollectors.length,
+      failed_collector_count: 0,
+      timed_out_collector_count: 0,
+      total_duration_ms: Date.now() - startedAt,
+      global_budget_ms: globalBudgetMs,
     };
   }
 
-  const geocode = await collectKakaoStoreLocation(store, credentials, { fetchImpl });
-  const locationForWeather = geocode.store_location || storeLocation;
-  const weather = await collectKmaWeather(store, credentials, {
-    fetchImpl,
-    env,
-    storeLocation: locationForWeather,
-    latestRevenueDate,
-  });
-  const commercial = await collectSeoulCommercialBenchmark(store, credentials, { fetchImpl });
-  const footTraffic = await collectSeoulFootTrafficProxy(store, credentials, { fetchImpl });
-  const density = await collectSeoulStoreDensityProxy(store, credentials, { fetchImpl });
+  const deadlineAt = startedAt + globalBudgetMs;
+  const shouldRun = (name) => !collectorFilter || collectorFilter.includes(name);
+  const results = [];
+  const geocode = shouldRun("kakao_geocoding")
+    ? await collectKakaoStoreLocation(store, credentials, {
+      fetchImpl,
+      timeoutMs: remainingTimeout(env.KAKAO_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.kakao_geocoding, deadlineAt),
+    })
+    : null;
+  if (geocode) results.push(geocode);
+  const locationForWeather = geocode?.store_location || storeLocation;
+  const parallelCollectors = [
+    shouldRun("kma_weather")
+      ? collectKmaWeather(store, credentials, {
+        fetchImpl,
+        env,
+        storeLocation: locationForWeather,
+        latestRevenueDate,
+        timeoutMs: remainingTimeout(env.KMA_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.kma_weather, deadlineAt),
+      })
+      : null,
+    shouldRun("seoul_commercial_benchmark")
+      ? collectSeoulCommercialBenchmark(store, credentials, {
+        fetchImpl,
+        timeoutMs: remainingTimeout(env.SEOUL_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.seoul_commercial_benchmark, deadlineAt),
+      })
+      : null,
+    shouldRun("seoul_foot_traffic_proxy")
+      ? collectSeoulFootTrafficProxy(store, credentials, {
+        fetchImpl,
+        timeoutMs: remainingTimeout(env.SEOUL_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.seoul_foot_traffic_proxy, deadlineAt),
+      })
+      : null,
+    shouldRun("seoul_store_density_proxy")
+      ? collectSeoulStoreDensityProxy(store, credentials, {
+        fetchImpl,
+        timeoutMs: remainingTimeout(env.SEOUL_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.seoul_store_density_proxy, deadlineAt),
+      })
+      : null,
+  ].filter(Boolean);
 
-  const collectors = [geocode, weather, commercial, footTraffic, density];
-  const completed = collectors.filter((collector) => collector.status === "completed");
-  const failed = collectors.filter((collector) => collector.status === "failed");
-  const skipped = collectors.filter((collector) => collector.status === "skipped");
+  results.push(...await Promise.all(parallelCollectors));
+  for (const collector of results) {
+    logCollectorStatus(store?.store_id, collector);
+  }
+  const completed = results.filter((collector) => collector.status === "completed");
+  const failed = results.filter((collector) => collector.status === "failed");
+  const skipped = results.filter((collector) => collector.status === "skipped");
+  const timedOut = results.filter((collector) => collector.reason === "request_timeout");
   return {
     requested_mode: mode,
     resolved_mode: plan.resolved_mode,
-    collectors: collectors.map(summarizeCollectorResult),
-    observations: collectors.flatMap((collector) => collector.observations || []),
-    benchmarks: collectors.flatMap((collector) => collector.benchmarks || []),
-    nearby_store_snapshots: collectors.flatMap((collector) => collector.nearby_store_snapshots || []),
-    commercial_area_mappings: collectors.flatMap((collector) => collector.commercial_area_mappings || []),
-    store_location: geocode.store_location || null,
+    collectors: results.map(summarizeCollectorResult),
+    observations: results.flatMap((collector) => collector.observations || []),
+    benchmarks: results.flatMap((collector) => collector.benchmarks || []),
+    nearby_store_snapshots: results.flatMap((collector) => collector.nearby_store_snapshots || []),
+    commercial_area_mappings: results.flatMap((collector) => collector.commercial_area_mappings || []),
+    store_location: geocode?.store_location || null,
     seed_fallback_recommended: mode === "auto" && completed.length === 0,
     completed_collector_count: completed.length,
     skipped_collector_count: skipped.length,
     failed_collector_count: failed.length,
+    timed_out_collector_count: timedOut.length,
+    total_duration_ms: Date.now() - startedAt,
+    global_budget_ms: globalBudgetMs,
   };
 }
 
-async function collectKakaoStoreLocation(store, credentials = {}, { fetchImpl = globalThis.fetch } = {}) {
+async function collectKakaoStoreLocation(store, credentials = {}, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUTS.kakao_geocoding } = {}) {
   const name = "kakao_geocoding";
-  if (!credentials.kakaoRestApiKey) return skipped(name, "Kakao Local API", "missing_key");
-  if (!store?.address_text) return skipped(name, "Kakao Local API", "missing_address_text");
-  if (typeof fetchImpl !== "function") return skipped(name, "Kakao Local API", "fetch_unavailable");
+  const startedAt = Date.now();
+  if (!credentials.kakaoRestApiKey) return withDuration(skipped(name, "Kakao Local API", "missing_key"), startedAt);
+  if (!store?.address_text) return withDuration(skipped(name, "Kakao Local API", "missing_address_text"), startedAt);
+  if (typeof fetchImpl !== "function") return withDuration(skipped(name, "Kakao Local API", "fetch_unavailable"), startedAt);
 
   const url = buildKakaoAddressSearchUrl(store.address_text);
   const sourceRef = `https://dapi.kakao.com/v2/local/search/address.json?query_hash=${hashText(store.address_text)}`;
   try {
-    const response = await fetchImpl(url, {
+    const response = await fetchWithTimeout(url, {
       headers: {
         Authorization: `KakaoAK ${credentials.kakaoRestApiKey}`,
       },
-    });
-    if (!response.ok) return failed(name, "Kakao Local API", `http_${response.status}`);
+      fetchImpl,
+    }, timeoutMs, { collector_name: name, source_ref: sourceRef });
     const body = await response.json();
     const document = Array.isArray(body?.documents) ? body.documents[0] : null;
-    if (!document) return skipped(name, "Kakao Local API", "no_result");
+    if (!document) return withDuration(skipped(name, "Kakao Local API", "no_result"), startedAt);
 
     const latitude = numberOrNull(document.y);
     const longitude = numberOrNull(document.x);
@@ -132,7 +200,7 @@ async function collectKakaoStoreLocation(store, credentials = {}, { fetchImpl = 
       region_3depth_name: address.region_3depth_name || roadAddress.region_3depth_name || null,
       not_proven_causality: true,
     };
-    return completed(name, "Kakao Local API", {
+    return withDuration(completed(name, "Kakao Local API", {
       observations: [{
         source_id: "kakao_local_api",
         source_name: "Kakao Local API",
@@ -169,9 +237,9 @@ async function collectKakaoStoreLocation(store, credentials = {}, { fetchImpl = 
         metadata: { source_name: "Kakao Local API", source_ref: sourceRef, not_proven_causality: true },
       }] : [],
       raw_summary: { document_count: Array.isArray(body?.documents) ? body.documents.length : 0 },
-    });
+    }), startedAt);
   } catch (error) {
-    return failed(name, "Kakao Local API", sanitizeErrorReason(error));
+    return withDuration(failed(name, "Kakao Local API", sanitizeErrorReason(error)), startedAt);
   }
 }
 
@@ -179,18 +247,20 @@ async function collectKmaWeather(store, credentials = {}, {
   fetchImpl = globalThis.fetch,
   env = process.env,
   latestRevenueDate = null,
+  timeoutMs = DEFAULT_TIMEOUTS.kma_weather,
 } = {}) {
   const name = "kma_weather";
+  const startedAt = Date.now();
   const serviceKey = credentials.kmaServiceKey || credentials.dataGoKrServiceKey;
   const endpoint = credentials.kmaNowcastEndpoint || credentials.kmaForecastEndpoint;
   const nx = credentials.kmaDefaultNx || env.KMA_DEFAULT_NX;
   const ny = credentials.kmaDefaultNy || env.KMA_DEFAULT_NY;
-  if (!serviceKey) return skipped(name, "KMA Weather API", "missing_key");
-  if (!credentials.kmaApiBaseUrl && !endpoint) return skipped(name, "KMA Weather API", "missing_endpoint");
-  if (!endpoint) return skipped(name, "KMA Weather API", "missing_endpoint");
-  if (!endpoint.startsWith("http") && !credentials.kmaApiBaseUrl) return skipped(name, "KMA Weather API", "missing_base_url");
-  if (!nx || !ny) return skipped(name, "KMA Weather API", "missing_kma_grid");
-  if (typeof fetchImpl !== "function") return skipped(name, "KMA Weather API", "fetch_unavailable");
+  if (!serviceKey) return withDuration(skipped(name, "KMA Weather API", "missing_key"), startedAt);
+  if (!credentials.kmaApiBaseUrl && !endpoint) return withDuration(skipped(name, "KMA Weather API", "missing_endpoint"), startedAt);
+  if (!endpoint) return withDuration(skipped(name, "KMA Weather API", "missing_endpoint"), startedAt);
+  if (!endpoint.startsWith("http") && !credentials.kmaApiBaseUrl) return withDuration(skipped(name, "KMA Weather API", "missing_base_url"), startedAt);
+  if (!nx || !ny) return withDuration(skipped(name, "KMA Weather API", "missing_kma_grid"), startedAt);
+  if (typeof fetchImpl !== "function") return withDuration(skipped(name, "KMA Weather API", "fetch_unavailable"), startedAt);
 
   const baseDate = formatKmaDate(latestRevenueDate || new Date());
   const baseTime = env.KMA_BASE_TIME || "0500";
@@ -204,11 +274,10 @@ async function collectKmaWeather(store, credentials = {}, {
     ny,
   });
   try {
-    const response = await fetchImpl(url);
-    if (!response.ok) return failed(name, "KMA Weather API", `http_${response.status}`);
+    const response = await fetchWithTimeout(url, { fetchImpl }, timeoutMs, { collector_name: name, source_ref: sourceRef });
     const bodyText = await response.text();
     const parsed = parseKmaWeatherResponse(bodyText);
-    if (parsed.length === 0) return skipped(name, "KMA Weather API", "no_weather_items");
+    if (parsed.length === 0) return withDuration(skipped(name, "KMA Weather API", "no_weather_items"), startedAt);
     const observations = normalizeWeatherObservations(parsed, {
       store,
       sourceRef,
@@ -217,12 +286,12 @@ async function collectKmaWeather(store, credentials = {}, {
       nx,
       ny,
     });
-    return completed(name, "KMA Weather API", {
+    return withDuration(completed(name, "KMA Weather API", {
       observations,
       raw_summary: { item_count: parsed.length, base_date: baseDate, base_time: baseTime },
-    });
+    }), startedAt);
   } catch (error) {
-    return failed(name, "KMA Weather API", sanitizeErrorReason(error));
+    return withDuration(failed(name, "KMA Weather API", sanitizeErrorReason(error)), startedAt);
   }
 }
 
@@ -313,26 +382,25 @@ function normalizeWeatherObservations(items, { store, sourceRef, baseDate, baseT
   }));
 }
 
-async function fetchSeoulOpenDataDataset({ endpoint, key, startIndex = 1, endIndex = 5, params = {}, baseUrl = "https://openapi.seoul.go.kr:8088", fetchImpl = globalThis.fetch }) {
+async function fetchSeoulOpenDataDataset({ endpoint, key, startIndex = 1, endIndex = 5, params = {}, baseUrl = "https://openapi.seoul.go.kr:8088", fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUTS.seoul_commercial_benchmark }) {
   const safeEndpoint = String(endpoint || "").replace(/^\/+|\/+$/g, "");
   const url = new URL(`${baseUrl.replace(/\/+$/, "")}/${encodeURIComponent(key)}/json/${safeEndpoint}/${startIndex}/${endIndex}`);
   for (const [name, value] of Object.entries(params)) {
     if (value !== null && typeof value !== "undefined") url.searchParams.set(name, String(value));
   }
-  const response = await fetchImpl(url.toString());
-  if (!response.ok) {
-    const error = new Error(`seoul_open_data_http_${response.status}`);
-    error.status = response.status;
-    throw error;
-  }
+  const sourceRef = sanitizeSeoulUrl(url.toString(), key);
+  const response = await fetchWithTimeout(url.toString(), { fetchImpl }, timeoutMs, {
+    collector_name: "seoul_open_data",
+    source_ref: sourceRef,
+  });
   const body = await response.json();
   return {
     rows: extractSeoulRows(body),
-    sourceRef: sanitizeSeoulUrl(url.toString(), key),
+    sourceRef,
   };
 }
 
-async function collectSeoulCommercialBenchmark(store, credentials = {}, { fetchImpl = globalThis.fetch } = {}) {
+async function collectSeoulCommercialBenchmark(store, credentials = {}, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUTS.seoul_commercial_benchmark } = {}) {
   return collectSeoulDataset({
     name: "seoul_commercial_benchmark",
     sourceName: "Seoul Open Data commercial benchmark",
@@ -342,6 +410,7 @@ async function collectSeoulCommercialBenchmark(store, credentials = {}, { fetchI
     store,
     credentials,
     fetchImpl,
+    timeoutMs,
     toPayload(row, sourceRef) {
       const salesAmount = firstNumber(row, ["SALES_AMOUNT", "THSMON_SELNG_AMT", "SELNG_AMT", "sales_amount"]);
       const transactionCount = firstNumber(row, ["TRANSACTION_COUNT", "THSMON_SELNG_CO", "SELNG_CO", "transaction_count"]);
@@ -373,7 +442,7 @@ async function collectSeoulCommercialBenchmark(store, credentials = {}, { fetchI
   });
 }
 
-async function collectSeoulFootTrafficProxy(store, credentials = {}, { fetchImpl = globalThis.fetch } = {}) {
+async function collectSeoulFootTrafficProxy(store, credentials = {}, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUTS.seoul_foot_traffic_proxy } = {}) {
   return collectSeoulDataset({
     name: "seoul_foot_traffic_proxy",
     sourceName: "Seoul Open Data foot traffic proxy",
@@ -383,6 +452,7 @@ async function collectSeoulFootTrafficProxy(store, credentials = {}, { fetchImpl
     store,
     credentials,
     fetchImpl,
+    timeoutMs,
     toPayload(row) {
       return {
         observations: [{
@@ -395,7 +465,7 @@ async function collectSeoulFootTrafficProxy(store, credentials = {}, { fetchImpl
   });
 }
 
-async function collectSeoulStoreDensityProxy(store, credentials = {}, { fetchImpl = globalThis.fetch } = {}) {
+async function collectSeoulStoreDensityProxy(store, credentials = {}, { fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUTS.seoul_store_density_proxy } = {}) {
   return collectSeoulDataset({
     name: "seoul_store_density_proxy",
     sourceName: "Seoul Open Data store density proxy",
@@ -405,6 +475,7 @@ async function collectSeoulStoreDensityProxy(store, credentials = {}, { fetchImp
     store,
     credentials,
     fetchImpl,
+    timeoutMs,
     toPayload(row, sourceRef) {
       const sameCategoryCount = firstNumber(row, ["SAME_CATEGORY_STORE_COUNT", "STOR_CO", "STORE_COUNT", "CMRCL_STORE_CO"]);
       return {
@@ -432,25 +503,27 @@ async function collectSeoulStoreDensityProxy(store, credentials = {}, { fetchImp
   });
 }
 
-async function collectSeoulDataset({ name, sourceName, endpoint, metricName, contextType, store, credentials, fetchImpl, toPayload }) {
-  if (!credentials.seoulOpenDataKey) return skipped(name, sourceName, "missing_key");
-  if (!endpoint) return skipped(name, sourceName, "endpoint_not_configured");
-  if (typeof fetchImpl !== "function") return skipped(name, sourceName, "fetch_unavailable");
+async function collectSeoulDataset({ name, sourceName, endpoint, metricName, contextType, store, credentials, fetchImpl, timeoutMs, toPayload }) {
+  const startedAt = Date.now();
+  if (!credentials.seoulOpenDataKey) return withDuration(skipped(name, sourceName, "missing_key"), startedAt);
+  if (!endpoint) return withDuration(skipped(name, sourceName, "endpoint_not_configured"), startedAt);
+  if (typeof fetchImpl !== "function") return withDuration(skipped(name, sourceName, "fetch_unavailable"), startedAt);
 
   try {
     const { rows, sourceRef } = await fetchSeoulOpenDataDataset({
       endpoint,
       key: credentials.seoulOpenDataKey,
       baseUrl: credentials.seoulOpenDataBaseUrl,
+      timeoutMs,
       params: {
         region: store.region,
         category: store.business_category,
       },
       fetchImpl,
     });
-    if (rows.length === 0) return skipped(name, sourceName, "no_result");
+    if (rows.length === 0) return withDuration(skipped(name, sourceName, "no_result"), startedAt);
     const payload = toPayload(rows[0], sourceRef) || {};
-    return completed(name, sourceName, {
+    return withDuration(completed(name, sourceName, {
       observations: (payload.observations || []).map((observation) => ({
         source_id: sourceIdForSeoulCollector(name),
         source_name: sourceName,
@@ -467,9 +540,9 @@ async function collectSeoulDataset({ name, sourceName, endpoint, metricName, con
       benchmarks: payload.benchmarks || [],
       nearby_store_snapshots: payload.nearby_store_snapshots || [],
       raw_summary: { row_count: rows.length },
-    });
+    }), startedAt);
   } catch (error) {
-    return failed(name, sourceName, sanitizeErrorReason(error));
+    return withDuration(failed(name, sourceName, sanitizeErrorReason(error)), startedAt);
   }
 }
 
@@ -525,6 +598,7 @@ function summarizeCollectorResult(result) {
     source_name: result.source_name,
     observation_count: result.observation_count || 0,
     reason: result.reason || null,
+    duration_ms: result.duration_ms ?? null,
     freshness: result.freshness || null,
     collected_at: result.collected_at,
   };
@@ -572,9 +646,99 @@ function sanitizeSeoulUrl(url, key) {
 }
 
 function sanitizeErrorReason(error) {
+  if (error?.reason) return error.reason;
+  if (error?.name === "AbortError") return "request_timeout";
   const name = error?.name || "collector_error";
   const status = error?.status ? `_status_${error.status}` : "";
   return `${name}${status}`;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 5000, context = {}) {
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
+  if (typeof fetchImpl !== "function") {
+    const error = new Error("fetch_unavailable");
+    error.reason = "fetch_unavailable";
+    throw error;
+  }
+  const controller = new AbortController();
+  const timeout = readPositiveInt(timeoutMs, 5000);
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      const error = new Error("request_timeout");
+      error.name = "AbortError";
+      error.reason = "request_timeout";
+      error.collector_name = context.collector_name;
+      reject(error);
+    }, timeout);
+  });
+  try {
+    const { fetchImpl: _unused, ...fetchOptions } = options;
+    const response = await Promise.race([
+      fetchImpl(url, {
+        ...fetchOptions,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    if (!response?.ok) {
+      const error = new Error(`http_${response?.status || "error"}`);
+      error.reason = `http_${response?.status || "error"}`;
+      error.status = response?.status;
+      throw error;
+    }
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function withDuration(result, startedAt) {
+  return {
+    ...result,
+    duration_ms: Math.max(0, Date.now() - startedAt),
+  };
+}
+
+function readPositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function remainingTimeout(configuredValue, defaultValue, deadlineAt) {
+  const requested = readPositiveInt(configuredValue, defaultValue);
+  const remaining = Math.max(1, deadlineAt - Date.now());
+  return Math.min(requested, remaining);
+}
+
+function normalizeCollectorFilter(collectors) {
+  if (collectors === null || typeof collectors === "undefined") return null;
+  if (!Array.isArray(collectors)) {
+    const error = new Error("collectors must be an array");
+    error.code = "invalid_body";
+    throw error;
+  }
+  const normalized = [...new Set(collectors.map((collector) => String(collector || "").trim()).filter(Boolean))];
+  const unknown = normalized.filter((collector) => !COLLECTOR_NAMES.includes(collector));
+  if (unknown.length > 0) {
+    const error = new Error(`Unknown public context collector: ${unknown.join(", ")}`);
+    error.code = "invalid_body";
+    throw error;
+  }
+  return normalized.length > 0 ? normalized : null;
+}
+
+function logCollectorStatus(storeId, collector) {
+  const payload = {
+    route: "public_context_collect",
+    store_id: storeId || null,
+    collector_name: collector.name,
+    status: collector.status,
+    duration_ms: collector.duration_ms ?? null,
+    reason: collector.reason || null,
+  };
+  console.info(JSON.stringify(payload));
 }
 
 function xmlValue(xml, tagName) {
@@ -650,8 +814,12 @@ function hasAnyLiveCredential(credentials) {
 
 module.exports = {
   LIVE_KEY_NAMES,
+  COLLECTOR_NAMES,
+  DEFAULT_TIMEOUTS,
   getConfiguredContextKeys,
   planStorePublicContextCollection,
+  normalizeCollectorFilter,
+  fetchWithTimeout,
   collectStorePublicContext,
   geocodeStoreAddress: collectKakaoStoreLocation,
   collectKakaoStoreLocation,

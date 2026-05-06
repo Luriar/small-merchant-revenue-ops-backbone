@@ -12,6 +12,7 @@
  *   GET  /api/v1/revenue/pipeline-meta
  */
 const { RevenueOpsHttpError, requireClaimsFromRequest } = require("./revenue-ops-auth");
+const { normalizeCollectorFilter } = require("./context-collectors");
 
 function writeJson(response, status, body) {
   response.writeHead(status, {
@@ -311,6 +312,7 @@ async function handleCollectStoreContext({ request, response, store, storeId }) 
     const appUser = await resolveAppUser({ request, store });
     if (!await ensureStoreAccess({ response, store, appUser, storeId, minimumRole: "operator" })) return undefined;
     const body = await readJsonBody(request);
+    normalizeCollectorFilter(body.collectors);
     const result = await store.collectContextForStore(storeId, body);
     return writeJson(response, 202, result);
   } catch (error) {
