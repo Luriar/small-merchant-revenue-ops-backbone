@@ -243,7 +243,7 @@ export const T = {
   startAction:     { ko: '시작하기',              en: 'Start' },
   saveForLater:    { ko: '나중에 보기',           en: 'Save for later' },
   seeEvidence:     { ko: '근거 보기',             en: 'See evidence' },
-  seeAllActions:   { ko: '추천 6개 모두 보기',   en: 'See all 6 actions' },
+  seeAllActions:   { ko: '추천 3개 모두 보기',   en: 'See all 3 actions' },
   openBrief:       { ko: '브리프 열기',           en: 'Open brief' },
   whyMatters:      { ko: '왜 중요한가요',         en: 'Why this matters' },
   howWeKnow:       { ko: '어떻게 알게 됐나요',   en: 'How we know' },
