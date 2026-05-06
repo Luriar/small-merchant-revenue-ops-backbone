@@ -2,7 +2,8 @@ data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
 locals {
-  lambda_vpc_enabled = length(var.lambda_vpc_subnet_ids) > 0 && length(var.lambda_vpc_security_group_ids) > 0
+  lambda_vpc_enabled        = length(var.lambda_vpc_subnet_ids) > 0 && length(var.lambda_vpc_security_group_ids) > 0
+  public_context_secret_arn = var.public_context_secret_arn != null ? var.public_context_secret_arn : (var.public_context_secret_id != null ? "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:${var.public_context_secret_id}-*" : null)
 }
 
 data "aws_iam_policy_document" "lambda_trust" {
@@ -56,6 +57,16 @@ data "aws_iam_policy_document" "api_lambda_permissions" {
     for_each = var.aurora_secret_arn != null ? [var.aurora_secret_arn] : []
     content {
       sid       = "ReadAuroraSecret"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+      resources = [statement.value]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = local.public_context_secret_arn != null ? [local.public_context_secret_arn] : []
+    content {
+      sid       = "ReadPublicContextSecret"
       effect    = "Allow"
       actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
       resources = [statement.value]
@@ -141,6 +152,17 @@ resource "aws_lambda_function" "api" {
       var.aurora_database_name != null ? { AURORA_DATABASE_NAME = var.aurora_database_name } : {},
       var.aurora_secret_arn != null ? { AURORA_PORT = tostring(var.aurora_port) } : {},
       var.cognito_user_pool_id != null ? { COGNITO_POOL_ID = var.cognito_user_pool_id } : {},
+      var.public_context_secret_id != null ? { PUBLIC_CONTEXT_SECRET_ID = var.public_context_secret_id } : {},
+      var.kma_default_nx != null ? { KMA_DEFAULT_NX = var.kma_default_nx } : {},
+      var.kma_default_ny != null ? { KMA_DEFAULT_NY = var.kma_default_ny } : {},
+      var.kma_api_base_url != null ? { KMA_API_BASE_URL = var.kma_api_base_url } : {},
+      var.kma_forecast_endpoint != null ? { KMA_FORECAST_ENDPOINT = var.kma_forecast_endpoint } : {},
+      var.kma_nowcast_endpoint != null ? { KMA_NOWCAST_ENDPOINT = var.kma_nowcast_endpoint } : {},
+      var.seoul_open_data_base_url != null ? { SEOUL_OPEN_DATA_BASE_URL = var.seoul_open_data_base_url } : {},
+      var.seoul_commercial_sales_endpoint != null ? { SEOUL_COMMERCIAL_SALES_ENDPOINT = var.seoul_commercial_sales_endpoint } : {},
+      var.seoul_foot_traffic_endpoint != null ? { SEOUL_FOOT_TRAFFIC_ENDPOINT = var.seoul_foot_traffic_endpoint } : {},
+      var.seoul_store_density_endpoint != null ? { SEOUL_STORE_DENSITY_ENDPOINT = var.seoul_store_density_endpoint } : {},
+      var.bronze_bucket_name != null ? { BRONZE_BUCKET_NAME = var.bronze_bucket_name } : {},
     )
   }
 

@@ -11,6 +11,7 @@ const required = [
   "apps/api/src/revenue-ops/revenue-upload-parsers.js",
   "apps/api/src/revenue-ops/runtime-boundaries.js",
   "apps/api/src/revenue-ops/context-collectors.js",
+  "apps/api/src/revenue-ops/public-context-credentials.js",
   "apps/api/src/revenue-ops/connectors/toss-place-client.js",
   "infra/db/revenue_ops_step3_4_lite.sql",
 ];

@@ -22,6 +22,7 @@ cp "${repo_root}/apps/api/src/revenue-ops/revenue-ops-saas-store-factory.js" "${
 cp "${repo_root}/apps/api/src/revenue-ops/revenue-upload-parsers.js" "${package_root}/src/revenue-ops/revenue-upload-parsers.js"
 cp "${repo_root}/apps/api/src/revenue-ops/runtime-boundaries.js" "${package_root}/src/revenue-ops/runtime-boundaries.js"
 cp "${repo_root}/apps/api/src/revenue-ops/context-collectors.js" "${package_root}/src/revenue-ops/context-collectors.js"
+cp "${repo_root}/apps/api/src/revenue-ops/public-context-credentials.js" "${package_root}/src/revenue-ops/public-context-credentials.js"
 cp "${repo_root}/apps/api/src/revenue-ops/connectors/toss-place-client.js" "${package_root}/src/revenue-ops/connectors/toss-place-client.js"
 cp "${repo_root}/apps/api/src/revenue-ops/aurora-health.js" "${package_root}/src/revenue-ops/aurora-health.js"
 cp "${repo_root}/apps/api/src/revenue-ops/aurora-action-status-store.js" "${package_root}/src/revenue-ops/aurora-action-status-store.js"

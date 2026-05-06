@@ -194,6 +194,78 @@ variable "enable_api_xray" {
   description = "Enable X-Ray tracing for the Revenue Ops API Lambda."
 }
 
+variable "public_context_secret_id" {
+  type        = string
+  default     = "/revenue-ops/revenue-dev/external/public-context"
+  description = "Secrets Manager secret ID for Kakao/Seoul/KMA public context credentials. Secret values are managed outside Terraform."
+}
+
+variable "public_context_secret_arn" {
+  type        = string
+  default     = null
+  description = "Optional exact ARN for the public context secret. If null, the API module derives a narrow ARN pattern from public_context_secret_id."
+}
+
+variable "kma_default_nx" {
+  type        = string
+  default     = null
+  description = "Optional KMA grid X fallback for live weather collection."
+}
+
+variable "kma_default_ny" {
+  type        = string
+  default     = null
+  description = "Optional KMA grid Y fallback for live weather collection."
+}
+
+variable "kma_api_base_url" {
+  type        = string
+  default     = null
+  description = "Optional KMA API base URL. Secret Manager may also supply this value."
+}
+
+variable "kma_forecast_endpoint" {
+  type        = string
+  default     = null
+  description = "Optional KMA forecast endpoint path or absolute URL."
+}
+
+variable "kma_nowcast_endpoint" {
+  type        = string
+  default     = null
+  description = "Optional KMA nowcast endpoint path or absolute URL."
+}
+
+variable "seoul_open_data_base_url" {
+  type        = string
+  default     = null
+  description = "Optional Seoul Open Data API base URL."
+}
+
+variable "seoul_commercial_sales_endpoint" {
+  type        = string
+  default     = null
+  description = "Optional Seoul Open Data endpoint for commercial sales benchmarks."
+}
+
+variable "seoul_foot_traffic_endpoint" {
+  type        = string
+  default     = null
+  description = "Optional Seoul Open Data endpoint for foot traffic or floating population proxy."
+}
+
+variable "seoul_store_density_endpoint" {
+  type        = string
+  default     = null
+  description = "Optional Seoul Open Data endpoint for same-category store density proxy."
+}
+
+variable "bronze_bucket_name" {
+  type        = string
+  default     = null
+  description = "Optional S3 Bronze bucket name for sanitized public context collector raw artifacts."
+}
+
 variable "cognito_callback_urls" {
   type        = list(string)
   default     = []

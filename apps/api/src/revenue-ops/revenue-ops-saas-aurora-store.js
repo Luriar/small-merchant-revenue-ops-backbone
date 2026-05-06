@@ -20,7 +20,8 @@ const {
   safeObject,
   clone,
 } = require("./revenue-ops-saas-store");
-const { planStorePublicContextCollection } = require("./context-collectors");
+const { collectStorePublicContext, planStorePublicContextCollection } = require("./context-collectors");
+const { loadPublicContextCredentials } = require("./public-context-credentials");
 const { previewRevenueUploadPayload } = require("./revenue-upload-parsers");
 const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
 
@@ -1360,7 +1361,12 @@ function createAuroraRevenueOpsSaasStore({
 
   async function collectContextForStore(storeId, { mode = "seed" } = {}) {
     return withTransaction(async (client) => {
-      const collectionPlan = planStorePublicContextCollection({ mode, env });
+      const store = await getStoreWithClient(client, storeId);
+      if (!store) return null;
+      const storeLocation = await getStoreLocationWithClient(client, storeId);
+      const latestRevenueDate = await getLatestRevenueDateWithClient(client, storeId);
+      const credentials = await loadPublicContextCredentials({ env });
+      const collectionPlan = planStorePublicContextCollection({ mode, env, credentials });
       const job = await createJobRunWithClient(client, {
         job_type: "context_collect",
         target_kind: "store",
@@ -1370,36 +1376,75 @@ function createAuroraRevenueOpsSaasStore({
         started_at: new Date(),
         input_payload: { mode, resolved_mode: collectionPlan.resolved_mode },
       });
-      const store = await getStoreWithClient(client, storeId);
-      await seedContextWithClient(client, store);
+      const liveResult = await collectStorePublicContext({
+        store,
+        mode,
+        env,
+        credentials,
+        storeLocation,
+        latestRevenueDate,
+      });
+      const livePersisted = await persistLiveContextResultWithClient(client, store, liveResult);
+      const seedFallbackUsed = mode === "seed" || liveResult.seed_fallback_recommended;
+      if (seedFallbackUsed) {
+        await seedContextWithClient(client, store);
+      }
       await ensureActionPlannerItemsForStoreWithClient(client, storeId);
+      const completedCount = liveResult.collectors?.filter((collector) => collector.status === "completed").length ?? 0;
+      const failedCount = liveResult.collectors?.filter((collector) => collector.status === "failed").length ?? 0;
+      const skippedCount = liveResult.collectors?.filter((collector) => collector.status === "skipped").length ?? 0;
+      const collectorStatus = seedFallbackUsed || completedCount > 0
+        ? "completed"
+        : failedCount > 0
+          ? "failed"
+          : "skipped";
       const collector = await client.query(
         `
           INSERT INTO collector_runs (
-            collector_name, status, target_store_id, started_at, completed_at, metadata
+            collector_name, status, target_store_id, started_at, completed_at, error_message, metadata
           )
-          VALUES ('collectStorePublicContext', 'completed', $1, now(), now(), $2::jsonb)
+          VALUES ('collectStorePublicContext', $2, $1, now(), now(), $3, $4::jsonb)
           RETURNING *
         `,
-        [storeId, JSON.stringify({
+        [storeId, collectorStatus, collectorStatus === "failed" ? "One or more live collectors failed; see sanitized metadata." : null, JSON.stringify({
           mode,
-          resolved_mode: collectionPlan.resolved_mode,
-          collectors: collectionPlan.collectors,
+          requested_mode: liveResult.requested_mode,
+          resolved_mode: liveResult.resolved_mode,
+          credential_source: credentials.credentialSource,
+          credential_load_warning: credentials.credentialLoadWarning ?? null,
+          collectors: liveResult.collectors,
+          completed_collector_count: completedCount,
+          skipped_collector_count: skippedCount,
+          failed_collector_count: failedCount,
+          seed_fallback_used: seedFallbackUsed,
+          persisted: livePersisted,
           external_api_keys_required: false,
-          skipped_live_collectors_without_keys: collectionPlan.resolved_mode !== "live",
+          s3_bronze: { status: env.BRONZE_BUCKET_NAME ? "not_configured_no_s3_client_dependency" : "disabled_missing_bucket" },
         })],
       );
       const completed = await updateJobRunWithClient(client, job.job_run_id, {
-        status: "completed",
+        status: collectorStatus,
         completed_at: new Date(),
-        result_summary: { collector_run_id: collector.rows[0].collector_run_id },
+        error_message: collectorStatus === "failed" ? "Live public context collector failed safely." : null,
+        result_summary: {
+          collector_run_id: collector.rows[0].collector_run_id,
+          collectors: liveResult.collectors,
+          seed_fallback_used: seedFallbackUsed,
+        },
       });
       return {
         collector_run: collector.rows[0],
         job_run: completed,
         summary: {
           context_observation_count: await scalarCount(client, "context_observations", "store_id", storeId),
+          benchmark_count: livePersisted.benchmark_count,
+          nearby_snapshot_count: livePersisted.nearby_snapshot_count,
+          completed_collector_count: completedCount,
+          skipped_collector_count: skippedCount,
+          failed_collector_count: failedCount,
           collector_plan: collectionPlan,
+          collectors: liveResult.collectors,
+          seed_fallback_used: seedFallbackUsed,
         },
       };
     });
@@ -1411,6 +1456,11 @@ function createAuroraRevenueOpsSaasStore({
     const latestBenchmark = await one("SELECT * FROM public_revenue_benchmarks ORDER BY fetched_at DESC LIMIT 1");
     const latestCollectorRun = await one("SELECT * FROM collector_runs WHERE target_store_id = $1 ORDER BY created_at DESC LIMIT 1", [storeId]);
     const latestMartBuild = await one("SELECT * FROM mart_build_runs WHERE store_id = $1 ORDER BY created_at DESC LIMIT 1", [storeId]);
+    const collectorMeta = safeObject(latestCollectorRun?.metadata);
+    const collectors = Array.isArray(collectorMeta.collectors) ? collectorMeta.collectors : [];
+    const latestLiveCollector = collectors
+      .filter((collector) => collector.status === "completed" && collector.collected_at)
+      .sort((left, right) => String(right.collected_at).localeCompare(String(left.collected_at)))[0] ?? null;
     return {
       store_id: storeId,
       latest_revenue_upload: latestUpload,
@@ -1421,6 +1471,10 @@ function createAuroraRevenueOpsSaasStore({
         source_id: latestBenchmark.source_id,
       } : null,
       latest_collector_run: latestCollectorRun,
+      completed_collector_count: collectorMeta.completed_collector_count ?? collectors.filter((collector) => collector.status === "completed").length,
+      skipped_collector_count: collectorMeta.skipped_collector_count ?? collectors.filter((collector) => collector.status === "skipped").length,
+      failed_collector_count: collectorMeta.failed_collector_count ?? collectors.filter((collector) => collector.status === "failed").length,
+      latest_live_context_collected_at: latestLiveCollector?.collected_at ?? null,
       latest_mart_build: latestMartBuild,
       context_freshness_note: latestContext
         ? "공개 맥락 데이터가 함께 관측되었습니다. 인과가 확정된 것은 아닙니다."
@@ -1703,6 +1757,330 @@ function createAuroraRevenueOpsSaasStore({
 async function getStoreWithClient(client, storeId) {
   const result = await client.query("SELECT * FROM stores WHERE store_id = $1", [storeId]);
   return result.rows[0] ?? null;
+}
+
+async function getStoreLocationWithClient(client, storeId) {
+  const result = await client.query("SELECT * FROM store_locations WHERE store_id = $1", [storeId]);
+  return result.rows[0] ?? null;
+}
+
+async function getLatestRevenueDateWithClient(client, storeId) {
+  const result = await client.query(
+    "SELECT business_date FROM revenue_daily_facts WHERE store_id = $1 ORDER BY business_date DESC LIMIT 1",
+    [storeId],
+  );
+  return result.rows[0]?.business_date ?? null;
+}
+
+async function persistLiveContextResultWithClient(client, store, result = {}) {
+  const persisted = {
+    context_observation_count: 0,
+    benchmark_count: 0,
+    nearby_snapshot_count: 0,
+    commercial_area_mapping_count: 0,
+    store_location_updated: false,
+  };
+
+  if (result.store_location) {
+    persisted.store_location_updated = await upsertStoreLocationFromCollectorWithClient(client, store, result.store_location);
+  }
+
+  for (const mapping of result.commercial_area_mappings || []) {
+    if (await insertCommercialAreaMappingFromCollectorWithClient(client, store, mapping)) {
+      persisted.commercial_area_mapping_count += 1;
+    }
+  }
+
+  for (const observation of result.observations || []) {
+    if (await insertContextObservationFromCollectorWithClient(client, store, observation)) {
+      persisted.context_observation_count += 1;
+    }
+  }
+
+  for (const benchmark of result.benchmarks || []) {
+    if (await insertPublicBenchmarkFromCollectorWithClient(client, store, benchmark)) {
+      persisted.benchmark_count += 1;
+    }
+  }
+
+  for (const snapshot of result.nearby_store_snapshots || []) {
+    if (await insertNearbyStoreSnapshotFromCollectorWithClient(client, store, snapshot)) {
+      persisted.nearby_snapshot_count += 1;
+    }
+  }
+
+  return persisted;
+}
+
+async function ensureContextSourceWithClient(client, source = {}) {
+  const sourceId = text(source.source_id) || "public_context_unknown";
+  await client.query(
+    `
+      INSERT INTO context_sources (
+        source_id, source_name, source_type, provider, source_url,
+        license_type, attribution, refresh_granularity, metadata
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+      ON CONFLICT (source_id)
+      DO UPDATE SET
+        source_name = EXCLUDED.source_name,
+        source_type = EXCLUDED.source_type,
+        provider = COALESCE(EXCLUDED.provider, context_sources.provider),
+        source_url = COALESCE(EXCLUDED.source_url, context_sources.source_url),
+        updated_at = now()
+    `,
+    [
+      sourceId,
+      text(source.source_name) || sourceId,
+      text(source.source_type) || text(source.context_type) || "manual_seed",
+      text(source.provider) || null,
+      text(source.source_url) || null,
+      text(source.license_type) || null,
+      text(source.attribution) || null,
+      text(source.refresh_granularity) || "manual",
+      JSON.stringify(safeObject(source.metadata)),
+    ],
+  );
+  return sourceId;
+}
+
+async function insertContextObservationFromCollectorWithClient(client, store, observation = {}) {
+  const sourceId = await ensureContextSourceWithClient(client, observation);
+  const observationDate = text(observation.observation_date) || new Date().toISOString().slice(0, 10);
+  const contextType = text(observation.context_type) || "manual_seed";
+  const metricName = text(observation.metric_name) || "context_signal";
+  const existing = await client.query(
+    `
+      SELECT observation_id
+      FROM context_observations
+      WHERE store_id = $1
+        AND source_id = $2
+        AND observation_date = $3::date
+        AND context_type = $4
+        AND metric_name = $5
+        AND COALESCE(metric_value, -999999999) = COALESCE($6::numeric, -999999999)
+      LIMIT 1
+    `,
+    [store.store_id, sourceId, observationDate, contextType, metricName, observation.metric_value ?? null],
+  );
+  const existingId = existing.rows[0]?.observation_id ?? null;
+  if (existingId) {
+    await linkObservationWithClient(client, store.store_id, existingId, linkTypeForContextType(contextType));
+    return false;
+  }
+  const inserted = await client.query(
+    `
+      INSERT INTO context_observations (
+        source_id, store_id, observation_date, observation_hour, context_type,
+        metric_name, metric_value, metric_unit, label, region, raw_payload, observed_at
+      )
+      VALUES ($1,$2,$3::date,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12)
+      RETURNING observation_id
+    `,
+    [
+      sourceId,
+      store.store_id,
+      observationDate,
+      observation.observation_hour ?? null,
+      contextType,
+      metricName,
+      observation.metric_value ?? null,
+      text(observation.metric_unit) || null,
+      text(observation.label) || "공개 맥락 데이터가 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.",
+      text(observation.region) || store.region || null,
+      JSON.stringify({
+        source_ref: text(observation.source_ref) || null,
+        metadata: safeObject(observation.metadata),
+      }),
+      observation.observed_at ?? null,
+    ],
+  );
+  await linkObservationWithClient(client, store.store_id, inserted.rows[0].observation_id, linkTypeForContextType(contextType));
+  return true;
+}
+
+async function linkObservationWithClient(client, storeId, observationId, linkType = "same_region") {
+  await client.query(
+    "INSERT INTO store_context_links (store_id, observation_id, link_type, strength) VALUES ($1,$2,$3,'medium') ON CONFLICT DO NOTHING",
+    [storeId, observationId, linkType],
+  );
+}
+
+async function upsertStoreLocationFromCollectorWithClient(client, store, location = {}) {
+  const result = await client.query(
+    `
+      INSERT INTO store_locations (
+        store_id, address_text, latitude, longitude, region, administrative_dong,
+        legal_dong, geocode_provider, geocode_status, metadata
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+      ON CONFLICT (store_id)
+      DO UPDATE SET
+        address_text = COALESCE(EXCLUDED.address_text, store_locations.address_text),
+        latitude = COALESCE(EXCLUDED.latitude, store_locations.latitude),
+        longitude = COALESCE(EXCLUDED.longitude, store_locations.longitude),
+        region = COALESCE(EXCLUDED.region, store_locations.region),
+        administrative_dong = COALESCE(EXCLUDED.administrative_dong, store_locations.administrative_dong),
+        legal_dong = COALESCE(EXCLUDED.legal_dong, store_locations.legal_dong),
+        geocode_provider = COALESCE(EXCLUDED.geocode_provider, store_locations.geocode_provider),
+        geocode_status = EXCLUDED.geocode_status,
+        metadata = store_locations.metadata || EXCLUDED.metadata,
+        updated_at = now()
+      RETURNING store_id
+    `,
+    [
+      store.store_id,
+      text(location.address_text) || store.address_text || null,
+      location.latitude ?? null,
+      location.longitude ?? null,
+      text(location.region) || store.region || null,
+      text(location.administrative_dong) || null,
+      text(location.legal_dong) || null,
+      text(location.geocode_provider) || null,
+      text(location.geocode_status) || "pending",
+      JSON.stringify(safeObject(location.metadata)),
+    ],
+  );
+  return Boolean(result.rows[0]);
+}
+
+async function insertCommercialAreaMappingFromCollectorWithClient(client, store, mapping = {}) {
+  const existing = await client.query(
+    `
+      SELECT 1
+      FROM commercial_area_mappings
+      WHERE store_id = $1
+        AND COALESCE(commercial_area_code, '') = COALESCE($2, '')
+        AND COALESCE(commercial_area_name, '') = COALESCE($3, '')
+        AND mapping_method = $4
+      LIMIT 1
+    `,
+    [
+      store.store_id,
+      text(mapping.commercial_area_code) || null,
+      text(mapping.commercial_area_name) || null,
+      text(mapping.mapping_method) || "future_api",
+    ],
+  );
+  if (existing.rows[0]) return false;
+  await client.query(
+    `
+      INSERT INTO commercial_area_mappings (
+        store_id, commercial_area_code, commercial_area_name, administrative_dong,
+        business_category, mapping_method, confidence, metadata
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+    `,
+    [
+      store.store_id,
+      text(mapping.commercial_area_code) || null,
+      text(mapping.commercial_area_name) || null,
+      text(mapping.administrative_dong) || null,
+      text(mapping.business_category) || store.business_category || null,
+      text(mapping.mapping_method) || "future_api",
+      text(mapping.confidence) || "weak",
+      JSON.stringify(safeObject(mapping.metadata)),
+    ],
+  );
+  return true;
+}
+
+async function insertPublicBenchmarkFromCollectorWithClient(client, store, benchmark = {}) {
+  const sourceId = await ensureContextSourceWithClient(client, benchmark);
+  const periodStart = text(benchmark.period_start) || new Date().toISOString().slice(0, 10);
+  const existing = await client.query(
+    `
+      SELECT 1
+      FROM public_revenue_benchmarks
+      WHERE source_id = $1
+        AND COALESCE(region, '') = COALESCE($2, '')
+        AND COALESCE(business_category, '') = COALESCE($3, '')
+        AND COALESCE(commercial_area_code, '') = COALESCE($4, '')
+        AND period_start = $5::date
+      LIMIT 1
+    `,
+    [
+      sourceId,
+      text(benchmark.region) || store.region || null,
+      text(benchmark.business_category) || store.business_category || null,
+      text(benchmark.commercial_area_code) || null,
+      periodStart,
+    ],
+  );
+  if (existing.rows[0]) return false;
+  await client.query(
+    `
+      INSERT INTO public_revenue_benchmarks (
+        source_id, region, commercial_area_code, business_category, period_start,
+        period_end, sales_amount, transaction_count, avg_transaction_value, metadata
+      )
+      VALUES ($1,$2,$3,$4,$5::date,$6::date,$7,$8,$9,$10::jsonb)
+    `,
+    [
+      sourceId,
+      text(benchmark.region) || store.region || null,
+      text(benchmark.commercial_area_code) || null,
+      text(benchmark.business_category) || store.business_category || null,
+      periodStart,
+      text(benchmark.period_end) || periodStart,
+      benchmark.sales_amount ?? null,
+      benchmark.transaction_count ?? null,
+      benchmark.avg_transaction_value ?? null,
+      JSON.stringify({
+        ...safeObject(benchmark.metadata),
+        source_ref: text(benchmark.source_ref) || null,
+      }),
+    ],
+  );
+  return true;
+}
+
+async function insertNearbyStoreSnapshotFromCollectorWithClient(client, store, snapshot = {}) {
+  const sourceId = await ensureContextSourceWithClient(client, snapshot);
+  const snapshotDate = text(snapshot.snapshot_date) || new Date().toISOString().slice(0, 10);
+  const radius = Number(snapshot.radius_m) || 500;
+  const existing = await client.query(
+    `
+      SELECT 1
+      FROM nearby_store_snapshots
+      WHERE store_id = $1
+        AND snapshot_date = $2::date
+        AND radius_m = $3
+        AND COALESCE(source_id, '') = COALESCE($4, '')
+      LIMIT 1
+    `,
+    [store.store_id, snapshotDate, radius, sourceId],
+  );
+  if (existing.rows[0]) return false;
+  await client.query(
+    `
+      INSERT INTO nearby_store_snapshots (
+        store_id, snapshot_date, radius_m, business_category,
+        same_category_store_count, total_store_count, source_id, metadata
+      )
+      VALUES ($1,$2::date,$3,$4,$5,$6,$7,$8::jsonb)
+    `,
+    [
+      store.store_id,
+      snapshotDate,
+      radius,
+      text(snapshot.business_category) || store.business_category || null,
+      snapshot.same_category_store_count ?? null,
+      snapshot.total_store_count ?? null,
+      sourceId,
+      JSON.stringify({
+        ...safeObject(snapshot.metadata),
+        source_ref: text(snapshot.source_ref) || null,
+      }),
+    ],
+  );
+  return true;
+}
+
+function linkTypeForContextType(contextType) {
+  if (["benchmark", "competition", "foot_traffic"].includes(contextType)) return "commercial_area";
+  if (contextType === "geocoding") return "same_region";
+  return "same_region";
 }
 
 async function getActionByIdWithClient(client, storeId, actionId) {
