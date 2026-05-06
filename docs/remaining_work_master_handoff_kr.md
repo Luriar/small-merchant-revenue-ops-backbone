@@ -818,3 +818,84 @@ Next safe sequence:
 Detailed report:
 
 - `docs/step2e_a_auth_network_foundation_plan_kr.md`
+
+## 20. 2026-05-06 STEP 2-E-B Network Foundation Apply Update
+
+STEP 2-E-B Revenue Ops Network Foundation apply completed.
+
+Applied saved network-only plan:
+
+```bash
+terraform -chdir=infra/terraform/envs/revenue-dev apply -no-color tfplan.step2e.network
+```
+
+Pre-apply plan gate:
+
+```text
+Plan: 10 to add, 0 to change, 0 to destroy.
+Counts: create=10, update=0, delete=0, replace=0
+```
+
+All changed resources were under `module.aurora_network`.
+
+Apply result:
+
+```text
+Apply complete! Resources: 10 added, 0 changed, 0 destroyed.
+```
+
+Post-apply plan:
+
+```text
+No changes.
+Counts: create=0, update=0, delete=0, replace=0
+```
+
+Network outputs:
+
+```text
+VPC ID: vpc-02e9069c818170256
+Private subnet IDs:
+  - subnet-01381433f0c693179
+  - subnet-07cb619fbe572a308
+Lambda SG ID: sg-0f269d20c37ea2f15
+Aurora SG ID: sg-096925d74346ad4cd
+```
+
+AWS read-only verification:
+
+- VPC exists, non-default, CIDR `10.42.0.0/20`
+- subnets are in `ap-northeast-2a` and `ap-northeast-2b`
+- subnets have `MapPublicIpOnLaunch=false`
+- no internet gateway attached to the VPC
+- no NAT gateway in the VPC
+- Aurora SG ingress allows TCP 5432 only from Lambda SG
+- Lambda SG egress allows TCP 5432 only to Aurora SG
+
+Confirmed absent:
+
+- Cognito/Auth resources
+- Aurora/RDS cluster resources
+- API Gateway JWT enforcement
+- Lambda env update
+- frontend/CloudFront update
+- ETL/pipeline/schedule/live collector/POS resources
+- Product Ops/productops resources
+
+Current API route remains:
+
+```text
+authorization_type = "NONE"
+authorizer_id      = null
+```
+
+Next gate:
+
+- Plan Aurora foundation using the new network outputs.
+- Keep `enable_api_jwt_authorizer=false`.
+- Keep pipeline/schedule/live collector/POS disabled.
+- Apply only after a fresh plan with 0 destroy, 0 replace, and expected Aurora/RDS + Secrets Manager scope only.
+
+Detailed report:
+
+- `docs/step2e_b_network_foundation_apply_report_kr.md`
