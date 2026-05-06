@@ -2,6 +2,7 @@ const { EventEmitter } = require("node:events");
 const { Readable } = require("node:stream");
 
 const { createRevenueOpsStore } = require("./revenue-ops/revenue-ops-store");
+const { createOptionalAuroraActionStatusStoreFromEnv } = require("./revenue-ops/aurora-action-status-store");
 const {
   handleGetBriefs,
   handleGetBriefById,
@@ -14,7 +15,9 @@ const {
 } = require("./revenue-ops/revenue-ops-handler");
 const { handleGetAuroraHealth } = require("./revenue-ops/aurora-health");
 
-const revenueOpsStore = createRevenueOpsStore();
+const revenueOpsStore = createRevenueOpsStore({
+  actionStatusPersistence: createOptionalAuroraActionStatusStoreFromEnv(),
+});
 
 async function handler(event) {
   const request = createRequestFromApiGatewayEvent(event);

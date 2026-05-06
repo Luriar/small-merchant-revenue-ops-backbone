@@ -22,6 +22,7 @@ const { handleTraceCreate, handleTraceDetail, handleTraceEvidences, handleTraceL
 const { createTraceStoreFromEnv } = require("./trace-store-factory");
 const { createCdcRecoveryRouteDispatcher } = require("./cdc-recovery/cdc-recovery-routes");
 const { createRevenueOpsStore } = require("./revenue-ops/revenue-ops-store");
+const { createOptionalAuroraActionStatusStoreFromEnv } = require("./revenue-ops/aurora-action-status-store");
 const {
   handleGetBriefs,
   handleGetBriefById,

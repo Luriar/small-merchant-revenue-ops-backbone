@@ -40,8 +40,9 @@ function handleGetEvidenceForAnomaly({ response, store, anomalyId }) {
   return writeJson(response, 200, { evidence: store.getEvidenceForAnomaly(anomalyId) });
 }
 
-function handleGetActions({ response, store }) {
-  return writeJson(response, 200, { actions: store.getActions() });
+async function handleGetActions({ response, store }) {
+  const actions = await store.getActions();
+  return writeJson(response, 200, { actions });
 }
 
 async function handleUpdateActionStatus({ request, response, store, actionId }) {
@@ -63,7 +64,7 @@ async function handleUpdateActionStatus({ request, response, store, actionId }) 
 
   let updated;
   try {
-    updated = store.updateActionStatus(actionId, status);
+    updated = await store.updateActionStatus(actionId, status);
   } catch (err) {
     return writeJson(response, 400, { error: { code: "bad_request", message: err.message } });
   }
@@ -72,7 +73,10 @@ async function handleUpdateActionStatus({ request, response, store, actionId }) 
     return writeJson(response, 404, { error: { code: "not_found", message: "Action not found" } });
   }
 
-  return writeJson(response, 200, { action: updated });
+  return writeJson(response, 200, {
+    action: updated.action ?? updated,
+    ...(updated.status_persistence ? { status_persistence: updated.status_persistence } : {}),
+  });
 }
 
 function handleGetContext({ response, store }) {

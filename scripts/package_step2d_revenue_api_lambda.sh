@@ -15,6 +15,7 @@ cp "${repo_root}/apps/api/src/lambda-handler.js" "${package_root}/src/lambda-han
 cp "${repo_root}/apps/api/src/revenue-ops/revenue-ops-handler.js" "${package_root}/src/revenue-ops/revenue-ops-handler.js"
 cp "${repo_root}/apps/api/src/revenue-ops/revenue-ops-store.js" "${package_root}/src/revenue-ops/revenue-ops-store.js"
 cp "${repo_root}/apps/api/src/revenue-ops/aurora-health.js" "${package_root}/src/revenue-ops/aurora-health.js"
+cp "${repo_root}/apps/api/src/revenue-ops/aurora-action-status-store.js" "${package_root}/src/revenue-ops/aurora-action-status-store.js"
 cp -R "${repo_root}/apps/api/src/revenue-ops/data" "${package_root}/src/revenue-ops/data"
 
 node - "${repo_root}/package.json" "${package_root}/package.json" <<'NODE'

@@ -1,6 +1,6 @@
 /**
- * Revenue Ops in-memory store: loads Gold export JSON on startup,
- * provides action status mutation with optional Aurora persistence.
+ * Revenue Ops store: loads Gold export JSON on startup and overlays
+ * runtime action-status overrides from Aurora when available.
  */
 const fs = require("node:fs");
 const path = require("node:path");
@@ -42,13 +42,45 @@ function sanitizePipelineMeta(pipelineMeta = {}) {
   };
 }
 
-function createRevenueOpsStore() {
+function createRevenueOpsStore({ actionStatusPersistence = null } = {}) {
   const exported = loadExport();
   const pipelineMeta = sanitizePipelineMeta(exported.pipeline_meta);
 
   const actionStatusMap = new Map(
     exported.actions.map((a) => [a.action_id, a.status || "recommended"])
   );
+
+  async function loadMergedActionStatusMap() {
+    const merged = new Map(actionStatusMap);
+
+    if (!actionStatusPersistence || typeof actionStatusPersistence.listActionStatusOverrides !== "function") {
+      return merged;
+    }
+
+    try {
+      const overrides = await actionStatusPersistence.listActionStatusOverrides();
+      for (const override of overrides) {
+        if (VALID_ACTION_STATUSES.includes(override.status)) {
+          merged.set(override.action_id, override.status);
+          actionStatusMap.set(override.action_id, override.status);
+        }
+      }
+    } catch {
+      // Runtime fallback: keep demo/export-backed in-memory behavior if Aurora is temporarily unavailable.
+    }
+
+    return merged;
+  }
+
+  async function buildActions(filterFn = () => true) {
+    const mergedStatusMap = await loadMergedActionStatusMap();
+    return exported.actions
+      .filter(filterFn)
+      .map((a) => ({
+        ...a,
+        status: mergedStatusMap.get(a.action_id) ?? "recommended",
+      }));
+  }
 
   return {
     getBriefs() {
@@ -67,32 +99,40 @@ function createRevenueOpsStore() {
       return exported.evidence.filter((e) => e.anomaly_id === anomalyId);
     },
 
-    getActions() {
-      return exported.actions.map((a) => ({
-        ...a,
-        status: actionStatusMap.get(a.action_id) ?? "recommended",
-      }));
+    async getActions() {
+      return buildActions();
     },
 
-    getActionsForAnomaly(anomalyId) {
-      return exported.actions
-        .filter((a) => a.anomaly_id === anomalyId)
-        .map((a) => ({
-          ...a,
-          status: actionStatusMap.get(a.action_id) ?? "recommended",
-        }));
+    async getActionsForAnomaly(anomalyId) {
+      return buildActions((a) => a.anomaly_id === anomalyId);
     },
 
-    updateActionStatus(actionId, newStatus) {
+    async updateActionStatus(actionId, newStatus) {
       if (!VALID_ACTION_STATUSES.includes(newStatus)) {
         throw new Error(`Invalid status '${newStatus}'. Valid: ${VALID_ACTION_STATUSES.join(", ")}`);
       }
       if (!actionStatusMap.has(actionId)) {
         return null;
       }
-      actionStatusMap.set(actionId, newStatus);
+
       const action = exported.actions.find((a) => a.action_id === actionId);
-      return { ...action, status: newStatus };
+      let statusPersistence = "memory";
+
+      if (actionStatusPersistence && typeof actionStatusPersistence.upsertActionStatus === "function") {
+        try {
+          await actionStatusPersistence.upsertActionStatus(actionId, newStatus);
+          statusPersistence = "aurora";
+        } catch {
+          statusPersistence = "memory_fallback";
+        }
+      }
+
+      actionStatusMap.set(actionId, newStatus);
+
+      return {
+        action: { ...action, status: newStatus },
+        status_persistence: statusPersistence,
+      };
     },
 
     getContext() {
