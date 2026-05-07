@@ -1,13 +1,13 @@
 const DAILY_ALIASES = {
-  business_date: ["business_date", "date", "payment_date", "order_date", "영업일", "일자", "결제일", "주문일"],
+  business_date: ["business_date", "date", "payment_date", "order_date", "영업일", "영업일자", "일자", "날짜", "결제일", "결제일자", "주문일", "주문일자", "매출일자"],
   channel: ["channel", "sales_channel", "채널"],
-  gross_sales_amount: ["gross_sales_amount", "gross_amount", "sales_amount", "총매출", "총 결제금액", "결제금액"],
-  net_sales_amount: ["net_sales_amount", "net_amount", "settlement_amount", "순매출", "정산금액"],
-  order_count: ["order_count", "orders", "transaction_count", "주문수", "거래수"],
-  cancel_count: ["cancel_count", "cancellation_count", "cancellations", "취소수", "취소건수"],
-  cancellation_count: ["cancellation_count", "cancel_count", "cancellations", "취소수", "취소건수"],
-  refund_amount: ["refund_amount", "refunds", "환불금액"],
-  discount_amount: ["discount_amount", "discounts", "할인금액"],
+  gross_sales_amount: ["gross_sales_amount", "gross_amount", "sales_amount", "sale_amount", "총매출", "총매출액", "총 결제금액", "총 결제 금액", "결제금액", "결제 금액", "매출금액", "판매금액"],
+  net_sales_amount: ["net_sales_amount", "net_amount", "settlement_amount", "순매출", "순매출액", "실매출", "실매출액", "정산금액", "정산 금액", "입금예정금액", "입금예정액"],
+  order_count: ["order_count", "orders", "transaction_count", "payment_count", "주문수", "주문 건수", "주문건수", "거래수", "거래건수", "결제건수", "판매건수"],
+  cancel_count: ["cancel_count", "cancellation_count", "cancellations", "취소수", "취소 건수", "취소건수"],
+  cancellation_count: ["cancellation_count", "cancel_count", "cancellations", "취소수", "취소 건수", "취소건수"],
+  refund_amount: ["refund_amount", "refunds", "환불금액", "환불 금액"],
+  discount_amount: ["discount_amount", "discounts", "할인금액", "할인 금액"],
   delivery_fee_amount: ["delivery_fee_amount", "delivery_fee", "배달비", "배달팁", "배달료"],
   commission_amount: ["commission_amount", "commission", "중개수수료", "수수료"],
   settlement_amount: ["settlement_amount", "settlement", "정산금액", "입금예정금액"],
@@ -20,12 +20,12 @@ const DAILY_ALIASES = {
 const ITEM_ALIASES = {
   business_date: ["business_date", "date", "order_date", "payment_date", "영업일", "일자", "주문일"],
   channel: ["channel", "sales_channel", "채널"],
-  item_name: ["item_name", "product_name", "menu_name", "상품명", "메뉴명"],
-  item_category: ["item_category", "category", "상품분류", "카테고리"],
+  item_name: ["item_name", "product_name", "menu_name", "item", "product", "menu", "상품명", "메뉴명", "품목명"],
+  item_category: ["item_category", "category", "product_category", "menu_category", "상품분류", "상품 분류", "메뉴분류", "카테고리"],
   quantity: ["quantity", "qty", "수량"],
   gross_sales_amount: ["gross_sales_amount", "gross_amount", "sales_amount", "총매출", "결제금액"],
-  discount_amount: ["discount_amount", "discounts", "할인금액"],
-  net_sales_amount: ["net_sales_amount", "net_amount", "settlement_amount", "순매출", "정산금액"],
+  discount_amount: ["discount_amount", "discounts", "할인금액", "할인 금액"],
+  net_sales_amount: ["net_sales_amount", "net_amount", "settlement_amount", "순매출", "순매출액", "실매출", "실매출액", "정산금액", "정산 금액", "입금예정금액", "입금예정액"],
 };
 
 const DELIVERY_SOURCE_TYPES = [

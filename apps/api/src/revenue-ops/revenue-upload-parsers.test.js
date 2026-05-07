@@ -51,3 +51,24 @@ test("delivery CSV parser normalizes Baemin/CoupangEats settlement fields withou
   assert.equal(preview.daily_rows[0].settlement_amount, 104000);
   assert.equal(preview.daily_rows[0].source_file_type, "baemin_orders_csv");
 });
+
+test("standard daily CSV parser accepts common Korean POS headers", () => {
+  const preview = previewRevenueUploadPayload({
+    parser_type: "standard_daily_revenue_csv",
+    source_type: "generic_pos_csv",
+    csv_text: [
+      "매출일자,채널,매출금액,실매출액,결제건수,취소 건수,환불 금액,할인 금액",
+      "2026.05.03,offline_pos,\"1,520,000\",\"1,460,000\",121,1,\"8,000\",\"52,000\"",
+    ].join("\n"),
+  });
+
+  assert.equal(preview.quality_summary.accepted_count, 1);
+  assert.equal(preview.quality_summary.rejected_count, 0);
+  assert.equal(preview.daily_rows[0].business_date, "2026-05-03");
+  assert.equal(preview.daily_rows[0].gross_sales_amount, 1520000);
+  assert.equal(preview.daily_rows[0].net_sales_amount, 1460000);
+  assert.equal(preview.daily_rows[0].order_count, 121);
+  assert.equal(preview.daily_rows[0].cancel_count, 1);
+  assert.equal(preview.daily_rows[0].refund_amount, 8000);
+  assert.equal(preview.daily_rows[0].discount_amount, 52000);
+});
