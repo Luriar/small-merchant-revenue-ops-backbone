@@ -158,13 +158,11 @@ function RcHeader({ lang, scenario, screen, onSetScreen, storeBar }: HeaderProps
       {/* top row: logo + brand + scenario (left) · nav tabs (right) */}
       <div className="rc-header-top">
         <div className="rc-header-brand">
-          <div style={{
-            width: 22, height: 22, borderRadius: 6, background: 'var(--rc-accent)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
-            flexShrink: 0,
-          }}>
-            <Icon name="flag" size={13}/>
-          </div>
+          <img
+            className="rc-app-icon"
+            src="/brand/revenue-os-icon-512.png"
+            alt="Revenue OS"
+          />
           <span className="rc-serif" style={{ fontSize: 16, letterSpacing: 0, color: 'var(--rc-fg-strong)', whiteSpace: 'nowrap', flexShrink: 0 }}>
             Revenue&nbsp;<span style={{ fontStyle: 'italic', color: 'var(--rc-accent-strong)' }}>OS</span>
           </span>

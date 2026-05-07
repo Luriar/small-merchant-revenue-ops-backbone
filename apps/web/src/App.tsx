@@ -42,11 +42,11 @@ function resolvePageFromHash(hash: string): AppPage {
     return "revenue-cockpit";
   }
 
-  return "traceability";
+  return "revenue-cockpit";
 }
 
 function getInitialPage(): AppPage {
-  return typeof window === "undefined" ? "traceability" : resolvePageFromHash(window.location.hash);
+  return typeof window === "undefined" ? "revenue-cockpit" : resolvePageFromHash(window.location.hash);
 }
 
 function getPageHash(page: AppPage): string {
