@@ -46,15 +46,6 @@ data "aws_iam_policy_document" "api_lambda_permissions" {
     resources = ["arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${var.name_prefix}-revenue-api:*"]
   }
 
-  dynamic "statement" {
-    for_each = var.artifact_bucket_arn != null ? [var.artifact_bucket_arn] : []
-    content {
-      sid       = "ReadArtifacts"
-      effect    = "Allow"
-      actions   = ["s3:GetObject", "s3:ListBucket"]
-      resources = [statement.value, "${statement.value}/*"]
-    }
-  }
 
   dynamic "statement" {
     for_each = var.aurora_secret_arn != null ? [var.aurora_secret_arn] : []
