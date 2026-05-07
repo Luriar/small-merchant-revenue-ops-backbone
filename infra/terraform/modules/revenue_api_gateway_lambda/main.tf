@@ -177,6 +177,14 @@ resource "aws_lambda_alias" "live" {
   description      = "Revenue Ops live traffic alias for API Gateway and CodeDeploy canary deployments."
   function_name    = aws_lambda_function.api[0].function_name
   function_version = var.lambda_alias_initial_version != null ? var.lambda_alias_initial_version : aws_lambda_function.api[0].version
+
+  lifecycle {
+    ignore_changes = [
+      function_version,
+      routing_config,
+    ]
+  }
+
 }
 
 resource "aws_apigatewayv2_api" "api" {
