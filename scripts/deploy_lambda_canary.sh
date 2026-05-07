@@ -88,8 +88,32 @@ deployment_id="$(aws deploy create-deployment \
   --query "deploymentId" \
   --output text)"
 
+mkdir -p "${repo_root}/build"
+
+printf "%s\n" "${deployment_id}" > "${repo_root}/build/codedeploy-deployment-id.txt"
+printf "%s\n" "${current_version}" > "${repo_root}/build/lambda-current-version.txt"
+printf "%s\n" "${target_version}" > "${repo_root}/build/lambda-target-version.txt"
+
+cat > "${repo_root}/build/codedeploy-release-metadata.json" <<EOF_META
+{
+  "release_id": "${release_id}",
+  "function_name": "${function_name}",
+  "alias": "${alias_name}",
+  "artifact_bucket": "${artifact_bucket}",
+  "artifact_key": "${s3_key}",
+  "current_version": "${current_version}",
+  "target_version": "${target_version}",
+  "codedeploy_app": "${codedeploy_app}",
+  "codedeploy_group": "${codedeploy_group}",
+  "deployment_id": "${deployment_id}",
+  "region": "${region}"
+}
+EOF_META
+
 echo "Lambda package uploaded: s3://${artifact_bucket}/${s3_key}"
 echo "Current alias version: ${current_version}"
 echo "Target published version: ${target_version}"
 echo "CodeDeploy deployment id: ${deployment_id}"
+echo "Deployment id file: build/codedeploy-deployment-id.txt"
+echo "Release metadata file: build/codedeploy-release-metadata.json"
 echo "Inspect: aws deploy get-deployment --deployment-id ${deployment_id} --region ${region}"

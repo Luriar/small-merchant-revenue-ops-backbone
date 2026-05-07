@@ -25,6 +25,16 @@ on:
         required: true
         default: false
         type: boolean
+      verify_backend_deployment:
+        description: "Wait for backend CodeDeploy deployment and verify live alias"
+        required: true
+        default: true
+        type: boolean
+      run_canary_probe:
+        description: "Run standalone M7 CodeDeploy canary probe"
+        required: true
+        default: false
+        type: boolean
       release_id:
         description: "Release id. Defaults to the Git SHA when blank."
         required: false
@@ -108,6 +118,40 @@ jobs:
             --codedeploy-group "${CODEDEPLOY_GROUP}" \
             --region "${AWS_REGION}" \
             --package-path build/revenue-api-step2d.zip
+
+      - name: Verify backend CodeDeploy deployment
+        if: inputs.deploy_backend && inputs.verify_backend_deployment
+        run: |
+          bash scripts/verify_codedeploy_deployment.sh \
+            --deployment-id-file build/codedeploy-deployment-id.txt \
+            --function-name "${LAMBDA_FUNCTION_NAME}" \
+            --alias "${LAMBDA_ALIAS}" \
+            --region "${AWS_REGION}" \
+            --api-base "${API_BASE}" \
+            --id-token "${SMOKE_ID_TOKEN}"
+
+      - name: Validate standalone M7 canary probe mode
+        if: inputs.run_canary_probe
+        run: |
+          if [ "${{ inputs.deploy_backend }}" = "true" ]; then
+            echo "run_canary_probe creates its own CodeDeploy deployment. Run it separately from deploy_backend to avoid overlapping deployments." >&2
+            exit 1
+          fi
+          if [ -z "${API_BASE}" ] || [ -z "${SMOKE_ID_TOKEN}" ]; then
+            echo "API_BASE and REVENUE_OS_SMOKE_ID_TOKEN are required for standalone M7 canary probe." >&2
+            exit 1
+          fi
+
+      - name: Run standalone M7 CodeDeploy canary probe
+        if: inputs.run_canary_probe
+        env:
+          REGION: ${{ env.AWS_REGION }}
+          FUNCTION_NAME: ${{ env.LAMBDA_FUNCTION_NAME }}
+          APP_NAME: ${{ env.CODEDEPLOY_APP }}
+          DG_NAME: ${{ env.CODEDEPLOY_GROUP }}
+          API_BASE: ${{ env.API_BASE }}
+          ID_TOKEN: ${{ env.SMOKE_ID_TOKEN }}
+        run: bash scripts/m7_codedeploy_canary_smoke.sh
 
       - name: Smoke test
         if: inputs.run_smoke

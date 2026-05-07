@@ -139,6 +139,7 @@ data "aws_iam_policy_document" "github_actions_revenue_dev_deploy" {
       "lambda:GetFunction",
       "lambda:GetFunctionConfiguration",
       "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
       "lambda:PublishVersion",
       "lambda:GetAlias",
       "lambda:UpdateAlias",
