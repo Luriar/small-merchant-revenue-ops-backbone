@@ -1,0 +1,119 @@
+name: Manual deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "revenue-dev"
+        type: choice
+        options:
+          - revenue-dev
+      deploy_frontend:
+        description: "Deploy frontend"
+        required: true
+        default: true
+        type: boolean
+      deploy_backend:
+        description: "Deploy backend"
+        required: true
+        default: false
+        type: boolean
+      run_smoke:
+        description: "Run smoke test"
+        required: true
+        default: false
+        type: boolean
+      release_id:
+        description: "Release id. Defaults to the Git SHA when blank."
+        required: false
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
+      AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+      FRONTEND_BUCKET: ${{ vars.FRONTEND_BUCKET || 'revenue-ops-frontend-dev-827913617635' }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID || 'E31KH7PFML1A6N' }}
+      ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET || 'revenue-ops-artifacts-dev-827913617635' }}
+      LAMBDA_FUNCTION_NAME: ${{ vars.LAMBDA_FUNCTION_NAME || 'revenue-ops-revenue-dev-revenue-api' }}
+      LAMBDA_ALIAS: ${{ vars.LAMBDA_ALIAS || 'live' }}
+      CODEDEPLOY_APP: ${{ vars.CODEDEPLOY_APP || 'revenue-ops-revenue-dev-revenue-api' }}
+      CODEDEPLOY_GROUP: ${{ vars.CODEDEPLOY_GROUP || 'revenue-ops-revenue-dev-revenue-api-live' }}
+      API_BASE: ${{ vars.API_BASE }}
+      SMOKE_ID_TOKEN: ${{ secrets.REVENUE_OS_SMOKE_ID_TOKEN }}
+      RELEASE_ID: ${{ inputs.release_id || github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Configure AWS credentials
+        if: env.AWS_ROLE_TO_ASSUME != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm --prefix apps/web ci
+
+      - name: Build frontend
+        if: inputs.deploy_frontend
+        run: npm --prefix apps/web run build
+
+      - name: Deploy frontend release
+        if: inputs.deploy_frontend
+        run: |
+          bash scripts/deploy_frontend_release.sh \
+            --release-id "${RELEASE_ID}" \
+            --bucket "${FRONTEND_BUCKET}" \
+            --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+            --region "${AWS_REGION}"
+
+      - name: Package Lambda
+        if: inputs.deploy_backend
+        run: bash scripts/package_step2d_revenue_api_lambda.sh
+
+      - name: Upload Lambda package
+        if: inputs.deploy_backend
+        run: |
+          aws s3 cp build/revenue-api-step2d.zip \
+            "s3://${ARTIFACT_BUCKET}/api-packages/${RELEASE_ID}/revenue-api-step2d.zip" \
+            --region "${AWS_REGION}"
+
+      - name: Deploy backend canary
+        if: inputs.deploy_backend
+        run: |
+          bash scripts/deploy_lambda_canary.sh \
+            --function-name "${LAMBDA_FUNCTION_NAME}" \
+            --alias "${LAMBDA_ALIAS}" \
+            --artifact-bucket "${ARTIFACT_BUCKET}" \
+            --release-id "${RELEASE_ID}" \
+            --codedeploy-app "${CODEDEPLOY_APP}" \
+            --codedeploy-group "${CODEDEPLOY_GROUP}" \
+            --region "${AWS_REGION}" \
+            --package-path build/revenue-api-step2d.zip
+
+      - name: Smoke test
+        if: inputs.run_smoke
+        run: |
+          if [ -z "${API_BASE}" ] || [ -z "${SMOKE_ID_TOKEN}" ]; then
+            echo "API_BASE and REVENUE_OS_SMOKE_ID_TOKEN are required for authenticated smoke tests." >&2
+            exit 1
+          fi
+          bash scripts/smoke_m6_runtime.sh --api-base "${API_BASE}" --id-token "${SMOKE_ID_TOKEN}"

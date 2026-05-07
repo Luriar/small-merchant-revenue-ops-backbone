@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install web dependencies
+        run: npm --prefix apps/web ci
+
+      - name: Backend route and collector tests
+        run: |
+          node --test apps/api/src/revenue-ops/context-collectors.test.js
+          node --test apps/api/src/revenue-ops/revenue-ops-saas-routes.test.js
+          node --test apps/api/src/revenue-ops/revenue-upload-parsers.test.js
+
+      - name: Backend syntax check
+        run: find apps/api/src -name "*.js" -print0 | xargs -0 -n1 node --check
+
+      - name: Lambda package manifest
+        run: node scripts/validate_step3_lambda_package_manifest.js
+
+      - name: Frontend typecheck
+        run: npm --prefix apps/web run check
+
+      - name: Frontend build
+        run: npm --prefix apps/web run build
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: Terraform init
+        run: terraform -chdir=infra/terraform/envs/revenue-dev init -backend=false
+
+      - name: Terraform validate
+        run: terraform -chdir=infra/terraform/envs/revenue-dev validate
