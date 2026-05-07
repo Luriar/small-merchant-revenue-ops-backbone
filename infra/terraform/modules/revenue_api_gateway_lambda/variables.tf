@@ -215,6 +215,72 @@ variable "enable_xray" {
   description = "Enable X-Ray tracing for the Lambda function."
 }
 
+variable "enable_lambda_versioning" {
+  type        = bool
+  default     = false
+  description = "Publish immutable Lambda versions from Terraform-managed function code. Required for alias and CodeDeploy readiness."
+}
+
+variable "enable_lambda_alias" {
+  type        = bool
+  default     = false
+  description = "Create a Lambda alias and wire API Gateway to the qualified alias invoke ARN."
+}
+
+variable "lambda_alias_name" {
+  type        = string
+  default     = "live"
+  description = "Lambda alias name used by API Gateway and CodeDeploy."
+}
+
+variable "lambda_alias_initial_version" {
+  type        = string
+  default     = null
+  description = "Optional initial Lambda version for the alias. Defaults to the Terraform-published version."
+}
+
+variable "enable_codedeploy_canary" {
+  type        = bool
+  default     = false
+  description = "Create CodeDeploy Lambda deployment group and rollback alarms for alias traffic shifting."
+}
+
+variable "codedeploy_deployment_config_name" {
+  type        = string
+  default     = "CodeDeployDefault.LambdaCanary10Percent5Minutes"
+  description = "CodeDeploy deployment config for Lambda canary traffic shifting."
+}
+
+variable "lambda_error_alarm_threshold" {
+  type        = number
+  default     = 1
+  description = "Lambda alias error count threshold for canary rollback alarm."
+}
+
+variable "lambda_throttle_alarm_threshold" {
+  type        = number
+  default     = 1
+  description = "Lambda alias throttle count threshold for canary rollback alarm."
+}
+
+variable "lambda_duration_p95_alarm_threshold_ms" {
+  type        = number
+  default     = 10000
+  description = "Lambda alias p95 duration threshold in milliseconds for canary rollback alarm."
+}
+
+variable "api_gateway_5xx_alarm_threshold" {
+  type        = number
+  default     = 1
+  description = "API Gateway 5xx count threshold for canary rollback alarm."
+}
+
+variable "alarm_actions" {
+  type        = list(string)
+  default     = []
+  description = "Optional SNS topic ARNs or other alarm action ARNs for API canary rollback alarms."
+}
+
 variable "tags" {
   type        = map(string)
   default     = {}

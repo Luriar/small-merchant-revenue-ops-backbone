@@ -33,6 +33,54 @@ resource "aws_cloudwatch_metric_alarm" "api_lambda_errors" {
   })
 }
 
+resource "aws_cloudwatch_metric_alarm" "api_lambda_throttles" {
+  count = var.enable_observability && var.api_lambda_function_name != null ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-api-lambda-throttles"
+  alarm_description   = "Revenue Ops API Lambda throttled invocations."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Throttles"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  dimensions = {
+    FunctionName = var.api_lambda_function_name
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-api-lambda-throttles"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "api_lambda_duration_p95" {
+  count = var.enable_observability && var.api_lambda_function_name != null ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-api-lambda-duration-p95"
+  alarm_description   = "Revenue Ops API Lambda p95 duration is elevated."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 2
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  extended_statistic  = "p95"
+  threshold           = 10000
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  dimensions = {
+    FunctionName = var.api_lambda_function_name
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-api-lambda-duration-p95"
+  })
+}
+
 resource "aws_cloudwatch_metric_alarm" "api_gateway_5xx" {
   count = var.enable_observability && var.api_gateway_api_id != null ? 1 : 0
 

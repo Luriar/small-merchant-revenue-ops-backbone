@@ -69,6 +69,41 @@ output "api_endpoint" {
   value       = module.revenue_api.api_endpoint
 }
 
+output "api_lambda_function_name" {
+  description = "Revenue Ops API Lambda function name. Null when disabled."
+  value       = module.revenue_api.lambda_function_name
+}
+
+output "api_lambda_alias_name" {
+  description = "Revenue Ops API Lambda alias name. Null when alias is disabled."
+  value       = module.revenue_api.lambda_alias_name
+}
+
+output "api_lambda_alias_arn" {
+  description = "Revenue Ops API Lambda alias ARN. Null when alias is disabled."
+  value       = module.revenue_api.lambda_alias_arn
+}
+
+output "api_lambda_alias_invoke_arn" {
+  description = "Revenue Ops API Lambda alias invoke ARN used by API Gateway. Null when alias is disabled."
+  value       = module.revenue_api.lambda_alias_invoke_arn
+}
+
+output "api_codedeploy_app_name" {
+  description = "CodeDeploy application name for the API Lambda. Null when canary resources are disabled."
+  value       = module.revenue_api.codedeploy_app_name
+}
+
+output "api_codedeploy_deployment_group_name" {
+  description = "CodeDeploy deployment group name for the API Lambda alias. Null when canary resources are disabled."
+  value       = module.revenue_api.codedeploy_deployment_group_name
+}
+
+output "api_codedeploy_alarm_names" {
+  description = "CloudWatch alarm names attached to the API Lambda CodeDeploy group."
+  value       = module.revenue_api.codedeploy_alarm_names
+}
+
 output "cognito_user_pool_id" {
   description = "Cognito user pool ID for small-merchant SaaS auth. Null when disabled."
   value       = module.auth.user_pool_id

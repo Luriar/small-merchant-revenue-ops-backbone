@@ -4,6 +4,9 @@ data "aws_caller_identity" "current" {}
 locals {
   lambda_vpc_enabled        = length(var.lambda_vpc_subnet_ids) > 0 && length(var.lambda_vpc_security_group_ids) > 0
   public_context_secret_arn = var.public_context_secret_arn != null ? var.public_context_secret_arn : (var.public_context_secret_id != null ? "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:${var.public_context_secret_id}-*" : null)
+  lambda_alias_enabled      = var.enable_api && var.enable_lambda_alias
+  lambda_integration_uri    = local.lambda_alias_enabled ? aws_lambda_alias.live[0].invoke_arn : (var.enable_api ? aws_lambda_function.api[0].invoke_arn : null)
+  lambda_alarm_resource     = "${var.name_prefix}-revenue-api:${var.lambda_alias_name}"
 }
 
 data "aws_iam_policy_document" "lambda_trust" {
@@ -132,6 +135,7 @@ resource "aws_lambda_function" "api" {
   handler       = "index.handler"
   timeout       = 30
   memory_size   = 512
+  publish       = var.enable_lambda_versioning || var.enable_lambda_alias || var.enable_codedeploy_canary
   s3_bucket     = var.lambda_s3_bucket
   s3_key        = var.lambda_s3_key
 
@@ -175,6 +179,15 @@ resource "aws_lambda_function" "api" {
   })
 }
 
+resource "aws_lambda_alias" "live" {
+  count = local.lambda_alias_enabled ? 1 : 0
+
+  name             = var.lambda_alias_name
+  description      = "Revenue Ops live traffic alias for API Gateway and CodeDeploy canary deployments."
+  function_name    = aws_lambda_function.api[0].function_name
+  function_version = var.lambda_alias_initial_version != null ? var.lambda_alias_initial_version : aws_lambda_function.api[0].version
+}
+
 resource "aws_apigatewayv2_api" "api" {
   count = var.enable_api ? 1 : 0
 
@@ -212,7 +225,7 @@ resource "aws_apigatewayv2_integration" "lambda" {
 
   api_id                 = aws_apigatewayv2_api.api[0].id
   integration_type       = "AWS_PROXY"
-  integration_uri        = aws_lambda_function.api[0].invoke_arn
+  integration_uri        = local.lambda_integration_uri
   payload_format_version = "2.0"
 }
 
@@ -313,8 +326,191 @@ resource "aws_lambda_permission" "api_gateway" {
   statement_id  = "AllowApiGatewayInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.api[0].function_name
+  qualifier     = local.lambda_alias_enabled ? var.lambda_alias_name : null
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.api[0].execution_arn}/*/*"
+}
+
+data "aws_iam_policy_document" "codedeploy_lambda_trust" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["codedeploy.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "codedeploy_lambda" {
+  count = var.enable_api && var.enable_codedeploy_canary ? 1 : 0
+
+  name               = "${var.name_prefix}-revenue-api-codedeploy"
+  assume_role_policy = data.aws_iam_policy_document.codedeploy_lambda_trust.json
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-revenue-api-codedeploy"
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "codedeploy_lambda" {
+  count = var.enable_api && var.enable_codedeploy_canary ? 1 : 0
+
+  role       = aws_iam_role.codedeploy_lambda[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForLambda"
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_alias_errors" {
+  count = local.lambda_alias_enabled && var.enable_codedeploy_canary ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-revenue-api-${var.lambda_alias_name}-errors"
+  alarm_description   = "Revenue Ops API Lambda alias reported errors during live/canary traffic."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = var.lambda_error_alarm_threshold
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.api[0].function_name
+    Resource     = local.lambda_alarm_resource
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-revenue-api-${var.lambda_alias_name}-errors"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_alias_throttles" {
+  count = local.lambda_alias_enabled && var.enable_codedeploy_canary ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-revenue-api-${var.lambda_alias_name}-throttles"
+  alarm_description   = "Revenue Ops API Lambda alias throttled invocations."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Throttles"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = var.lambda_throttle_alarm_threshold
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.api[0].function_name
+    Resource     = local.lambda_alarm_resource
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-revenue-api-${var.lambda_alias_name}-throttles"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_alias_duration_p95" {
+  count = local.lambda_alias_enabled && var.enable_codedeploy_canary ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-revenue-api-${var.lambda_alias_name}-duration-p95"
+  alarm_description   = "Revenue Ops API Lambda alias p95 duration is elevated."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 2
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  extended_statistic  = "p95"
+  threshold           = var.lambda_duration_p95_alarm_threshold_ms
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  dimensions = {
+    FunctionName = aws_lambda_function.api[0].function_name
+    Resource     = local.lambda_alarm_resource
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-revenue-api-${var.lambda_alias_name}-duration-p95"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "api_gateway_5xx" {
+  count = var.enable_api && var.enable_codedeploy_canary ? 1 : 0
+
+  alarm_name          = "${var.name_prefix}-revenue-api-gateway-5xx-canary"
+  alarm_description   = "Revenue Ops API Gateway returned 5xx responses during live/canary traffic."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "5xx"
+  namespace           = "AWS/ApiGateway"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = var.api_gateway_5xx_alarm_threshold
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.alarm_actions
+
+  dimensions = {
+    ApiId = aws_apigatewayv2_api.api[0].id
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-revenue-api-gateway-5xx-canary"
+  })
+}
+
+resource "aws_codedeploy_app" "lambda" {
+  count = var.enable_api && var.enable_codedeploy_canary ? 1 : 0
+
+  compute_platform = "Lambda"
+  name             = "${var.name_prefix}-revenue-api"
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-revenue-api"
+  })
+}
+
+resource "aws_codedeploy_deployment_group" "lambda_live" {
+  count = local.lambda_alias_enabled && var.enable_codedeploy_canary ? 1 : 0
+
+  app_name               = aws_codedeploy_app.lambda[0].name
+  deployment_group_name  = "${var.name_prefix}-revenue-api-${var.lambda_alias_name}"
+  service_role_arn       = aws_iam_role.codedeploy_lambda[0].arn
+  deployment_config_name = var.codedeploy_deployment_config_name
+
+  deployment_style {
+    deployment_option = "WITH_TRAFFIC_CONTROL"
+    deployment_type   = "BLUE_GREEN"
+  }
+
+  auto_rollback_configuration {
+    enabled = true
+    events = [
+      "DEPLOYMENT_FAILURE",
+      "DEPLOYMENT_STOP_ON_ALARM",
+      "DEPLOYMENT_STOP_ON_REQUEST",
+    ]
+  }
+
+  alarm_configuration {
+    enabled = true
+    alarms = [
+      aws_cloudwatch_metric_alarm.lambda_alias_errors[0].alarm_name,
+      aws_cloudwatch_metric_alarm.lambda_alias_throttles[0].alarm_name,
+      aws_cloudwatch_metric_alarm.lambda_alias_duration_p95[0].alarm_name,
+      aws_cloudwatch_metric_alarm.api_gateway_5xx[0].alarm_name,
+    ]
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-revenue-api-${var.lambda_alias_name}"
+  })
+
+  depends_on = [
+    aws_iam_role_policy_attachment.codedeploy_lambda,
+    aws_lambda_alias.live,
+  ]
 }
 
 resource "aws_apigatewayv2_domain_name" "api" {

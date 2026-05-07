@@ -1,0 +1,54 @@
+# M6 Lambda alias + CodeDeploy canary — example tfvars
+#
+# Purpose
+# -------
+# Enables only the additional flags that activate:
+#   - Immutable Lambda versions for the Revenue Ops API
+#   - The "live" Lambda alias used by API Gateway and CodeDeploy
+#   - The CodeDeploy Lambda canary deployment group + rollback alarms
+#
+# This file is intentionally a thin overlay; it only sets the M6
+# release-canary flags. It does NOT re-declare the existing required
+# inputs (network, Aurora, Cognito, S3 buckets, etc.).
+#
+# How to use
+# ----------
+# Two patterns are supported. Pick ONE:
+#
+# (1) Combine via -var-file flags at plan time (preferred — no secrets
+#     copied into a new file):
+#
+#       terraform -chdir=infra/terraform/envs/revenue-dev plan \
+#         -var-file=terraform.step2f.jwt-enforcement.tfvars \
+#         -var='enable_api_lambda_versioning=true' \
+#         -var='enable_api_lambda_alias=true' \
+#         -var='api_lambda_alias_name=live' \
+#         -var='enable_api_codedeploy_canary=true' \
+#         -out=tfplan.m6-release-canary-enabled
+#
+#     The values shown above are the same as those declared in this
+#     example file, so this file is mainly documentation in pattern (1).
+#
+# (2) Copy the M6 flags into a real, gitignored tfvars file that ALSO
+#     contains the existing step2f.jwt-enforcement values, then plan with
+#     a single -var-file. Do NOT commit that combined file. Do NOT copy
+#     account IDs, subnet IDs, or security-group IDs into this example.
+#
+# Activation order is important
+# -----------------------------
+#   1. enable_api_lambda_versioning = true   (publish $LATEST as a version)
+#   2. enable_api_lambda_alias      = true   (creates the "live" alias and
+#                                             swings API Gateway to it)
+#   3. enable_api_codedeploy_canary = true   (creates app + deployment
+#                                             group + alarms; safe only
+#                                             once the alias exists)
+#
+# These flags only declare resources. Automatic rollback is NOT active
+# until terraform apply has run AND the first CodeDeploy deployment has
+# been verified end-to-end.
+
+enable_api_lambda_versioning          = true
+enable_api_lambda_alias               = true
+api_lambda_alias_name                 = "live"
+enable_api_codedeploy_canary          = true
+api_codedeploy_deployment_config_name = "CodeDeployDefault.LambdaCanary10Percent5Minutes"

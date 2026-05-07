@@ -194,6 +194,42 @@ variable "enable_api_xray" {
   description = "Enable X-Ray tracing for the Revenue Ops API Lambda."
 }
 
+variable "enable_api_lambda_versioning" {
+  type        = bool
+  default     = false
+  description = "Publish immutable Lambda versions for the Revenue Ops API."
+}
+
+variable "enable_api_lambda_alias" {
+  type        = bool
+  default     = false
+  description = "Create the live Lambda alias and wire API Gateway to the alias ARN."
+}
+
+variable "api_lambda_alias_name" {
+  type        = string
+  default     = "live"
+  description = "Lambda alias name for API Gateway and CodeDeploy."
+}
+
+variable "api_lambda_alias_initial_version" {
+  type        = string
+  default     = null
+  description = "Optional initial Lambda version for the live alias."
+}
+
+variable "enable_api_codedeploy_canary" {
+  type        = bool
+  default     = false
+  description = "Create CodeDeploy Lambda canary deployment group and rollback alarms."
+}
+
+variable "api_codedeploy_deployment_config_name" {
+  type        = string
+  default     = "CodeDeployDefault.LambdaCanary10Percent5Minutes"
+  description = "CodeDeploy deployment config used by the API Lambda deployment group."
+}
+
 variable "public_context_secret_id" {
   type        = string
   default     = "/revenue-ops/revenue-dev/external/public-context"
