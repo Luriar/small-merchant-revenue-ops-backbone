@@ -20,7 +20,15 @@ import {
   type RevenueUploadPayload,
   type RevenueStoreSummary,
 } from './revenueCockpitApi';
-import { getStoredCognitoToken } from './revenueCockpitAuth';
+import {
+  getStoredCognitoToken,
+  getStoredAuthSession,
+  startCognitoLogin,
+  buildCognitoLogoutUrl,
+  clearStoredAuthSession,
+  markRevenueLogoutRedirect,
+} from './revenueCockpitAuth';
+import type { RevenueAuthSession } from './revenueCockpitAuth';
 import { buildScenarioFromApi, wantsApiData } from './revenueCockpitData';
 import { Icon, ChromeBar } from './revenueCockpitShared';
 import { RevenueBriefView } from './RevenueBriefView';
@@ -128,17 +136,17 @@ function resolveTheme(theme: RcTheme): 'light' | 'dark' {
   return theme;
 }
 
-// ─── header (brand + tab nav) ─────────────────────────────────────────────────
+// ─── header (brand + tab nav + optional store bar) ───────────────────────────
 
 interface HeaderProps {
   lang: RcLang;
   scenario: Scenario;
   screen: RcScreen;
   onSetScreen: (s: RcScreen) => void;
-  storeSwitcher?: ReactNode;
+  storeBar?: ReactNode;
 }
 
-function RcHeader({ lang, scenario, screen, onSetScreen, storeSwitcher }: HeaderProps) {
+function RcHeader({ lang, scenario, screen, onSetScreen, storeBar }: HeaderProps) {
   const items: Array<{ id: RcScreen; label: string }> = [
     { id: 'brief',       label: tr('navBrief', lang) },
     { id: 'evidence',    label: tr('navEvidence', lang) },
@@ -146,39 +154,42 @@ function RcHeader({ lang, scenario, screen, onSetScreen, storeSwitcher }: Header
     { id: 'reliability', label: tr('navReliability', lang) },
   ];
   return (
-    <header className="rc-header" style={{
-      display: 'flex', alignItems: 'flex-end', gap: 24,
-      padding: '12px 32px 0',
-      borderBottom: '1px solid var(--rc-rule)',
-      background: 'var(--rc-surface-0)',
-      flexShrink: 0,
-    }}>
-      <div className="rc-header-brand" style={{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 10 }}>
-        <div style={{
-          width: 22, height: 22, borderRadius: 6, background: 'var(--rc-accent)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
-        }}>
-          <Icon name="flag" size={13}/>
+    <header className="rc-header">
+      {/* top row: logo + brand + scenario (left) · nav tabs (right) */}
+      <div className="rc-header-top">
+        <div className="rc-header-brand">
+          <div style={{
+            width: 22, height: 22, borderRadius: 6, background: 'var(--rc-accent)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
+            flexShrink: 0,
+          }}>
+            <Icon name="flag" size={13}/>
+          </div>
+          <span className="rc-serif" style={{ fontSize: 16, letterSpacing: 0, color: 'var(--rc-fg-strong)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            Revenue&nbsp;<span style={{ fontStyle: 'italic', color: 'var(--rc-accent-strong)' }}>OS</span>
+          </span>
+          <span className="rc-header-scenario">
+            {scenario.area[lang]} · {scenario.category[lang]} · {scenario.compare[lang]}
+          </span>
         </div>
-        <span className="rc-serif" style={{ fontSize: 16, letterSpacing: 0, color: 'var(--rc-fg-strong)' }}>
-          Revenue&nbsp;<span style={{ fontStyle: 'italic', color: 'var(--rc-accent-strong)' }}>OS</span>
-        </span>
-        <span style={{ fontSize: 11, color: 'var(--rc-fg-dim)', borderLeft: '1px solid var(--rc-rule)', paddingLeft: 10, marginLeft: 4 }}>
-          {scenario.area[lang]} · {scenario.category[lang]} · {scenario.compare[lang]}
-        </span>
-        {storeSwitcher}
+        <nav className="rc-header-nav">
+          {items.map(it => (
+            <button key={it.id} onClick={() => onSetScreen(it.id)} style={{
+              all: 'unset', cursor: 'pointer', padding: '8px 14px',
+              fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap',
+              color: screen === it.id ? 'var(--rc-fg-strong)' : 'var(--rc-fg-muted)',
+              borderBottom: screen === it.id ? '2px solid var(--rc-accent)' : '2px solid transparent',
+              marginBottom: -1,
+            }}>{it.label}</button>
+          ))}
+        </nav>
       </div>
-      <nav style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
-        {items.map(it => (
-          <button key={it.id} onClick={() => onSetScreen(it.id)} style={{
-            all: 'unset', cursor: 'pointer', padding: '8px 14px',
-            fontSize: 12.5, fontWeight: 500,
-            color: screen === it.id ? 'var(--rc-fg-strong)' : 'var(--rc-fg-muted)',
-            borderBottom: screen === it.id ? '2px solid var(--rc-accent)' : '2px solid transparent',
-            marginBottom: -1,
-          }}>{it.label}</button>
-        ))}
-      </nav>
+      {/* store bar row — only visible when logged in */}
+      {storeBar && (
+        <div className="rc-header-store-bar">
+          {storeBar}
+        </div>
+      )}
     </header>
   );
 }
@@ -282,18 +293,26 @@ function OnboardingBootstrapPanel({
   status: BootstrapStatus;
   onRetry: () => void;
 }) {
-  const partial = status.phase === 'partial' || status.phase === 'failed';
-  const ready = status.phase === 'ready';
-  const title = partial
-    ? (lang === 'ko' ? '일부 맥락데이터 수집이 지연되었습니다.' : 'Some context collection is delayed.')
-    : ready
-      ? (lang === 'ko' ? '초기 맥락데이터 수집이 완료되었습니다.' : 'Initial context collection is complete.')
-      : (lang === 'ko' ? '초기 맥락데이터를 수집하고 있습니다.' : 'Collecting initial context data.');
-  const body = partial
-    ? (lang === 'ko' ? '현재 수집된 데이터만으로 초기 분석을 시작할 수 있습니다.' : 'The current data is enough to start an initial analysis.')
-    : ready
-      ? (lang === 'ko' ? '현재 수집된 데이터를 바탕으로 초기 분석을 시작할 수 있습니다.' : 'You can start the initial analysis from the collected data.')
-      : (lang === 'ko' ? '함께 관측된 신호를 준비하고 있으며, 인과가 확정된 것은 아닙니다.' : 'Preparing observed-together signals; this does not prove causality.');
+  const isCollecting = status.phase === 'collecting';
+  const isPartial    = status.phase === 'partial' || status.phase === 'failed';
+  const isReady      = status.phase === 'ready';
+
+  const title = isCollecting
+    ? (lang === 'ko' ? '초기 맥락데이터를 수집하고 있습니다.' : 'Collecting initial context data.')
+    : isPartial
+      ? (lang === 'ko' ? '일부 맥락데이터 갱신이 지연되었습니다.' : 'Some context collection is delayed.')
+      : isReady
+        ? (lang === 'ko' ? '초기 맥락데이터 수집이 완료되었습니다.' : 'Initial context collection is complete.')
+        : (lang === 'ko' ? '맥락데이터 수집이 준비되지 않았습니다.' : 'Context collection is not ready.');
+
+  const body = isCollecting
+    ? (lang === 'ko' ? '함께 관측된 신호를 준비하고 있으며, 인과가 확정된 것은 아닙니다.' : 'Preparing observed-together signals; this does not prove causality.')
+    : isPartial
+      ? (lang === 'ko' ? '기존 수집 데이터를 바탕으로 분석을 계속할 수 있습니다.' : 'Analysis can continue from the existing collected data.')
+      : isReady
+        ? (lang === 'ko' ? '현재 수집된 데이터를 바탕으로 초기 분석을 시작할 수 있습니다.' : 'You can start the initial analysis from the collected data.')
+        : (lang === 'ko' ? '주소와 업종을 보강하면 맥락 수집을 시작할 수 있습니다.' : 'Add address and category to collect context.');
+
   return (
     <section className="rc-bootstrap-panel" aria-label={lang === 'ko' ? '초기 맥락 수집 상태' : 'Bootstrap status'}>
       <div className="rc-bootstrap-head">
@@ -302,9 +321,12 @@ function OnboardingBootstrapPanel({
           <strong>{title}</strong>
           <p>{body}</p>
         </div>
-        <button type="button" className="rc-store-button" onClick={onRetry}>
-          {lang === 'ko' ? '맥락데이터 다시 수집' : 'Collect context again'}
-        </button>
+        {/* retry button: hidden while collecting, shown after completion or on partial failure */}
+        {!isCollecting && (
+          <button type="button" className="rc-store-button" onClick={onRetry}>
+            {lang === 'ko' ? '맥락데이터 다시 수집' : 'Collect context again'}
+          </button>
+        )}
       </div>
       <div className="rc-bootstrap-steps">
         {BOOTSTRAP_GROUPS.map(group => {
@@ -691,6 +713,7 @@ export function RevenueCockpitApp() {
   });
   const [apiNotice, setApiNotice] = useState<'loading' | 'fallback' | 'auth-expired' | 'patch-saving' | 'patch-saved' | 'patch-local' | 'patch-failed' | null>(() => wantsApiData() ? 'loading' : null);
   const [authReloadTick, setAuthReloadTick] = useState(0);
+  const [authSession, setAuthSession] = useState<RevenueAuthSession | null>(() => getStoredAuthSession());
   const [stores, setStores] = useState<RevenueStoreSummary[]>([]);
   const [selectedStoreId, setSelectedStoreIdState] = useState<string | null>(() => loadSelectedStoreId());
   const [storeLoading, setStoreLoading] = useState(false);
@@ -709,6 +732,8 @@ export function RevenueCockpitApp() {
 
   useEffect(() => {
     const handleAuthChanged = () => {
+      const session = getStoredAuthSession();
+      setAuthSession(session);
       if (!getStoredCognitoToken()) {
         setStores([]);
         setSelectedStoreId(null);
@@ -1115,6 +1140,16 @@ export function RevenueCockpitApp() {
     startContextCollection(selectedStoreId, { recommended: true, mode: 'live', reason: 'manual_refresh' }, 'manual_refresh');
   }
 
+  function handleLogin() {
+    void startCognitoLogin();
+  }
+
+  function handleLogout() {
+    markRevenueLogoutRedirect();
+    clearStoredAuthSession();
+    window.location.assign(buildCognitoLogoutUrl());
+  }
+
   const chromeLabel = lang === 'ko'
     ? '매출 코크핏 — 근거 기반 액션 브리프'
     : 'Merchant Revenue Cockpit — Evidence-backed Action Brief';
@@ -1143,15 +1178,22 @@ export function RevenueCockpitApp() {
               ? (lang === 'ko' ? '상태 변경을 API에 저장하지 못했습니다. 화면 상태는 유지됩니다.' : 'Could not save the status to the API. The screen state is kept.')
               : null;
 
+  const isLoggedIn = Boolean(apiMode && getStoredCognitoToken());
+
   return (
     <div className="rc-root" data-theme={effectiveTheme}>
-      <ChromeBar lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} label={chromeLabel}/>
+      <ChromeBar
+        lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} label={chromeLabel}
+        authEmail={apiMode ? (authSession?.email ?? null) : null}
+        onLogin={apiMode && !authSession ? handleLogin : undefined}
+        onLogout={apiMode && authSession ? handleLogout : undefined}
+      />
       <RcHeader
         lang={lang}
         scenario={scenario}
         screen={screen}
         onSetScreen={setScreen}
-        storeSwitcher={apiMode && getStoredCognitoToken() ? (
+        storeBar={isLoggedIn ? (
           <StoreSwitcher
             lang={lang}
             stores={stores}

@@ -74,6 +74,8 @@
   --rc-chip-bd: rgba(255,240,220,0.12);
 }
 
+/* ─── root shell ─────────────────────────────────────────────────────────────── */
+
 .rc-root {
   background: var(--rc-bg);
   color: var(--rc-fg);
@@ -83,6 +85,7 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
 }
 
 .rc-root * {
@@ -92,6 +95,8 @@
 .rc-root button {
   font-family: inherit;
 }
+
+/* ─── typography utilities ───────────────────────────────────────────────────── */
 
 .rc-serif {
   font-family: var(--rc-serif);
@@ -107,13 +112,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.rc-card {
-  background: var(--rc-surface-1);
-  border: 1px solid var(--rc-rule);
-  border-radius: 12px;
-  box-shadow: var(--rc-shadow-sm);
-}
-
 .rc-keep-words {
   word-break: keep-all;
   line-break: strict;
@@ -126,26 +124,91 @@
   line-break: strict;
 }
 
+/* ─── surface card ───────────────────────────────────────────────────────────── */
+
+.rc-card {
+  background: var(--rc-surface-1);
+  border: 1px solid var(--rc-rule);
+  border-radius: 12px;
+  box-shadow: var(--rc-shadow-sm);
+}
+
+/* ─── header ─────────────────────────────────────────────────────────────────── */
+
+.rc-header {
+  flex-shrink: 0;
+  background: var(--rc-surface-0);
+  border-bottom: 1px solid var(--rc-rule);
+}
+
+/* top row: brand left, nav tabs right */
+.rc-header-top {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+  padding: 12px 32px 0;
+  min-width: 0;
+}
+
+/* brand section: logo + name + scenario context */
+.rc-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+/* scenario context pill inside brand — truncates on narrow viewports */
+.rc-header-scenario {
+  font-size: 11px;
+  color: var(--rc-fg-dim);
+  border-left: 1px solid var(--rc-rule);
+  padding-left: 10px;
+  margin-left: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex-shrink: 2;
+}
+
+/* nav tabs — never shrinks below its intrinsic size */
+.rc-header-nav {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* store bar — second row inside header, shown when logged in */
+.rc-header-store-bar {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  width: 100%;
+  border-top: 1px solid var(--rc-rule);
+  background: var(--rc-surface-0);
+  padding: 6px 32px 7px;
+}
+
+/* ─── api notice ─────────────────────────────────────────────────────────────── */
+
 .rc-api-notice {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 32px;
+  padding: 6px 32px;
   border-bottom: 1px solid var(--rc-rule);
   background: var(--rc-surface-1);
   color: var(--rc-fg-muted);
   font-size: 11.5px;
   line-height: 1.4;
+  flex-shrink: 0;
 }
 
-.rc-header {
-  flex-wrap: wrap;
-}
-
-.rc-header-brand {
-  flex-wrap: wrap;
-  min-width: 0;
-}
+/* ─── store switcher ─────────────────────────────────────────────────────────── */
 
 .rc-store-switcher {
   display: flex;
@@ -156,19 +219,22 @@
   background: var(--rc-surface-0);
 }
 
+/* compact variant: rendered inside .rc-header-store-bar */
 .rc-store-switcher-compact {
-  display: inline-flex;
-  width: auto;
-  min-width: min(420px, 100%);
-  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
 }
 
 .rc-store-switcher-compact .rc-store-switcher-row {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   min-width: 0;
+  gap: 6px;
 }
 
 .rc-store-switcher-compact .rc-store-label {
@@ -181,9 +247,9 @@
 }
 
 .rc-store-switcher-compact .rc-store-select {
-  min-width: 260px;
-  max-width: min(420px, 44vw);
-  height: 32px;
+  min-width: 160px;
+  max-width: min(320px, 38vw);
+  height: 30px;
   border-color: var(--rc-rule-strong);
   background: var(--rc-surface-1);
   color: var(--rc-fg-strong);
@@ -191,20 +257,28 @@
 }
 
 .rc-store-switcher-compact .rc-store-button {
-  height: 32px;
+  height: 30px;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* notice: allow wrapping so long messages are never clipped */
+.rc-store-notice {
+  color: var(--rc-fg-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
 .rc-store-switcher-compact .rc-store-notice {
-  max-width: 220px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-basis: 100%;   /* pushes to its own line when row wraps */
+  padding-top: 2px;
 }
 
 .rc-store-switcher-compact .rc-store-create {
   width: 100%;
-  padding: 8px 0 2px 0;
+  padding: 6px 0 2px 0;
 }
 
 .rc-store-switcher-row,
@@ -234,7 +308,7 @@
 }
 
 .rc-store-select {
-  min-width: 240px;
+  min-width: 220px;
 }
 
 .rc-store-input {
@@ -261,6 +335,7 @@
   font-size: 12px;
   font-weight: 650;
   padding: 5px 10px;
+  white-space: nowrap;
 }
 
 .rc-store-button-primary {
@@ -274,15 +349,41 @@
   opacity: 0.6;
 }
 
-.rc-store-notice {
-  color: var(--rc-fg-muted);
+/* ─── demo / synth data strip ────────────────────────────────────────────────── */
+
+.rc-demo-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 32px;
+  border-bottom: 1px solid var(--rc-rule);
+  background: var(--rc-info-soft);
+  color: var(--rc-info);
   font-size: 11.5px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  line-height: 1.5;
 }
+
+.rc-demo-strip span:first-child {
+  border: 1px solid var(--rc-info-soft-bd);
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--rc-surface-1);
+  color: var(--rc-fg-strong);
+  font-weight: 750;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ─── onboarding bootstrap panel ─────────────────────────────────────────────── */
 
 .rc-bootstrap-panel {
   border-bottom: 1px solid var(--rc-rule);
   background: var(--rc-surface-1);
   padding: 12px 32px 14px;
+  flex-shrink: 0;
 }
 
 .rc-bootstrap-head {
@@ -291,6 +392,11 @@
   justify-content: space-between;
   gap: 14px;
   max-width: 1120px;
+}
+
+.rc-bootstrap-head > div {
+  min-width: 0;
+  flex: 1;
 }
 
 .rc-bootstrap-kicker {
@@ -303,8 +409,10 @@
 }
 
 .rc-bootstrap-head strong {
+  display: block;
   color: var(--rc-fg-strong);
   font-size: 13px;
+  word-break: keep-all;
 }
 
 .rc-bootstrap-head p {
@@ -312,29 +420,37 @@
   font-size: 12px;
   line-height: 1.5;
   margin: 3px 0 0;
+  word-break: keep-all;
 }
 
+/* progress steps grid — equal height cards, 6-across, wraps gracefully */
 .rc-bootstrap-steps {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
+  gap: 7px;
   max-width: 1120px;
   margin-top: 10px;
 }
 
 .rc-bootstrap-step {
   min-width: 0;
-  min-height: 34px;
   display: flex;
-  align-items: center;
-  gap: 7px;
+  align-items: flex-start;
+  gap: 6px;
   border: 1px solid var(--rc-rule);
   border-radius: 7px;
   background: var(--rc-surface-0);
   color: var(--rc-fg-muted);
   font-size: 11.5px;
-  line-height: 1.25;
+  line-height: 1.3;
   padding: 7px 9px;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+.rc-bootstrap-step svg {
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 
 .rc-bootstrap-step-done {
@@ -349,30 +465,13 @@
   background: var(--rc-accent-soft);
 }
 
-.rc-demo-strip {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 32px;
-  border-bottom: 1px solid var(--rc-rule);
-  background: var(--rc-info-soft);
-  color: var(--rc-info);
-  font-size: 11.5px;
-}
-
-.rc-demo-strip span:first-child {
-  border: 1px solid var(--rc-info-soft-bd);
-  border-radius: 999px;
-  padding: 2px 7px;
-  background: var(--rc-surface-1);
-  color: var(--rc-fg-strong);
-  font-weight: 750;
-}
+/* ─── revenue upload panel ───────────────────────────────────────────────────── */
 
 .rc-revenue-upload-panel {
   border-bottom: 1px solid var(--rc-rule);
   background: var(--rc-surface-0);
   padding: 16px 32px 18px;
+  flex-shrink: 0;
 }
 
 .rc-revenue-upload-head {
@@ -384,6 +483,7 @@
 }
 
 .rc-revenue-upload-head strong {
+  display: block;
   color: var(--rc-fg-strong);
   font-size: 15px;
 }
@@ -467,6 +567,8 @@
   color: var(--rc-bad-strong);
 }
 
+/* ─── no-revenue empty state ─────────────────────────────────────────────────── */
+
 .rc-empty-revenue-state {
   min-height: 100%;
   display: flex;
@@ -506,22 +608,59 @@
   margin-top: 18px;
 }
 
+/* ─── screen fill ────────────────────────────────────────────────────────────── */
+
+.rc-screen {
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+/* ─── responsive breakpoints ─────────────────────────────────────────────────── */
+
+@media (max-width: 1100px) {
+  .rc-header-scenario {
+    display: none;
+  }
+}
+
 @media (max-width: 900px) {
+  .rc-header-top {
+    padding: 10px 16px 0;
+  }
+
+  .rc-header-store-bar {
+    padding: 5px 16px 6px;
+  }
+
+  .rc-bootstrap-panel {
+    padding: 10px 16px 12px;
+  }
+
   .rc-bootstrap-head {
     flex-direction: column;
+    gap: 10px;
   }
 
   .rc-bootstrap-steps {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .rc-revenue-upload-grid {
     grid-template-columns: 1fr;
   }
+
+  .rc-demo-strip {
+    padding: 5px 16px;
+  }
+
+  .rc-api-notice {
+    padding: 5px 16px;
+  }
 }
 
-/* Screen fill */
-.rc-screen {
-  flex: 1;
-  overflow-y: auto;
+@media (max-width: 580px) {
+  .rc-bootstrap-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
