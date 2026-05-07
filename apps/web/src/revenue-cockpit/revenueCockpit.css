@@ -664,3 +664,80 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ─── M6 final UI polish: reliability + store toolbar ─────────────────────── */
+
+.rc-reliability-hero {
+  padding: 22px 24px 20px;
+  border: 1px solid var(--rc-accent-soft-bd);
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--rc-surface-1), var(--rc-surface-0));
+  box-shadow: var(--rc-shadow-sm);
+}
+
+.rc-reliability-card-grid {
+  align-items: stretch;
+}
+
+.rc-reliability-trust-card {
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.rc-store-switcher-compact .rc-store-switcher-row {
+  align-items: center;
+  gap: 8px;
+}
+
+.rc-store-switcher-compact .rc-store-select {
+  min-width: 220px;
+  max-width: min(360px, 40vw);
+  height: 32px;
+}
+
+.rc-store-switcher-compact .rc-store-button {
+  height: 32px;
+}
+
+.rc-store-notice {
+  border: 1px solid var(--rc-rule);
+  background: var(--rc-surface-1);
+  border-radius: 999px;
+  padding: 5px 10px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.rc-store-switcher-compact .rc-store-notice {
+  flex: 1 1 220px;
+  min-width: 180px;
+  padding-top: 0;
+}
+
+/* ─── M6 final UI polish adjustment ───────────────────────────────────────── */
+
+.rc-reliability-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.rc-reliability-hero::after {
+  content: "";
+  position: absolute;
+  right: -80px;
+  top: -90px;
+  width: 240px;
+  height: 240px;
+  border-radius: 999px;
+  background: var(--rc-accent-soft);
+  opacity: 0.28;
+  pointer-events: none;
+}
+
+.rc-reliability-hero > * {
+  position: relative;
+  z-index: 1;
+}

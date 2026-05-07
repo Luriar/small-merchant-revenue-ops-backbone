@@ -72,9 +72,9 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
   ];
 
   return (
-    <div style={{ padding: '32px 40px 44px' }}>
+    <div className="rc-reliability-page" style={{ padding: '34px 40px 46px' }}>
       {/* headline */}
-      <div style={{ maxWidth: 760 }}>
+      <div className="rc-reliability-hero" style={{ maxWidth: 980 }}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 10.5,
           color: 'var(--rc-fg-muted)', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
           <Icon name="shield" size={11}/> {lang === 'ko' ? '신뢰도' : 'Reliability'}
@@ -87,12 +87,24 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
             ? '이 브리프는 매장 매출 데이터와 공개·연동 맥락 수집 결과를 함께 보며 만듭니다. 일부 수집기가 지연되어도 초기 분석은 계속할 수 있습니다. 분석은 함께 관측된 신호를 정리한 것이지 인과관계를 확정한 것이 아닙니다.'
             : 'This brief combines store revenue data with public and connector context collection. Initial analysis can continue even when some collectors are delayed. Results summarize signals observed together, not proven causes.'}
         </p>
+        <div className="rc-reliability-summary-pills" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 16 }}>
+          <Pill tone="good" size="sm">
+            {lang === 'ko' ? '공개 맥락 ' + summary.publicOk + '/' + summary.publicTotal + ' 정상' : 'Public context ' + summary.publicOk + '/' + summary.publicTotal + ' OK'}
+          </Pill>
+          <Pill tone={summary.connectorWaiting > 0 ? 'warm' : 'good'} size="sm">
+            {lang === 'ko' ? '외부 연동 ' + summary.connectorWaiting + '개 대기' : summary.connectorWaiting + ' connectors waiting'}
+          </Pill>
+          <Pill tone={summary.actualFailures > 0 ? 'warm' : 'good'} size="sm">
+            {lang === 'ko' ? '실패 ' + summary.actualFailures : summary.actualFailures + ' failures'}
+          </Pill>
+        </div>
+
       </div>
 
       {/* three trust cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 22, maxWidth: 980 }}>
+      <div className="rc-reliability-card-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginTop: 16, maxWidth: 980 }}>
         {trustCards.map((card, i) => (
-          <div key={i} className="rc-card" style={{ padding: '16px 18px' }}>
+          <div key={i} className="rc-card rc-reliability-trust-card" style={{ padding: '18px 18px 17px' }}>
             <div style={{
               width: 30, height: 30, borderRadius: 8,
               background: card.tone === 'good' ? 'var(--rc-good-soft)' : 'var(--rc-accent-soft)',
@@ -114,7 +126,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
             {lang === 'ko' ? '데이터 소스 상세' : 'Source details'}
           </h2>
           <span style={{ fontSize: 11, color: 'var(--rc-fg-dim)' }}>
-            {lang === 'ko' ? '· 기술 정보' : '· technical'}
+            {lang === 'ko' ? '· 공개 맥락과 외부 연동 상태' : '· public context and connector status'}
           </span>
         </div>
 
