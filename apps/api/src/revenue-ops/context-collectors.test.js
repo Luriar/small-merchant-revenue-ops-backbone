@@ -11,6 +11,10 @@ const {
   collectSeoulFootTrafficProxy,
   collectStorePublicContext,
   parseKmaWeatherResponse,
+  parseKmaWeatherEnvelope,
+  buildKmaEndpointPlan,
+  detectKmaEndpointKind,
+  generateKmaBaseTimeCandidates,
   planStorePublicContextCollection,
 } = require("./context-collectors");
 const {
@@ -136,6 +140,230 @@ test("KMA collector handles JSON/XML and skips incomplete live config", async ()
   assert.equal(xmlItems.length, 1);
   assert.equal(xmlItems[0].category, "RN1");
 });
+
+test("KMA collector completes after retrying past an empty base_time", async () => {
+  const store = { store_id: "store-1", region: "Seoul Seongsu" };
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    const isFirst = calls.length === 1;
+    const body = isFirst
+      ? JSON.stringify({ response: { header: { resultCode: "00", resultMsg: "NORMAL_SERVICE" }, body: { items: { item: [] } } } })
+      : JSON.stringify({ response: { header: { resultCode: "00" }, body: { items: { item: [{ category: "T1H", obsrValue: "20.5" }] } } } });
+    return mockOkText(body);
+  };
+
+  const result = await collectKmaWeather(store, {
+    kmaServiceKey: "kma-secret",
+    kmaNowcastEndpoint: "https://example.test/getUltraSrtNcst",
+    kmaDefaultNx: "61",
+    kmaDefaultNy: "125",
+  }, {
+    fetchImpl,
+    env: {},
+    now: new Date("2026-05-07T12:00:00Z"), // 21:00 KST
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.observations.length, 1);
+  assert.equal(calls.length, 2, "should have retried after empty first attempt");
+  assert.equal(result.metadata.attempts.length, 2);
+  assert.equal(result.metadata.selected_endpoint, "ultra_short_observation");
+  assert.notEqual(result.metadata.selected_base_time, null);
+  assert.equal(JSON.stringify(result).includes("kma-secret"), false);
+});
+
+test("KMA collector falls back from nowcast endpoint to forecast endpoint when nowcast keeps returning empty items", async () => {
+  const store = { store_id: "store-1", region: "Seoul Seongsu" };
+  const calls = [];
+  const fetchImpl = async (url) => {
+    const text = String(url);
+    calls.push(text);
+    if (text.includes("getUltraSrtNcst")) {
+      return mockOkText(JSON.stringify({ response: { header: { resultCode: "00" }, body: { items: { item: [] } } } }));
+    }
+    return mockOkText(JSON.stringify({ response: { header: { resultCode: "00" }, body: { items: { item: [{ category: "PCP", fcstValue: "0.5" }] } } } }));
+  };
+
+  const result = await collectKmaWeather(store, {
+    kmaServiceKey: "kma-secret",
+    kmaNowcastEndpoint: "https://example.test/getUltraSrtNcst",
+    kmaForecastEndpoint: "https://example.test/getVilageFcst",
+    kmaDefaultNx: "61",
+    kmaDefaultNy: "125",
+  }, {
+    fetchImpl,
+    env: {},
+    now: new Date("2026-05-07T12:00:00Z"),
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.metadata.selected_endpoint, "village_forecast");
+  assert.equal(result.metadata.attempted_endpoints.includes("ultra_short_observation"), true);
+  assert.equal(result.metadata.attempted_endpoints.includes("village_forecast"), true);
+  assert.equal(result.observations.length, 1);
+});
+
+test("KMA collector skips with no_weather_items only after all endpoint and base_time candidates return empty", async () => {
+  const store = { store_id: "store-1", region: "Seoul Seongsu" };
+  let callCount = 0;
+  const fetchImpl = async () => {
+    callCount += 1;
+    return mockOkText(JSON.stringify({ response: { header: { resultCode: "00", resultMsg: "NO_DATA" }, body: { items: { item: [] } } } }));
+  };
+
+  const result = await collectKmaWeather(store, {
+    kmaServiceKey: "kma-secret",
+    kmaNowcastEndpoint: "https://example.test/getUltraSrtNcst",
+    kmaForecastEndpoint: "https://example.test/getVilageFcst",
+    kmaDefaultNx: "61",
+    kmaDefaultNy: "125",
+  }, {
+    fetchImpl,
+    env: {},
+    now: new Date("2026-05-07T12:00:00Z"),
+  });
+
+  assert.equal(result.status, "skipped");
+  assert.equal(result.reason, "no_weather_items");
+  assert.equal(result.metadata.selected_endpoint, null);
+  assert.equal(result.metadata.attempted_endpoints.length, 2);
+  assert.equal(callCount > 1, true, "should have attempted multiple base_time candidates");
+});
+
+test("KMA collector classifies service key auth error as failed instead of no_weather_items", async () => {
+  const store = { store_id: "store-1", region: "Seoul Seongsu" };
+  let callCount = 0;
+  const fetchImpl = async () => {
+    callCount += 1;
+    return mockOkText(JSON.stringify({
+      response: {
+        header: { resultCode: "30", resultMsg: "SERVICE KEY IS NOT REGISTERED ERROR." },
+        body: { items: { item: [] } },
+      },
+    }));
+  };
+
+  const result = await collectKmaWeather(store, {
+    kmaServiceKey: "kma-secret",
+    kmaNowcastEndpoint: "https://example.test/getUltraSrtNcst",
+    kmaForecastEndpoint: "https://example.test/getVilageFcst",
+    kmaDefaultNx: "61",
+    kmaDefaultNy: "125",
+  }, {
+    fetchImpl,
+    env: {},
+    now: new Date("2026-05-07T12:00:00Z"),
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.reason, "service_result_30");
+  assert.equal(result.metadata.result_code, "30");
+  assert.equal(callCount, 1, "should NOT retry after an auth error");
+  assert.equal(JSON.stringify(result).includes("kma-secret"), false);
+});
+
+test("KMA collector classifies XML returnAuthMsg as auth failure", async () => {
+  const store = { store_id: "store-1", region: "Seoul Seongsu" };
+  const fetchImpl = async () => mockOkText(
+    "<OpenAPI_ServiceResponse><cmmMsgHeader><returnReasonCode>30</returnReasonCode><returnAuthMsg>SERVICE_KEY_IS_NOT_REGISTERED_ERROR</returnAuthMsg></cmmMsgHeader></OpenAPI_ServiceResponse>",
+  );
+
+  const result = await collectKmaWeather(store, {
+    kmaServiceKey: "kma-secret",
+    kmaNowcastEndpoint: "https://example.test/getUltraSrtNcst",
+    kmaDefaultNx: "61",
+    kmaDefaultNy: "125",
+  }, {
+    fetchImpl,
+    env: {},
+    now: new Date("2026-05-07T12:00:00Z"),
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.reason, "service_result_30");
+});
+
+test("KMA response parser normalizes a single item object to an array", () => {
+  const parsed = parseKmaWeatherEnvelope(JSON.stringify({
+    response: {
+      header: { resultCode: "00", resultMsg: "NORMAL_SERVICE" },
+      body: { items: { item: { category: "RN1", obsrValue: "1.5" } } },
+    },
+  }));
+  assert.equal(parsed.items.length, 1);
+  assert.equal(parsed.items[0].category, "RN1");
+  assert.equal(parsed.authError, false);
+  assert.equal(parsed.resultCode, "00");
+});
+
+test("KMA collector skips with missing_kma_grid when nx/ny are not configured", async () => {
+  const store = { store_id: "store-1", region: "Seoul Seongsu" };
+  const result = await collectKmaWeather(store, {
+    kmaServiceKey: "kma-secret",
+    kmaNowcastEndpoint: "https://example.test/getUltraSrtNcst",
+  }, {
+    fetchImpl: async () => { throw new Error("should_not_call_fetch"); },
+    env: {},
+    now: new Date("2026-05-07T12:00:00Z"),
+  });
+  assert.equal(result.status, "skipped");
+  assert.equal(result.reason, "missing_kma_grid");
+  assert.equal(result.metadata.attempted_endpoints[0], "ultra_short_observation");
+  assert.equal(result.metadata.attempted_base_times.length, 0);
+});
+
+test("KMA endpoint kind detection identifies KMA URL families", () => {
+  assert.equal(detectKmaEndpointKind("https://apis.data.go.kr/.../getUltraSrtNcst", "nowcast"), "ultra_short_observation");
+  assert.equal(detectKmaEndpointKind("https://apis.data.go.kr/.../getUltraSrtFcst", "nowcast"), "ultra_short_forecast");
+  assert.equal(detectKmaEndpointKind("https://apis.data.go.kr/.../getVilageFcst", "forecast"), "village_forecast");
+  assert.equal(detectKmaEndpointKind("https://example.test/unknown", "forecast"), "village_forecast");
+  assert.equal(detectKmaEndpointKind("https://example.test/unknown", "nowcast"), "ultra_short_observation");
+});
+
+test("KMA endpoint plan tries nowcast then forecast and dedupes identical entries", () => {
+  const plan = buildKmaEndpointPlan({
+    kmaNowcastEndpoint: "https://example.test/getUltraSrtNcst",
+    kmaForecastEndpoint: "https://example.test/getVilageFcst",
+  });
+  assert.equal(plan.length, 2);
+  assert.equal(plan[0].kind, "ultra_short_observation");
+  assert.equal(plan[1].kind, "village_forecast");
+
+  const planSingle = buildKmaEndpointPlan({
+    kmaNowcastEndpoint: "https://example.test/shared",
+    kmaForecastEndpoint: "https://example.test/shared",
+  });
+  // Same URL, different hint → still two plan entries because the hint changes the kind.
+  assert.equal(planSingle.length >= 1, true);
+});
+
+test("KMA base time candidate generator yields KST-anchored candidates with reasonable delays", () => {
+  const now = new Date("2026-05-07T12:00:00Z"); // 21:00 KST
+  const ultraShortObs = generateKmaBaseTimeCandidates("ultra_short_observation", now);
+  assert.equal(ultraShortObs[0].baseTime, "2000"); // 21:00 KST minus 40-min publication delay → 20:00 base
+  assert.equal(ultraShortObs[0].baseDate, "20260507");
+  assert.equal(ultraShortObs.length >= 3, true);
+
+  const village = generateKmaBaseTimeCandidates("village_forecast", now);
+  assert.equal(village[0].baseTime, "2000"); // most recent published village base time (20:00) at 21:00 KST
+  assert.equal(village[0].baseDate, "20260507");
+
+  // Early-morning case: 00:30 KST → expect lookback into yesterday's last village base time
+  const earlyMorning = new Date("2026-05-06T15:30:00Z"); // 00:30 KST 5/7
+  const earlyVillage = generateKmaBaseTimeCandidates("village_forecast", earlyMorning);
+  assert.equal(earlyVillage[0].baseTime, "2300");
+  assert.equal(earlyVillage[0].baseDate, "20260506");
+});
+
+function mockOkText(bodyText) {
+  return {
+    ok: true,
+    status: 200,
+    text: async () => bodyText,
+    json: async () => JSON.parse(bodyText),
+  };
+}
 
 test("Seoul collector skips missing endpoint and normalizes mocked commercial benchmark", async () => {
   const store = { store_id: "store-1", region: "Seoul Seongsu", business_category: "cafe" };

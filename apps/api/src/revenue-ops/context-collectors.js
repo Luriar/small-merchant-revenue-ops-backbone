@@ -328,51 +328,366 @@ async function collectKmaWeather(store, credentials = {}, {
   env = process.env,
   latestRevenueDate = null,
   timeoutMs = DEFAULT_TIMEOUTS.kma_weather,
+  now = new Date(),
 } = {}) {
   const name = "kma_weather";
+  const sourceName = "KMA Weather API";
   const startedAt = Date.now();
   const serviceKey = credentials.kmaServiceKey || credentials.dataGoKrServiceKey;
-  const endpoint = credentials.kmaNowcastEndpoint || credentials.kmaForecastEndpoint;
   const nx = credentials.kmaDefaultNx || env.KMA_DEFAULT_NX;
   const ny = credentials.kmaDefaultNy || env.KMA_DEFAULT_NY;
-  if (!serviceKey) return withDuration(skipped(name, "KMA Weather API", "missing_key"), startedAt);
-  if (!credentials.kmaApiBaseUrl && !endpoint) return withDuration(skipped(name, "KMA Weather API", "missing_endpoint"), startedAt);
-  if (!endpoint) return withDuration(skipped(name, "KMA Weather API", "missing_endpoint"), startedAt);
-  if (!endpoint.startsWith("http") && !credentials.kmaApiBaseUrl) return withDuration(skipped(name, "KMA Weather API", "missing_base_url"), startedAt);
-  if (!nx || !ny) return withDuration(skipped(name, "KMA Weather API", "missing_kma_grid"), startedAt);
-  if (typeof fetchImpl !== "function") return withDuration(skipped(name, "KMA Weather API", "fetch_unavailable"), startedAt);
 
-  const baseDate = formatKmaDate(latestRevenueDate || new Date());
-  const baseTime = env.KMA_BASE_TIME || "0500";
-  const { url, sourceRef } = buildKmaRequestUrl({
-    endpoint,
-    baseUrl: credentials.kmaApiBaseUrl,
-    serviceKey,
-    baseDate,
-    baseTime,
-    nx,
-    ny,
-  });
-  try {
-    const response = await fetchWithTimeout(url, { fetchImpl }, timeoutMs, { collector_name: name, source_ref: sourceRef });
-    const bodyText = await response.text();
-    const parsed = parseKmaWeatherResponse(bodyText);
-    if (parsed.length === 0) return withDuration(skipped(name, "KMA Weather API", "no_weather_items"), startedAt);
-    const observations = normalizeWeatherObservations(parsed, {
-      store,
-      sourceRef,
-      baseDate,
-      baseTime,
-      nx,
-      ny,
-    });
-    return withDuration(completed(name, "KMA Weather API", {
-      observations,
-      raw_summary: { item_count: parsed.length, base_date: baseDate, base_time: baseTime },
-    }), startedAt);
-  } catch (error) {
-    return withDuration(failed(name, "KMA Weather API", sanitizeErrorReason(error)), startedAt);
+  if (!serviceKey) return withDuration(skipped(name, sourceName, "missing_key"), startedAt);
+  if (typeof fetchImpl !== "function") return withDuration(skipped(name, sourceName, "fetch_unavailable"), startedAt);
+
+  const endpointPlan = buildKmaEndpointPlan(credentials);
+  if (endpointPlan.length === 0) return withDuration(skipped(name, sourceName, "missing_endpoint"), startedAt);
+  const missingBaseUrl = endpointPlan.find((entry) => !entry.url.startsWith("http") && !credentials.kmaApiBaseUrl);
+  if (missingBaseUrl) return withDuration(skipped(name, sourceName, "missing_base_url"), startedAt);
+
+  if (!nx || !ny) {
+    return withDuration({
+      ...skipped(name, sourceName, "missing_kma_grid"),
+      metadata: {
+        attempted_endpoints: endpointPlan.map((entry) => entry.label),
+        attempted_base_times: [],
+        selected_endpoint: null,
+        selected_base_date: null,
+        selected_base_time: null,
+        nx: null,
+        ny: null,
+        item_count: 0,
+        result_code: null,
+        result_msg: null,
+      },
+    }, startedAt);
   }
+
+  const attempted = [];
+  const attemptedEndpointLabels = [];
+  let lastResultCode = null;
+  let lastResultMsg = null;
+  let lastErrorReason = null;
+  const overrideBaseTime = readKmaBaseTimeOverride(env.KMA_BASE_TIME);
+  const overrideBaseDate = readKmaBaseDateOverride(env.KMA_BASE_DATE);
+
+  for (const endpoint of endpointPlan) {
+    if (!attemptedEndpointLabels.includes(endpoint.label)) attemptedEndpointLabels.push(endpoint.label);
+
+    const baseCandidates = (overrideBaseTime && overrideBaseDate)
+      ? [{ baseDate: overrideBaseDate, baseTime: overrideBaseTime, source: "env_override" }]
+      : generateKmaBaseTimeCandidates(endpoint.kind, now, { latestRevenueDate, overrideBaseTime, overrideBaseDate });
+
+    for (const candidate of baseCandidates) {
+      const { url, sourceRef } = buildKmaRequestUrl({
+        endpoint: endpoint.url,
+        baseUrl: credentials.kmaApiBaseUrl,
+        serviceKey,
+        baseDate: candidate.baseDate,
+        baseTime: candidate.baseTime,
+        nx,
+        ny,
+      });
+      const attemptRecord = {
+        endpoint: endpoint.label,
+        base_date: candidate.baseDate,
+        base_time: candidate.baseTime,
+      };
+      attempted.push(attemptRecord);
+
+      let response;
+      try {
+        response = await fetchWithTimeout(url, { fetchImpl }, timeoutMs, {
+          collector_name: name,
+          source_ref: sourceRef,
+        });
+      } catch (error) {
+        const reason = sanitizeErrorReason(error);
+        attemptRecord.error = reason;
+        // Hard timeout: stop the whole collector — we exhausted our budget.
+        if (reason === "request_timeout") {
+          return withDuration({
+            ...failed(name, sourceName, "request_timeout"),
+            metadata: buildKmaDebugMetadata({
+              attempted, attemptedEndpointLabels,
+              selectedEndpoint: null, selectedBaseDate: null, selectedBaseTime: null,
+              nx, ny, itemCount: 0, resultCode: lastResultCode, resultMsg: lastResultMsg,
+              lastErrorReason: reason,
+            }),
+          }, startedAt);
+        }
+        lastErrorReason = reason;
+        continue; // try next candidate / endpoint
+      }
+
+      const bodyText = await response.text();
+      const envelope = parseKmaWeatherEnvelope(bodyText);
+      attemptRecord.result_code = envelope.resultCode || null;
+      attemptRecord.item_count = envelope.items.length;
+      lastResultCode = envelope.resultCode || lastResultCode;
+      lastResultMsg = envelope.resultMsg || lastResultMsg;
+
+      // Auth/key error → classify as failed and stop. Do NOT keep retrying with the same key.
+      if (envelope.authError) {
+        const authReason = envelope.resultCode
+          ? `service_result_${envelope.resultCode}`
+          : "service_key_invalid";
+        return withDuration({
+          ...failed(name, sourceName, authReason),
+          metadata: buildKmaDebugMetadata({
+            attempted, attemptedEndpointLabels,
+            selectedEndpoint: null, selectedBaseDate: null, selectedBaseTime: null,
+            nx, ny, itemCount: 0, resultCode: envelope.resultCode, resultMsg: envelope.resultMsg,
+            lastErrorReason: null,
+          }),
+        }, startedAt);
+      }
+
+      // Other non-OK service codes: treat as transient and try next candidate.
+      if (envelope.resultCode && envelope.resultCode !== "00" && envelope.items.length === 0) {
+        attemptRecord.skipped_reason = `service_result_${envelope.resultCode}`;
+        continue;
+      }
+
+      if (envelope.items.length === 0) continue; // empty items → try next candidate
+
+      const observations = normalizeWeatherObservations(envelope.items, {
+        store,
+        sourceRef,
+        baseDate: candidate.baseDate,
+        baseTime: candidate.baseTime,
+        nx,
+        ny,
+      });
+      if (observations.length === 0) {
+        // Items returned but none were of usable categories — try next candidate.
+        attemptRecord.skipped_reason = "no_usable_categories";
+        continue;
+      }
+
+      return withDuration(completed(name, sourceName, {
+        observations,
+        raw_summary: {
+          item_count: envelope.items.length,
+          base_date: candidate.baseDate,
+          base_time: candidate.baseTime,
+          endpoint: endpoint.label,
+        },
+        metadata: buildKmaDebugMetadata({
+          attempted, attemptedEndpointLabels,
+          selectedEndpoint: endpoint.label,
+          selectedBaseDate: candidate.baseDate,
+          selectedBaseTime: candidate.baseTime,
+          nx, ny, itemCount: envelope.items.length,
+          resultCode: envelope.resultCode, resultMsg: envelope.resultMsg,
+          lastErrorReason: null,
+        }),
+      }), startedAt);
+    }
+  }
+
+  // All candidates exhausted with no usable items.
+  return withDuration({
+    ...skipped(name, sourceName, "no_weather_items"),
+    metadata: buildKmaDebugMetadata({
+      attempted, attemptedEndpointLabels,
+      selectedEndpoint: null, selectedBaseDate: null, selectedBaseTime: null,
+      nx, ny, itemCount: 0, resultCode: lastResultCode, resultMsg: lastResultMsg,
+      lastErrorReason,
+    }),
+  }, startedAt);
+}
+
+function buildKmaDebugMetadata({
+  attempted, attemptedEndpointLabels,
+  selectedEndpoint, selectedBaseDate, selectedBaseTime,
+  nx, ny, itemCount, resultCode, resultMsg, lastErrorReason,
+}) {
+  return {
+    attempted_endpoints: [...attemptedEndpointLabels],
+    attempted_base_times: attempted.map((entry) => `${entry.endpoint}:${entry.base_date}:${entry.base_time}`),
+    attempts: attempted.map((entry) => ({ ...entry })),
+    selected_endpoint: selectedEndpoint,
+    selected_base_date: selectedBaseDate,
+    selected_base_time: selectedBaseTime,
+    nx: nx != null ? String(nx) : null,
+    ny: ny != null ? String(ny) : null,
+    item_count: itemCount,
+    result_code: resultCode || null,
+    result_msg: resultMsg || null,
+    last_error_reason: lastErrorReason || null,
+  };
+}
+
+function buildKmaEndpointPlan(credentials = {}) {
+  const seen = new Set();
+  const plan = [];
+  const add = (rawUrl, hint) => {
+    if (!rawUrl) return;
+    const url = String(rawUrl).trim();
+    if (!url) return;
+    const key = `${url}|${hint}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const kind = detectKmaEndpointKind(url, hint);
+    plan.push({ url, kind, label: kind });
+  };
+  // Try ultra-short series first (more frequent updates), then village forecast.
+  add(credentials.kmaNowcastEndpoint, "nowcast");
+  add(credentials.kmaForecastEndpoint, "forecast");
+  return plan;
+}
+
+function detectKmaEndpointKind(url, hint = "nowcast") {
+  const lower = String(url || "").toLowerCase();
+  if (lower.includes("ultrasrtncst") || lower.includes("ultrashortncst")) return "ultra_short_observation";
+  if (lower.includes("ultrasrtfcst") || lower.includes("ultrashortfcst")) return "ultra_short_forecast";
+  if (lower.includes("vilagefcst") || lower.includes("villagefcst") || lower.includes("/vilage") || lower.includes("/village")) return "village_forecast";
+  return hint === "forecast" ? "village_forecast" : "ultra_short_observation";
+}
+
+const KMA_VILLAGE_BASE_TIMES_HHMM = ["0200", "0500", "0800", "1100", "1400", "1700", "2000", "2300"];
+const KMA_VILLAGE_PUBLISH_DELAY_MIN = 10;
+const KMA_ULTRA_SHORT_OBSERVATION_DELAY_MIN = 40;
+const KMA_ULTRA_SHORT_FORECAST_DELAY_MIN = 45;
+
+function generateKmaBaseTimeCandidates(kind, now = new Date(), opts = {}) {
+  const candidatesByKind = {
+    village_forecast: () => generateVillageForecastCandidates(now),
+    ultra_short_observation: () => generateUltraShortObservationCandidates(now),
+    ultra_short_forecast: () => generateUltraShortForecastCandidates(now),
+  };
+  const builder = candidatesByKind[kind] || candidatesByKind.ultra_short_observation;
+  let candidates = builder();
+  // Optional env override of base time (and optional latestRevenueDate-derived base date) — prepend as preferred candidate.
+  if (opts.overrideBaseTime) {
+    const baseDateOverride = opts.overrideBaseDate || formatKmaDate(opts.latestRevenueDate || now);
+    candidates = [{ baseDate: baseDateOverride, baseTime: opts.overrideBaseTime, source: "env_override" }, ...candidates];
+  }
+  return dedupeCandidates(candidates).slice(0, 5);
+}
+
+function generateVillageForecastCandidates(now) {
+  const candidates = [];
+  // Walk back through hourly slots; only take the village-publishing base times that are at least 10 min in the past.
+  for (let offset = 0; offset < 24 && candidates.length < 4; offset += 1) {
+    const moment = shiftKstMinutes(now, -offset * 60 - KMA_VILLAGE_PUBLISH_DELAY_MIN);
+    const parts = kstParts(moment);
+    const hhmm = `${pad2Number(parts.hour)}00`;
+    if (KMA_VILLAGE_BASE_TIMES_HHMM.includes(hhmm)) {
+      candidates.push({
+        baseDate: kstDateString(parts),
+        baseTime: hhmm,
+        source: "village_forecast",
+      });
+    }
+  }
+  // Fallback: last published village base time of yesterday.
+  if (candidates.length === 0) {
+    const yesterday = kstParts(shiftKstMinutes(now, -24 * 60));
+    candidates.push({
+      baseDate: kstDateString(yesterday),
+      baseTime: "2300",
+      source: "village_forecast_fallback",
+    });
+  }
+  return candidates;
+}
+
+function generateUltraShortObservationCandidates(now) {
+  const candidates = [];
+  // Hourly HH:00 base times, available ~40 min after the hour.
+  for (let offset = 0; offset < 5; offset += 1) {
+    const moment = shiftKstMinutes(now, -KMA_ULTRA_SHORT_OBSERVATION_DELAY_MIN - offset * 60);
+    const parts = kstParts(moment);
+    candidates.push({
+      baseDate: kstDateString(parts),
+      baseTime: `${pad2Number(parts.hour)}00`,
+      source: "ultra_short_observation",
+    });
+  }
+  return candidates;
+}
+
+function generateUltraShortForecastCandidates(now) {
+  const candidates = [];
+  // Base times at HH:30 in KST, available ~45 min after the base time (i.e., HH+1:15).
+  for (let offset = 0; offset < 5; offset += 1) {
+    // Anchor moment: pretend "now" is 45 min earlier and snap down to the previous HH:30.
+    const moment = shiftKstMinutes(now, -KMA_ULTRA_SHORT_FORECAST_DELAY_MIN - offset * 60);
+    const parts = kstParts(moment);
+    let baseHour = parts.hour;
+    // Snap down to the most recent HH:30 in the past relative to `moment`.
+    let baseDate = kstDateString(parts);
+    if (parts.minute < 30) {
+      // The HH:30 of the same hour is in the future — use previous hour's HH:30.
+      baseHour -= 1;
+      if (baseHour < 0) {
+        const yesterday = kstParts(shiftKstMinutes(moment, -60));
+        baseDate = kstDateString(yesterday);
+        baseHour = 23;
+      }
+    }
+    candidates.push({
+      baseDate,
+      baseTime: `${pad2Number(baseHour)}30`,
+      source: "ultra_short_forecast",
+    });
+  }
+  return candidates;
+}
+
+function dedupeCandidates(candidates) {
+  const seen = new Set();
+  const out = [];
+  for (const candidate of candidates) {
+    const key = `${candidate.baseDate}:${candidate.baseTime}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+  }
+  return out;
+}
+
+function readKmaBaseTimeOverride(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return /^\d{4}$/.test(trimmed) ? trimmed : null;
+}
+
+function readKmaBaseDateOverride(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (/^\d{8}$/.test(trimmed)) return trimmed;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed.replace(/-/g, "");
+  return null;
+}
+
+function kstParts(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  const ms = date.getTime() + 9 * 60 * 60 * 1000; // shift UTC → KST
+  const shifted = new Date(ms);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+    raw: shifted,
+  };
+}
+
+function shiftKstMinutes(reference, deltaMinutes) {
+  const date = reference instanceof Date ? reference : new Date(reference);
+  return new Date(date.getTime() + deltaMinutes * 60 * 1000);
+}
+
+function kstDateString(parts) {
+  return `${parts.year}${pad2Number(parts.month)}${pad2Number(parts.day)}`;
+}
+
+function pad2Number(value) {
+  return String(value).padStart(2, "0");
 }
 
 function buildKmaRequestUrl({ endpoint, serviceKey, baseDate, baseTime, nx, ny, baseUrl = "" }) {
@@ -391,16 +706,37 @@ function buildKmaRequestUrl({ endpoint, serviceKey, baseDate, baseTime, nx, ny, 
   return { url: url.toString(), sourceRef: sanitized.toString() };
 }
 
+// Backward-compatible: returns just the items array.
 function parseKmaWeatherResponse(bodyText) {
+  return parseKmaWeatherEnvelope(bodyText).items;
+}
+
+// Returns { items, resultCode, resultMsg, authError } for collector use.
+function parseKmaWeatherEnvelope(bodyText) {
   const trimmed = String(bodyText || "").trim();
-  if (!trimmed) return [];
+  if (!trimmed) return { items: [], resultCode: null, resultMsg: null, authError: false };
+
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    const json = JSON.parse(trimmed);
-    const items = json?.response?.body?.items?.item || json?.items?.item || json?.item || [];
-    return Array.isArray(items) ? items : [items];
+    let json;
+    try {
+      json = JSON.parse(trimmed);
+    } catch {
+      return { items: [], resultCode: null, resultMsg: null, authError: false };
+    }
+    const header = json?.response?.header || json?.header || null;
+    const resultCode = header?.resultCode != null ? String(header.resultCode).trim() : null;
+    const resultMsg = header?.resultMsg != null ? String(header.resultMsg).trim() : null;
+    const authError = isKmaAuthErrorCode(resultCode) || isKmaAuthErrorMessage(resultMsg);
+    const itemRoot = json?.response?.body?.items?.item ?? json?.items?.item ?? json?.item ?? [];
+    const items = normalizeArray(itemRoot);
+    return { items, resultCode, resultMsg, authError };
   }
+
+  // XML/HTML/plain text path.
+  const headerCode = xmlValue(trimmed, "resultCode") || xmlValue(trimmed, "returnReasonCode");
+  const headerMsg = xmlValue(trimmed, "resultMsg") || xmlValue(trimmed, "returnAuthMsg") || xmlValue(trimmed, "errMsg");
   const itemMatches = [...trimmed.matchAll(/<item>([\s\S]*?)<\/item>/g)];
-  return itemMatches.map((match) => {
+  const items = itemMatches.map((match) => {
     const itemXml = match[1];
     return {
       category: xmlValue(itemXml, "category"),
@@ -412,6 +748,33 @@ function parseKmaWeatherResponse(bodyText) {
       fcstTime: xmlValue(itemXml, "fcstTime"),
     };
   });
+  const authError = isKmaAuthErrorCode(headerCode) || isKmaAuthErrorMessage(headerMsg);
+  return {
+    items,
+    resultCode: headerCode || null,
+    resultMsg: headerMsg || null,
+    authError,
+  };
+}
+
+function isKmaAuthErrorCode(code) {
+  if (!code) return false;
+  const normalized = String(code).trim();
+  // data.go.kr / KMA auth-related result codes:
+  //   30 SERVICE KEY IS NOT REGISTERED
+  //   31 DEADLINE HAS EXPIRED
+  //   32 UNREGISTERED IP
+  //   33 UNREGISTERED HTTP REFERRER (or similar)
+  return ["30", "31", "32", "33"].includes(normalized);
+}
+
+function isKmaAuthErrorMessage(message) {
+  if (!message) return false;
+  const text = String(message);
+  if (/SERVICE\s*KEY/i.test(text) && /(NOT\s*REGISTERED|INVALID|UNAUTHORIZED|EXPIRED)/i.test(text)) return true;
+  if (/UNREGISTERED\s+IP/i.test(text)) return true;
+  if (/AUTH/i.test(text) && /FAIL|ERROR|INVALID/i.test(text)) return true;
+  return false;
 }
 
 function normalizeWeatherObservations(items, { store, sourceRef, baseDate, baseTime, nx, ny }) {
@@ -1307,6 +1670,10 @@ module.exports = {
   collectKmaWeather,
   buildKmaRequestUrl,
   parseKmaWeatherResponse,
+  parseKmaWeatherEnvelope,
+  buildKmaEndpointPlan,
+  detectKmaEndpointKind,
+  generateKmaBaseTimeCandidates,
   normalizeWeatherObservations,
   fetchSeoulOpenDataDataset,
   collectSeoulCommercialBenchmark,
