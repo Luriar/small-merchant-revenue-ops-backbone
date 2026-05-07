@@ -194,7 +194,7 @@ function toApiError(status: number, body: unknown): TraceOverviewApiError {
   return new TraceOverviewApiError({
     status,
     code: errorBody?.code ?? "http_error",
-    message: errorBody?.message ?? `TraceOps API request failed with status ${status}`,
+    message: errorBody?.message ?? `Revenue OS API request failed with status ${status}`,
     details: errorBody?.details
   });
 }
@@ -225,6 +225,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function assertRelativeApiPath(path: string): void {
   if (!path.startsWith("/") || path.startsWith("//") || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(path)) {
-    throw new RangeError("TraceOps API path must be relative");
+    throw new RangeError("Revenue OS API path must be relative");
   }
 }

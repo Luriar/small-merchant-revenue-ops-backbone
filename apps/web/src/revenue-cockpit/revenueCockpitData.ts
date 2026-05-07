@@ -35,6 +35,16 @@ function num(value: unknown, fallback = 0): number {
 }
 
 function fmtQuarter(period: string, lang: 'ko' | 'en'): string {
+  const normalized = period.toLowerCase();
+  if (normalized === 'lowest observed day' || normalized === 'observed minimum day') {
+    return lang === 'ko' ? '최저 관측일' : 'observed minimum day';
+  }
+  if (normalized === 'uploaded revenue facts') {
+    return lang === 'ko' ? '등록 매출 데이터' : 'uploaded revenue facts';
+  }
+  if (normalized === 'latest upload') {
+    return lang === 'ko' ? '최근 등록 데이터' : 'latest upload';
+  }
   const match = period.match(/^(\d{4})Q([1-4])$/);
   if (!match) return period;
   return lang === 'ko' ? `${match[1]}년 ${match[2]}분기` : `${match[1]} Q${match[2]}`;
@@ -57,14 +67,14 @@ function sourceName(id: string): { ko: string; en: string } {
     revenue_context_mart: { ko: '매출 컨텍스트 Mart', en: 'Revenue Context Mart' },
     kakao_geocoding: { ko: '위치 확인', en: 'Location' },
     kma_weather: { ko: '날씨 맥락', en: 'Weather' },
-    seoul_commercial_benchmark: { ko: '상권 매출 기준', en: 'Commercial benchmark' },
-    seoul_foot_traffic_proxy: { ko: '유동인구 신호', en: 'Foot traffic proxy' },
-    seoul_store_density_proxy: { ko: '주변 점포 밀도', en: 'Store density' },
+    seoul_commercial_benchmark: { ko: '서울 상권 benchmark', en: 'Seoul benchmark' },
+    seoul_foot_traffic_proxy: { ko: '서울 유동인구', en: 'Seoul foot traffic' },
+    seoul_store_density_proxy: { ko: '서울 점포 밀도', en: 'Seoul store density' },
     naver_local_competitor_search: { ko: '네이버 주변 점포', en: 'Naver nearby stores' },
     naver_search_trend: { ko: '네이버 검색 관심도', en: 'Naver search trend' },
     korean_holiday_calendar: { ko: '공휴일·특일', en: 'Holiday calendar' },
-    toss_place_connector_smoke: { ko: '토스 플레이스 준비상태', en: 'Toss Place readiness' },
-    delivery_provider_connector_smoke: { ko: '배달 연동 준비상태', en: 'Delivery provider readiness' },
+    toss_place_connector_smoke: { ko: 'Toss Place', en: 'Toss Place' },
+    delivery_provider_connector_smoke: { ko: '배달앱 Provider', en: 'Delivery provider' },
     delivery_upload_parser: { ko: '배달 업로드 파서', en: 'Delivery upload parser' },
   };
   return names[id] ?? { ko: id, en: id };
@@ -169,7 +179,7 @@ function buildReliability(brief: ApiRecord | undefined, context: ApiRecord | und
         freshness: str(collector.freshness, str(collector.collected_at, freshness)).slice(0, 19).replace('T', ' '),
         cadence: { ko: '수집기', en: 'Collector' },
         status,
-        coverage: status === 'ok' ? 100 : status === 'failed' ? 20 : 45,
+        coverage: status === 'ok' ? 100 : status === 'failed' ? 20 : 0,
         durationMs: num(collector.duration_ms, 0),
         reason: str(collector.reason, '') || null,
       };
@@ -236,6 +246,14 @@ export function buildScenarioFromApi(payload: RevenueApiPayload): { scenario: Sc
   const revenueAnomaly = metricOf(anomalies, 'revenue_amount');
   const causes = buildCauses(brief, anomalies);
   const revenueChange = metricDelta(anomalies, 'revenue_amount', SCENARIO.revenueChange);
+  const latestRevenueUpload = isRecord(payload.pipelineMeta?.latest_revenue_upload)
+    ? payload.pipelineMeta?.latest_revenue_upload
+    : null;
+  const hasRevenueData = Boolean(latestRevenueUpload);
+  const storeName = str(brief?.store_name, str(payload.pipelineMeta?.store_name, ''));
+  const isDemo = Boolean(isRecord(latestRevenueUpload?.metadata) && latestRevenueUpload.metadata.is_demo)
+    || str(latestRevenueUpload?.source_type).includes('synthetic')
+    || str(storeName).toLowerCase().includes('demo');
 
   const scenario: Scenario = {
     ...SCENARIO,
@@ -267,6 +285,9 @@ export function buildScenarioFromApi(payload: RevenueApiPayload): { scenario: Sc
     causes,
     actions: buildActions(actions, causes),
     reliability: buildReliability(brief, context, payload.pipelineMeta),
+    hasRevenueData,
+    isDemo,
+    storeName,
   };
 
   return { scenario, defaultStatuses: buildStatuses(actions) };

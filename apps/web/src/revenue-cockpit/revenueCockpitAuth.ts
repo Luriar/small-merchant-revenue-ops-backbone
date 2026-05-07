@@ -132,7 +132,7 @@ export async function handleCognitoRedirectIfPresent(): Promise<RevenueAuthSessi
   const verifier = sessionStorage.getItem(VERIFIER_KEY);
 
   if (!state || !expectedState || state !== expectedState || !verifier) {
-    throw new Error('Cognito state/verifier mismatch. Please retry login.');
+    throw new Error('Login state mismatch. Please retry login.');
   }
 
   const tokenParams = new URLSearchParams({
@@ -154,7 +154,7 @@ export async function handleCognitoRedirectIfPresent(): Promise<RevenueAuthSessi
   const body = await response.json();
 
   if (!response.ok || !body.access_token || !body.id_token) {
-    throw new Error(body.error || 'Cognito token exchange failed.');
+    throw new Error(body.error || 'Login token exchange failed.');
   }
 
   const claims = decodeJwtPayload(body.id_token);

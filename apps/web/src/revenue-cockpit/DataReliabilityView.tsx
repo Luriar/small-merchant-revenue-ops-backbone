@@ -7,6 +7,12 @@ interface DataReliabilityViewProps { lang: RcLang; scenario?: Scenario }
 export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabilityViewProps) {
   const rel = scenario.reliability;
   const partial = rel.failures > 0 || rel.sources.some(source => source.status === 'failed' || source.status === 'partial');
+  const healthyCollectorCount = rel.sources.filter(source => source.status === 'ok').length;
+  const latestRunCopy = lang === 'ko' && rel.failures === 0 && healthyCollectorCount > 0
+    ? `${healthyCollectorCount}개 맥락데이터 정상 수집 · 최근 실행 실패 없음`
+    : lang === 'ko'
+      ? `최근 ${rel.runs}회 실행 · 실패 ${rel.failures}`
+      : `Last ${rel.runs} runs · ${rel.failures} failures`;
 
   const trustCards = [
     {
@@ -18,7 +24,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
     },
     {
       icon: 'spark2', tone: partial ? 'warm' : 'good',
-      title: lang === 'ko' ? `최근 실행 실패 ${rel.failures}` : `Latest run · ${rel.failures} failures`,
+      title: lang === 'ko' ? latestRunCopy : `Latest run · ${rel.failures} failures`,
       body:  lang === 'ko' ? '현재 수집된 데이터만으로 초기 분석을 시작할 수 있습니다.' : 'The current data is enough to start an initial analysis.',
     },
     {
@@ -36,7 +42,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
           color: 'var(--rc-fg-muted)', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
           <Icon name="shield" size={11}/> {lang === 'ko' ? '신뢰도' : 'Reliability'}
         </div>
-        <h1 className="rc-serif" style={{ fontSize: 32, fontWeight: 400, margin: '10px 0 12px', color: 'var(--rc-fg-strong)', letterSpacing: '-0.01em' }}>
+        <h1 className="rc-serif" style={{ fontSize: 32, fontWeight: 400, margin: '10px 0 12px', color: 'var(--rc-fg-strong)', letterSpacing: 0 }}>
           {lang === 'ko' ? '이 브리프를 신뢰할 수 있는 이유' : 'Why you can trust this brief'}
         </h1>
         <p style={{ fontSize: 14.5, color: 'var(--rc-fg-muted)', lineHeight: 1.65, margin: 0 }}>
@@ -99,13 +105,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
               <span className="rc-mono" style={{ color: 'var(--rc-fg-muted)', fontSize: 11.5 }}>{typeof src.durationMs === 'number' ? `${src.durationMs}ms` : '-'}</span>
               <span style={{ textAlign: 'right' }}>
                 <Pill tone={src.status === 'ok' ? 'good' : 'warm'} size="sm">
-                  {src.status === 'ok'
-                    ? (lang === 'ko' ? '정상' : 'OK')
-                    : src.status === 'failed'
-                      ? (lang === 'ko' ? '지연' : 'Delayed')
-                      : src.status === 'skipped'
-                        ? (lang === 'ko' ? '대기' : 'Skipped')
-                        : (lang === 'ko' ? '부분' : 'Partial')}
+                  {formatSourceStatus(src.status, src.reason, lang)}
                 </Pill>
               </span>
             </div>
@@ -131,7 +131,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}><Icon name="check" size={13}/></span>
         <div style={{ fontSize: 13, color: 'var(--rc-fg)' }}>
-          <strong>{lang === 'ko' ? `최근 ${rel.runs}회 실행 · 실패 ${rel.failures}` : `Last ${rel.runs} runs · ${rel.failures} failures`}</strong>
+          <strong>{latestRunCopy}</strong>
           <span style={{ color: 'var(--rc-fg-muted)', marginLeft: 8 }}>
             {tr('freshAsOf', lang)} {rel.lastRun[lang]}
           </span>
@@ -154,4 +154,20 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
       </div>
     </div>
   );
+}
+
+function formatSourceStatus(status: string, reason: string | null | undefined, lang: RcLang): string {
+  if (status === 'ok') return lang === 'ko' ? '정상' : 'OK';
+  if (status === 'failed') return lang === 'ko' ? '지연' : 'Delayed';
+  if (status === 'skipped') {
+    const reasonText = reason ?? '';
+    if (reasonText.includes('secret') || reasonText.includes('credential')) {
+      return lang === 'ko' ? '연동 대기' : 'Waiting';
+    }
+    if (reasonText.includes('permission')) {
+      return lang === 'ko' ? '권한 필요' : 'Permission needed';
+    }
+    return lang === 'ko' ? '설정 필요' : 'Setup needed';
+  }
+  return lang === 'ko' ? '부분' : 'Partial';
 }

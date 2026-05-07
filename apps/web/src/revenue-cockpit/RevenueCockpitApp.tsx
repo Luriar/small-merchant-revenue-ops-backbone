@@ -5,6 +5,7 @@ import { SCENARIO, tr, DEFAULT_STATUSES } from './revenueCockpitCopy';
 import {
   apiCollectStoreContext,
   apiCreateStore,
+  apiCreateRevenueUpload,
   apiFetchActions,
   apiFetchAnomalies,
   apiFetchBriefs,
@@ -15,6 +16,8 @@ import {
   RevenueApiError,
   type ContextBootstrapHint,
   type CreateRevenueStorePayload,
+  type RevenueUploadEnvelope,
+  type RevenueUploadPayload,
   type RevenueStoreSummary,
 } from './revenueCockpitApi';
 import { getStoredCognitoToken } from './revenueCockpitAuth';
@@ -29,6 +32,33 @@ import type { RcLang, RcTheme, RcScreen, ActionStatuses, ActionStatus, Scenario 
 // ─── persistence helpers ──────────────────────────────────────────────────────
 
 const SELECTED_STORE_KEY = 'revenue_ops_selected_store_id';
+const POSTCODE_SCRIPT_ID = 'daum-postcode-script';
+
+type StoreCreateForm = CreateRevenueStorePayload & {
+  address_source?: string;
+  detail_address?: string;
+  postal_code?: string;
+  road_address?: string;
+  jibun_address?: string;
+};
+
+type DaumPostcodeData = {
+  address?: string;
+  roadAddress?: string;
+  jibunAddress?: string;
+  zonecode?: string;
+  sido?: string;
+  sigungu?: string;
+  bname?: string;
+};
+
+declare global {
+  interface Window {
+    daum?: {
+      Postcode: new (options: { oncomplete: (data: DaumPostcodeData) => void }) => { open: () => void };
+    };
+  }
+}
 
 function loadPref<T extends string>(key: string, fallback: T, valid: readonly T[]): T {
   try {
@@ -63,6 +93,32 @@ function saveSelectedStoreId(storeId: string | null) {
   } catch {
     // ignore storage failures
   }
+}
+
+function loadPostcodeScript(): Promise<void> {
+  if (window.daum?.Postcode) return Promise.resolve();
+
+  const existing = document.getElementById(POSTCODE_SCRIPT_ID);
+  if (existing) {
+    return new Promise((resolve, reject) => {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener('error', () => reject(new Error('postcode_script_failed')), { once: true });
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.id = POSTCODE_SCRIPT_ID;
+    script.src = 'https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js';
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('postcode_script_failed'));
+    document.head.appendChild(script);
+  });
+}
+
+function regionFromPostcode(data: DaumPostcodeData): string | undefined {
+  return [data.sido, data.sigungu, data.bname].filter(Boolean).join(' ') || undefined;
 }
 
 function resolveTheme(theme: RcTheme): 'light' | 'dark' {
@@ -104,7 +160,7 @@ function RcHeader({ lang, scenario, screen, onSetScreen, storeSwitcher }: Header
         }}>
           <Icon name="flag" size={13}/>
         </div>
-        <span className="rc-serif" style={{ fontSize: 16, letterSpacing: '-0.01em', color: 'var(--rc-fg-strong)' }}>
+        <span className="rc-serif" style={{ fontSize: 16, letterSpacing: 0, color: 'var(--rc-fg-strong)' }}>
           Revenue&nbsp;<span style={{ fontStyle: 'italic', color: 'var(--rc-accent-strong)' }}>OS</span>
         </span>
         <span style={{ fontSize: 11, color: 'var(--rc-fg-dim)', borderLeft: '1px solid var(--rc-rule)', paddingLeft: 10, marginLeft: 4 }}>
@@ -134,11 +190,13 @@ interface StoreSwitcherProps {
   loading: boolean;
   notice: string | null;
   showCreate: boolean;
-  form: CreateRevenueStorePayload;
+  form: StoreCreateForm;
   onSelectStore: (storeId: string) => void;
   onToggleCreate: () => void;
-  onChangeForm: (patch: Partial<CreateRevenueStorePayload>) => void;
+  onChangeForm: (patch: Partial<StoreCreateForm>) => void;
   onCreateStore: () => void;
+  onOpenAddressSearch: () => void;
+  onOpenRevenueUpload: () => void;
   compact?: boolean;
 }
 
@@ -163,19 +221,19 @@ interface BootstrapStatus {
 
 const BOOTSTRAP_GROUPS = [
   { key: 'registered', names: [], ko: '가게 등록 완료', en: 'Store registered' },
-  { key: 'location', names: ['kakao_geocoding'], ko: '위치 맥락 수집 중', en: 'Collecting location context' },
-  { key: 'weather', names: ['kma_weather'], ko: '날씨 맥락 수집 중', en: 'Collecting weather context' },
+  { key: 'location', names: ['kakao_geocoding'], ko: '위치 확인', en: 'Location' },
+  { key: 'weather', names: ['kma_weather'], ko: '날씨 맥락', en: 'Weather context' },
   {
     key: 'commerce',
     names: ['seoul_commercial_benchmark', 'seoul_foot_traffic_proxy', 'seoul_store_density_proxy'],
-    ko: '주변 상권 맥락 수집 중',
-    en: 'Collecting trade-area context',
+    ko: '서울 상권/유동인구',
+    en: 'Seoul trade-area context',
   },
   {
     key: 'search',
     names: ['naver_local_competitor_search', 'naver_search_trend', 'korean_holiday_calendar'],
-    ko: '검색/공휴일 맥락 수집 중',
-    en: 'Collecting search and holiday context',
+    ko: '검색/공휴일 맥락',
+    en: 'Search and holiday context',
   },
   { key: 'ready', names: [], ko: '초기 분석 준비 완료', en: 'Initial analysis ready' },
 ];
@@ -225,17 +283,24 @@ function OnboardingBootstrapPanel({
   onRetry: () => void;
 }) {
   const partial = status.phase === 'partial' || status.phase === 'failed';
+  const ready = status.phase === 'ready';
+  const title = partial
+    ? (lang === 'ko' ? '일부 맥락데이터 수집이 지연되었습니다.' : 'Some context collection is delayed.')
+    : ready
+      ? (lang === 'ko' ? '초기 맥락데이터 수집이 완료되었습니다.' : 'Initial context collection is complete.')
+      : (lang === 'ko' ? '초기 맥락데이터를 수집하고 있습니다.' : 'Collecting initial context data.');
+  const body = partial
+    ? (lang === 'ko' ? '현재 수집된 데이터만으로 초기 분석을 시작할 수 있습니다.' : 'The current data is enough to start an initial analysis.')
+    : ready
+      ? (lang === 'ko' ? '현재 수집된 데이터를 바탕으로 초기 분석을 시작할 수 있습니다.' : 'You can start the initial analysis from the collected data.')
+      : (lang === 'ko' ? '함께 관측된 신호를 준비하고 있으며, 인과가 확정된 것은 아닙니다.' : 'Preparing observed-together signals; this does not prove causality.');
   return (
     <section className="rc-bootstrap-panel" aria-label={lang === 'ko' ? '초기 맥락 수집 상태' : 'Bootstrap status'}>
       <div className="rc-bootstrap-head">
         <div>
           <div className="rc-bootstrap-kicker">{lang === 'ko' ? '온보딩 맥락 수집' : 'Onboarding context collection'}</div>
-          <strong>{partial
-            ? (lang === 'ko' ? '일부 맥락데이터 수집이 지연되었습니다.' : 'Some context collection is delayed.')
-            : (lang === 'ko' ? '초기 맥락데이터를 수집하고 있습니다.' : 'Collecting initial context data.')}</strong>
-          <p>{partial
-            ? (lang === 'ko' ? '현재 수집된 데이터만으로 초기 분석을 시작할 수 있습니다. 추가 확인이 필요합니다.' : 'The current data is enough to start. Additional confirmation is needed.')
-            : (lang === 'ko' ? '함께 관측된 신호를 준비하고 있으며, 인과가 확정된 것은 아닙니다.' : 'Preparing observed-together signals; this does not prove causality.')}</p>
+          <strong>{title}</strong>
+          <p>{body}</p>
         </div>
         <button type="button" className="rc-store-button" onClick={onRetry}>
           {lang === 'ko' ? '맥락데이터 다시 수집' : 'Collect context again'}
@@ -272,6 +337,8 @@ function StoreSwitcher({
   onToggleCreate,
   onChangeForm,
   onCreateStore,
+  onOpenAddressSearch,
+  onOpenRevenueUpload,
   compact = false,
 }: StoreSwitcherProps) {
   return (
@@ -297,6 +364,11 @@ function StoreSwitcher({
         <button type="button" className="rc-store-button" onClick={onToggleCreate}>
           {lang === 'ko' ? '새 가게 등록' : 'Add store'}
         </button>
+        {selectedStoreId && (
+          <button type="button" className="rc-store-button rc-store-button-primary" onClick={onOpenRevenueUpload}>
+            {lang === 'ko' ? '매출 데이터 등록하기' : 'Add revenue data'}
+          </button>
+        )}
         {notice && <span className="rc-store-notice">{notice}</span>}
       </div>
       {(showCreate || stores.length === 0) && (
@@ -331,6 +403,15 @@ function StoreSwitcher({
             placeholder={lang === 'ko' ? '주소' : 'Address'}
             onChange={event => onChangeForm({ address_text: event.target.value })}
           />
+          <button type="button" className="rc-store-button" onClick={onOpenAddressSearch}>
+            {lang === 'ko' ? '주소 검색' : 'Search address'}
+          </button>
+          <input
+            className="rc-store-input"
+            value={form.detail_address ?? ''}
+            placeholder={lang === 'ko' ? '상세 주소' : 'Detail address'}
+            onChange={event => onChangeForm({ detail_address: event.target.value })}
+          />
           <button type="button" className="rc-store-button rc-store-button-primary" onClick={onCreateStore}>
             {lang === 'ko' ? '등록' : 'Create'}
           </button>
@@ -346,7 +427,16 @@ function formatStoreOption(store: RevenueStoreSummary): string {
     store.business_category || store.store_type,
     store.region,
   ].filter(Boolean);
+  if (isDemoStore(store)) parts.push('Demo');
   return parts.join(' · ');
+}
+
+function isDemoStore(store: RevenueStoreSummary | null | undefined): boolean {
+  return Boolean(store && (
+    store.store_type === 'demo'
+    || store.tenant_type === 'demo'
+    || store.metadata?.is_demo === true
+  ));
 }
 
 function chooseInitialStore(stores: RevenueStoreSummary[], saved: string | null): string | null {
@@ -364,6 +454,226 @@ function chooseInitialStore(stores: RevenueStoreSummary[], saved: string | null)
     .sort((a, b) => b.score - a.score);
 
   return nonDemoStores[0]?.store.store_id ?? stores[0]?.store_id ?? null;
+}
+
+interface RevenueUploadPanelProps {
+  lang: RcLang;
+  storeId: string;
+  onClose: () => void;
+  onUploaded: () => void;
+}
+
+function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploadPanelProps) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [businessDate, setBusinessDate] = useState(today);
+  const [grossSales, setGrossSales] = useState('');
+  const [transactionCount, setTransactionCount] = useState('');
+  const [averageTicket, setAverageTicket] = useState('');
+  const [channel, setChannel] = useState('offline_pos');
+  const [csvText, setCsvText] = useState('');
+  const [csvFilename, setCsvFilename] = useState('');
+  const [sourceType, setSourceType] = useState('generic_pos_csv');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<RevenueUploadEnvelope | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function finishUpload(envelope: RevenueUploadEnvelope) {
+    setResult(envelope);
+    setError(null);
+    onUploaded();
+  }
+
+  async function submit(payload: RevenueUploadPayload) {
+    setBusy(true);
+    setError(null);
+    try {
+      const envelope = await apiCreateRevenueUpload(storeId, payload);
+      finishUpload(envelope);
+    } catch {
+      setError(lang === 'ko'
+        ? '매출 데이터 등록에 실패했습니다. 날짜, 금액, 거래건수를 확인해주세요.'
+        : 'Could not upload revenue data. Check the date, amount, and transaction count.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function submitManual() {
+    const transactions = Number(transactionCount);
+    const gross = Number(grossSales || 0) || (Number(averageTicket || 0) * transactions);
+    if (!businessDate || !Number.isFinite(gross) || gross <= 0 || !Number.isFinite(transactions) || transactions < 0) {
+      setError(lang === 'ko'
+        ? '영업일, 매출액, 거래건수를 입력해주세요.'
+        : 'Enter business date, sales amount, and transaction count.');
+      return;
+    }
+
+    void submit({
+      source_type: 'manual_template',
+      original_filename: 'manual_daily_input.json',
+      daily_rows: [{
+        business_date: businessDate,
+        gross_sales_amount: Math.round(gross),
+        net_sales_amount: Math.round(gross),
+        order_count: Math.round(transactions),
+        channel: channel || 'offline_pos',
+      }],
+      metadata: {
+        input_mode: 'manual_daily',
+        average_ticket: averageTicket ? Number(averageTicket) : null,
+      },
+    });
+  }
+
+  function submitCsv() {
+    if (!csvText.trim()) {
+      setError(lang === 'ko' ? '업로드할 CSV 내용을 선택하거나 붙여넣어주세요.' : 'Choose or paste CSV content.');
+      return;
+    }
+
+    void submit({
+      source_type: sourceType,
+      parser_type: sourceType === 'generic_pos_csv' ? 'standard_daily_revenue_csv' : sourceType,
+      original_filename: csvFilename || `${sourceType}.csv`,
+      file_type: 'csv',
+      csv_text: csvText,
+      metadata: {
+        upload_mode: 'csv',
+        no_raw_delivery_login_credentials: true,
+      },
+    });
+  }
+
+  function onFileSelected(file: File | null) {
+    if (!file) return;
+    setCsvFilename(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setCsvText(typeof reader.result === 'string' ? reader.result : '');
+    };
+    reader.onerror = () => {
+      setError(lang === 'ko' ? 'CSV 파일을 읽지 못했습니다.' : 'Could not read the CSV file.');
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <section className="rc-revenue-upload-panel" aria-label={lang === 'ko' ? '매출 데이터 등록' : 'Revenue data upload'}>
+      <div className="rc-revenue-upload-head">
+        <div>
+          <div className="rc-bootstrap-kicker">{lang === 'ko' ? '매출 데이터 등록' : 'Revenue data upload'}</div>
+          <strong>{lang === 'ko' ? '매출 데이터 등록' : 'Add revenue data'}</strong>
+          <p>
+            {lang === 'ko'
+              ? 'POS에서 내려받은 CSV를 업로드하거나, 테스트용 일별 매출을 직접 입력할 수 있습니다.'
+              : 'Upload a POS CSV or enter a test daily sales row manually.'}
+          </p>
+          <p>
+            {lang === 'ko'
+              ? '매출 데이터가 등록되면 원인 후보와 실행 액션이 갱신됩니다.'
+              : 'Cause candidates and action suggestions refresh after revenue data is registered.'}
+          </p>
+        </div>
+        <button type="button" className="rc-store-button" onClick={onClose}>
+          {lang === 'ko' ? '닫기' : 'Close'}
+        </button>
+      </div>
+
+      <div className="rc-revenue-upload-grid">
+        <div className="rc-card rc-revenue-upload-card">
+          <h2>{lang === 'ko' ? '일별 매출 직접 입력' : 'Manual daily input'}</h2>
+          <div className="rc-revenue-upload-fields">
+            <input className="rc-store-input" type="date" value={businessDate} onChange={event => setBusinessDate(event.target.value)}/>
+            <input className="rc-store-input" inputMode="numeric" value={grossSales} placeholder={lang === 'ko' ? '총매출' : 'Gross sales'} onChange={event => setGrossSales(event.target.value)}/>
+            <input className="rc-store-input" inputMode="numeric" value={transactionCount} placeholder={lang === 'ko' ? '거래건수' : 'Transactions'} onChange={event => setTransactionCount(event.target.value)}/>
+            <input className="rc-store-input" inputMode="numeric" value={averageTicket} placeholder={lang === 'ko' ? '객단가 선택' : 'Avg. ticket optional'} onChange={event => setAverageTicket(event.target.value)}/>
+            <select className="rc-store-select" value={channel} onChange={event => setChannel(event.target.value)}>
+              <option value="offline_pos">{lang === 'ko' ? '오프라인' : 'Offline'}</option>
+              <option value="delivery_baemin">Baemin</option>
+              <option value="delivery_coupangeats">CoupangEats</option>
+              <option value="online">Online</option>
+            </select>
+          </div>
+          <button type="button" className="rc-store-button rc-store-button-primary" onClick={submitManual} disabled={busy}>
+            {lang === 'ko' ? '일별 매출 등록' : 'Add daily row'}
+          </button>
+        </div>
+
+        <div className="rc-card rc-revenue-upload-card">
+          <h2>{lang === 'ko' ? 'CSV 업로드' : 'CSV upload'}</h2>
+          <p className="rc-upload-note">
+            {lang === 'ko'
+              ? '배달앱 계정 로그인 정보는 저장하지 않습니다. 내려받은 정산/주문 파일만 업로드합니다.'
+              : 'Delivery account login credentials are not stored. Upload only exported settlement/order files.'}
+          </p>
+          <select className="rc-store-select" value={sourceType} onChange={event => setSourceType(event.target.value)}>
+            <option value="generic_pos_csv">{lang === 'ko' ? '표준 일별 매출 CSV' : 'Standard daily sales CSV'}</option>
+            <option value="baemin_orders_csv">Baemin orders CSV</option>
+            <option value="coupangeats_orders_csv">CoupangEats orders CSV</option>
+          </select>
+          <input className="rc-file-input" type="file" accept=".csv,text/csv" onChange={event => onFileSelected(event.target.files?.[0] ?? null)}/>
+          <textarea
+            className="rc-revenue-csv"
+            value={csvText}
+            placeholder="business_date,channel,gross_sales_amount,order_count"
+            onChange={event => setCsvText(event.target.value)}
+          />
+          <button type="button" className="rc-store-button rc-store-button-primary" onClick={submitCsv} disabled={busy}>
+            {lang === 'ko' ? 'CSV 등록' : 'Upload CSV'}
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="rc-upload-result rc-upload-error">{error}</div>}
+      {result?.upload && (
+        <div className="rc-upload-result">
+          <strong>{lang === 'ko' ? '등록 완료' : 'Uploaded'}</strong>
+          <span>
+            {lang === 'ko'
+              ? `승인 ${result.upload.accepted_count ?? result.accepted_count ?? 0}행 · 반려 ${result.upload.rejected_count ?? result.rejected_count ?? 0}행`
+              : `Accepted ${result.upload.accepted_count ?? result.accepted_count ?? 0} rows · Rejected ${result.upload.rejected_count ?? result.rejected_count ?? 0} rows`}
+          </span>
+          {(result.rejected_rows?.length ?? 0) > 0 && (
+            <span>{lang === 'ko' ? '반려 행은 날짜/금액 형식을 확인해주세요.' : 'Rejected rows usually need date or amount format fixes.'}</span>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function NoRevenueEmptyState({
+  lang,
+  selectedStore,
+  onOpenUpload,
+  onLoadDemoRevenue,
+}: {
+  lang: RcLang;
+  selectedStore: RevenueStoreSummary | null;
+  onOpenUpload: () => void;
+  onLoadDemoRevenue: () => void;
+}) {
+  return (
+    <section className="rc-empty-revenue-state">
+      <div className="rc-empty-revenue-inner">
+        <div className="rc-bootstrap-kicker">{selectedStore?.store_name ?? (lang === 'ko' ? '신규 매장' : 'New store')}</div>
+        <h1>{lang === 'ko' ? '매출 데이터가 아직 등록되지 않았습니다.' : 'No revenue data has been registered yet.'}</h1>
+        <p>
+          {lang === 'ko'
+            ? '매출 데이터를 등록하면 외부 맥락과 함께 원인 후보를 분석합니다.'
+            : 'Register revenue data to analyze candidate causes alongside external context.'}
+        </p>
+        <div className="rc-empty-actions">
+          <button type="button" className="rc-store-button rc-store-button-primary" onClick={onOpenUpload}>
+            {lang === 'ko' ? '매출 데이터 등록하기' : 'Add revenue data'}
+          </button>
+          <button type="button" className="rc-store-button" onClick={onLoadDemoRevenue}>
+            {lang === 'ko' ? '예시 매출 데이터로 먼저 체험하기' : 'Try sample revenue data'}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 // ─── main surface ─────────────────────────────────────────────────────────────
@@ -386,8 +696,10 @@ export function RevenueCockpitApp() {
   const [storeLoading, setStoreLoading] = useState(false);
   const [storeNotice, setStoreNotice] = useState<string | null>(null);
   const [showCreateStore, setShowCreateStore] = useState(false);
+  const [showRevenueUpload, setShowRevenueUpload] = useState(false);
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
-  const [storeForm, setStoreForm] = useState<CreateRevenueStorePayload>({
+  const [latestPipelineMeta, setLatestPipelineMeta] = useState<Record<string, unknown> | null>(null);
+  const [storeForm, setStoreForm] = useState<StoreCreateForm>({
     store_name: '',
     tenant_name: '',
     business_category: '',
@@ -401,6 +713,7 @@ export function RevenueCockpitApp() {
         setStores([]);
         setSelectedStoreId(null);
         setBootstrapStatus(null);
+        setLatestPipelineMeta(null);
       }
       setAuthReloadTick(tick => tick + 1);
     };
@@ -508,6 +821,7 @@ export function RevenueCockpitApp() {
         const saved = loadSelectedStoreId();
         const nextSelected = chooseInitialStore(nextStores, saved);
         setSelectedStoreId(nextSelected);
+        setLatestPipelineMeta(null);
         setStoreNotice(nextStores.length === 0
           ? (lang === 'ko' ? '등록된 가게가 없습니다.' : 'No stores yet.')
           : null);
@@ -538,6 +852,7 @@ export function RevenueCockpitApp() {
       apiFetchContext(storeId),
       apiFetchPipelineMeta(storeId),
     ]).then(([briefsEnvelope, anomaliesEnvelope, actionsEnvelope, contextEnvelope, pipelineMetaEnvelope]) => {
+      setLatestPipelineMeta(pipelineMetaEnvelope.pipeline_meta ?? null);
       const next = buildScenarioFromApi({
         briefs: briefsEnvelope.briefs,
         anomalies: anomaliesEnvelope.anomalies,
@@ -557,6 +872,7 @@ export function RevenueCockpitApp() {
   function pollPipelineMetaForBootstrap(storeId: string, attempt = 0) {
     apiFetchPipelineMeta(storeId)
       .then(envelope => {
+        if (storeId === selectedStoreId) setLatestPipelineMeta(envelope.pipeline_meta ?? null);
         const summarized = summarizeBootstrapFromMeta(storeId, envelope.pipeline_meta);
         if (summarized) setBootstrapStatus(summarized);
         const terminal = summarized && summarized.phase !== 'collecting';
@@ -606,6 +922,88 @@ export function RevenueCockpitApp() {
       });
   }
 
+  function handleOpenAddressSearch() {
+    loadPostcodeScript()
+      .then(() => {
+        if (!window.daum?.Postcode) throw new Error('postcode_unavailable');
+        new window.daum.Postcode({
+          oncomplete: data => {
+            const selectedAddress = data.roadAddress || data.address || data.jibunAddress || '';
+            setStoreForm(prev => ({
+              ...prev,
+              address_text: selectedAddress || prev.address_text,
+              region: regionFromPostcode(data) || prev.region,
+              postal_code: data.zonecode || prev.postal_code,
+              road_address: data.roadAddress || prev.road_address,
+              jibun_address: data.jibunAddress || prev.jibun_address,
+              address_source: 'postcode_search',
+            }));
+            setStoreNotice(lang === 'ko' ? '주소가 선택되었습니다. 상세 주소를 확인해주세요.' : 'Address selected. Check the detail address.');
+          },
+        }).open();
+      })
+      .catch(() => {
+        setStoreNotice(lang === 'ko'
+          ? '주소 검색을 열지 못했습니다. 도로명 주소를 직접 입력해주세요.'
+          : 'Could not open address search. Enter the road-name address manually.');
+      });
+  }
+
+  function buildSampleRevenueRows() {
+    const rows: Array<Record<string, unknown>> = [];
+    const start = Date.UTC(2026, 2, 9);
+    for (let day = 0; day < 56; day += 1) {
+      const date = new Date(start + day * 86400000);
+      const dow = date.getUTCDay();
+      const weekend = dow === 0 || dow === 6;
+      const rainSoftness = day === 23 || day === 31 || day === 39 ? 0.82 : 1;
+      const recovery = day >= 44 ? 1.08 : 1;
+      const baseOrders = weekend ? 118 : dow === 1 ? 72 : 92;
+      const orderCount = Math.max(20, Math.round((baseOrders + ((day * 11) % 17) - 8) * rainSoftness * recovery));
+      const averageTicket = (weekend ? 10600 : 9200) + ((day * 137) % 900);
+      const gross = Math.round(orderCount * averageTicket);
+      rows.push({
+        business_date: date.toISOString().slice(0, 10),
+        channel: 'offline_pos',
+        gross_sales_amount: gross,
+        net_sales_amount: Math.round(gross * 0.965),
+        order_count: orderCount,
+        cancel_count: Math.round(orderCount * 0.01),
+        refund_amount: Math.round(gross * 0.006),
+        discount_amount: Math.round(gross * 0.029),
+        payment_card_amount: Math.round(gross * 0.84),
+        payment_cash_amount: Math.round(gross * 0.07),
+      });
+    }
+    return rows;
+  }
+
+  function handleLoadDemoRevenue() {
+    if (!selectedStoreId) return;
+    setStoreLoading(true);
+    setStoreNotice(lang === 'ko' ? '예시 매출 데이터를 등록하는 중입니다.' : 'Loading sample revenue data.');
+    apiCreateRevenueUpload(selectedStoreId, {
+      source_type: 'm6_sample_daily_revenue',
+      original_filename: 'm6_sample_daily_revenue.json',
+      daily_rows: buildSampleRevenueRows(),
+      metadata: {
+        is_demo: true,
+        demo_scenario: 'explicit_user_selected_sample_revenue',
+        generated_for: 'm6_presentation',
+      },
+    })
+      .then(envelope => {
+        setStoreNotice(lang === 'ko'
+          ? `예시 매출 데이터 등록 완료 · 승인 ${envelope.upload?.accepted_count ?? envelope.accepted_count ?? 0}행`
+          : `Sample revenue loaded · accepted ${envelope.upload?.accepted_count ?? envelope.accepted_count ?? 0} rows`);
+        return refreshCockpitDataForStore(selectedStoreId);
+      })
+      .catch(() => {
+        setStoreNotice(lang === 'ko' ? '예시 매출 데이터를 등록하지 못했습니다.' : 'Could not load sample revenue data.');
+      })
+      .finally(() => setStoreLoading(false));
+  }
+
   useEffect(() => {
     if (!apiMode) return;
 
@@ -637,6 +1035,7 @@ export function RevenueCockpitApp() {
           context: contextEnvelope.context,
           pipelineMeta: pipelineMetaEnvelope.pipeline_meta,
         });
+        setLatestPipelineMeta(pipelineMetaEnvelope.pipeline_meta ?? null);
         setScenario(next.scenario);
         setStatuses(next.defaultStatuses);
         setApiNotice(null);
@@ -644,6 +1043,7 @@ export function RevenueCockpitApp() {
       .catch(() => {
         if (cancelled) return;
         setScenario(SCENARIO);
+        setLatestPipelineMeta(null);
         setStatuses({ ...DEFAULT_STATUSES });
         setApiNotice('fallback');
       });
@@ -657,6 +1057,10 @@ export function RevenueCockpitApp() {
       return;
     }
 
+    const baseAddress = storeForm.address_text?.trim() || '';
+    const detailAddress = storeForm.detail_address?.trim() || '';
+    const addressText = [baseAddress, detailAddress].filter(Boolean).join(' ') || undefined;
+
     setStoreLoading(true);
     setStoreNotice(lang === 'ko' ? '가게를 등록하는 중입니다.' : 'Creating store.');
     apiCreateStore({
@@ -664,15 +1068,25 @@ export function RevenueCockpitApp() {
       tenant_name: storeForm.tenant_name?.trim() || undefined,
       business_category: storeForm.business_category?.trim() || undefined,
       region: storeForm.region?.trim() || undefined,
-      address_text: storeForm.address_text?.trim() || undefined,
+      address_text: addressText,
+      metadata: {
+        ...(storeForm.metadata ?? {}),
+        ...(storeForm.address_source ? { address_source: storeForm.address_source } : {}),
+        ...(storeForm.postal_code ? { postal_code: storeForm.postal_code } : {}),
+        ...(storeForm.road_address ? { road_address: storeForm.road_address } : {}),
+        ...(storeForm.jibun_address ? { jibun_address: storeForm.jibun_address } : {}),
+        ...(storeForm.detail_address?.trim() ? { detail_address: storeForm.detail_address.trim() } : {}),
+      },
     })
       .then(envelope => {
         const created = envelope.store;
         if (!created) throw new Error('missing store');
         setStores(prev => [...prev.filter(store => store.store_id !== created.store_id), created]);
         setSelectedStoreId(created.store_id);
+        setLatestPipelineMeta(null);
         setStoreForm({ store_name: '', tenant_name: '', business_category: '', region: '', address_text: '' });
         setShowCreateStore(false);
+        setShowRevenueUpload(false);
         if (envelope.context_bootstrap_hint?.recommended) {
           setStoreNotice(lang === 'ko' ? '가게 등록 완료 · 초기 맥락데이터를 수집하고 있습니다.' : 'Store created · collecting initial context data.');
           startContextCollection(created.store_id, envelope.context_bootstrap_hint);
@@ -704,6 +1118,15 @@ export function RevenueCockpitApp() {
   const chromeLabel = lang === 'ko'
     ? '매출 코크핏 — 근거 기반 액션 브리프'
     : 'Merchant Revenue Cockpit — Evidence-backed Action Brief';
+  const selectedStore = stores.find(store => store.store_id === selectedStoreId) ?? null;
+  const selectedStoreIsDemo = isDemoStore(selectedStore);
+  const latestRevenueUpload = isRecord(latestPipelineMeta?.latest_revenue_upload)
+    ? latestPipelineMeta?.latest_revenue_upload
+    : null;
+  const latestRevenueUploadIsDemo = isRecord(latestRevenueUpload?.metadata) && latestRevenueUpload.metadata.is_demo === true;
+  const hasRevenueData = selectedStoreIsDemo || Boolean(latestRevenueUpload);
+  const noRevenueMode = Boolean(apiMode && selectedStoreId && !selectedStoreIsDemo && latestPipelineMeta && !hasRevenueData);
+  const showDemoBadge = selectedStoreIsDemo || latestRevenueUploadIsDemo || scenario.isDemo;
   const noticeCopy = apiNotice === 'loading'
     ? (lang === 'ko' ? 'API 데이터를 확인하는 중입니다.' : 'Checking API data.')
     : apiNotice === 'fallback'
@@ -737,14 +1160,26 @@ export function RevenueCockpitApp() {
             notice={storeNotice}
             showCreate={showCreateStore}
             form={storeForm}
-            onSelectStore={setSelectedStoreId}
+            onSelectStore={storeId => {
+              setSelectedStoreId(storeId);
+              setLatestPipelineMeta(null);
+              setShowRevenueUpload(false);
+            }}
             onToggleCreate={() => setShowCreateStore(value => !value)}
             onChangeForm={patch => setStoreForm(prev => ({ ...prev, ...patch }))}
             onCreateStore={handleCreateStore}
+            onOpenAddressSearch={handleOpenAddressSearch}
+            onOpenRevenueUpload={() => setShowRevenueUpload(value => !value)}
             compact
           />
         ) : null}
       />
+      {showDemoBadge && (
+        <div className="rc-demo-strip">
+          <span>{lang === 'ko' ? '예시 데이터' : 'Demo data'}</span>
+          <span>{lang === 'ko' ? '합성 데이터이며 실제 가맹점 매출이 아닙니다.' : 'Synthetic data, not real merchant revenue.'}</span>
+        </div>
+      )}
       {noticeCopy && (
         <div className="rc-api-notice">
           <Icon name="shield" size={12}/>
@@ -758,8 +1193,25 @@ export function RevenueCockpitApp() {
           onRetry={handleRetryContext}
         />
       )}
+      {apiMode && selectedStoreId && showRevenueUpload && (
+        <RevenueUploadPanel
+          lang={lang}
+          storeId={selectedStoreId}
+          onClose={() => setShowRevenueUpload(false)}
+          onUploaded={() => {
+            void refreshCockpitDataForStore(selectedStoreId);
+          }}
+        />
+      )}
       <div className="rc-screen">
-        {screen === 'brief' && (
+        {noRevenueMode && screen !== 'reliability' ? (
+          <NoRevenueEmptyState
+            lang={lang}
+            selectedStore={selectedStore}
+            onOpenUpload={() => setShowRevenueUpload(true)}
+            onLoadDemoRevenue={handleLoadDemoRevenue}
+          />
+        ) : screen === 'brief' && (
           <RevenueBriefView
             lang={lang}
             scenario={scenario}

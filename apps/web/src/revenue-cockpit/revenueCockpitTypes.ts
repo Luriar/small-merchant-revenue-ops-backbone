@@ -77,6 +77,9 @@ export interface Scenario {
   causes: CauseCandidate[];
   actions: RcAction[];
   reliability: ReliabilityInfo;
+  hasRevenueData?: boolean;
+  isDemo?: boolean;
+  storeName?: string;
 }
 
 export type ActionStatuses = Record<string, ActionStatus>;

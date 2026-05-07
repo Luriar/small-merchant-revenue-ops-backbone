@@ -24,6 +24,7 @@ export interface RevenueStoreSummary {
   member_role?: string;
   status?: string;
   created_at?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CreateRevenueStorePayload {
@@ -33,6 +34,35 @@ export interface CreateRevenueStorePayload {
   region?: string;
   address_text?: string;
   timezone?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RevenueUploadPayload {
+  source_type?: string;
+  original_filename?: string;
+  file_type?: string;
+  csv_text?: string;
+  daily_rows?: Array<Record<string, unknown>>;
+  item_rows?: Array<Record<string, unknown>>;
+  metadata?: Record<string, unknown>;
+  parser_type?: string;
+}
+
+export interface RevenueUploadEnvelope {
+  upload?: {
+    upload_id?: string;
+    status?: string;
+    accepted_count?: number;
+    rejected_count?: number;
+    row_count?: number;
+  };
+  accepted_count?: number;
+  rejected_count?: number;
+  rejected_rows?: Array<{
+    row_number?: number;
+    reason_code?: string;
+    reason_message?: string;
+  }>;
 }
 
 export interface ContextBootstrapHint {
@@ -162,4 +192,32 @@ export async function apiUpdateActionStatus(id: string, status: string, storeId?
 
 export async function apiFetchPipelineMeta(storeId?: string) {
   return fetchJson(storeId ? storeScopedPath(storeId, '/pipeline-meta') : legacyPath('/pipeline-meta'), {}, 'pipeline-meta');
+}
+
+export async function apiFetchRevenueUploads(storeId: string) {
+  return fetchJson(storeScopedPath(storeId, '/revenue/uploads'), {}, 'revenue uploads');
+}
+
+export async function apiPreviewRevenueUpload(storeId: string, payload: RevenueUploadPayload) {
+  return fetchJson(
+    storeScopedPath(storeId, '/revenue/uploads/preview'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    'preview revenue upload',
+  );
+}
+
+export async function apiCreateRevenueUpload(storeId: string, payload: RevenueUploadPayload): Promise<RevenueUploadEnvelope> {
+  return fetchJson(
+    storeScopedPath(storeId, '/revenue/uploads'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    'create revenue upload',
+  );
 }

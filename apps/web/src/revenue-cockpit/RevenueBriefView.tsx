@@ -160,6 +160,10 @@ function ShortlistRow({ a, lang, state, setState }: { a: RcAction; lang: RcLang;
 // ─── reliability compact (right rail bottom) ──────────────────────────────────
 
 function ReliabilityCompact({ lang, scenario, onOpen }: { lang: RcLang; scenario: Scenario; onOpen: () => void }) {
+  const healthyCollectorCount = scenario.reliability.sources.filter(source => source.status === 'ok').length;
+  const summary = lang === 'ko'
+    ? `${healthyCollectorCount}개 맥락데이터 정상 · 최근 실행 실패 ${scenario.reliability.failures}`
+    : `${healthyCollectorCount} sources OK · ${scenario.reliability.failures} failures`;
   return (
     <button onClick={onOpen} className="rc-card" style={{
       all: 'unset', cursor: 'pointer', display: 'block', boxSizing: 'border-box',
@@ -177,7 +181,7 @@ function ReliabilityCompact({ lang, scenario, onOpen }: { lang: RcLang; scenario
             {lang === 'ko' ? '이 브리프를 신뢰할 수 있는 이유' : 'Why you can trust this brief'}
           </div>
           <div style={{ fontSize: 10.5, color: 'var(--rc-fg-muted)' }}>
-            {lang === 'ko' ? '5개 데이터 모두 정상 · 최근 14회 실행 무실패' : '5/5 sources OK · 14 runs without failure'}
+            {summary}
           </div>
         </div>
         <Icon name="arrow-right" size={13}/>
@@ -210,6 +214,7 @@ interface RevenueBriefViewProps {
 
 export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, statuses, onSetStatus }: RevenueBriefViewProps) {
   const thisWeekActions = scenario.actions.filter(a => a.timeframe === 'this-week');
+  const revenueDeltaUnavailable = Math.abs(scenario.revenueChange) < 0.05;
   const secondaryMetrics = [
     { lab: lang === 'ko' ? '거래건수'  : 'Transactions', v: '11.9k',  d: scenario.txnChange,        spark: [{v:100},{v:101},{v:99},{v:102},{v:104},{v:103},{v:100},{v:90}] },
     { lab: lang === 'ko' ? '객단가'    : 'Avg. ticket',  v: '₩6,450', d: scenario.ticketChange,     spark: [{v:100},{v:99},{v:101},{v:102},{v:101},{v:100},{v:100},{v:98}] },
@@ -233,9 +238,7 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
           margin: '16px 0 13px', color: 'var(--rc-fg-strong)', fontWeight: 400,
           maxWidth: 760,
         }}>
-          {lang === 'ko'
-            ? <>{scenario.compare.ko} 추정매출이 직전 분기 대비 <span style={{ color: 'var(--rc-accent-strong)' }}>{Math.abs(scenario.revenueChange).toFixed(1)}%</span> 줄었습니다.</>
-            : <>Estimated revenue fell <span style={{ color: 'var(--rc-accent-strong)' }}>{Math.abs(scenario.revenueChange).toFixed(1)}%</span> from the prior quarter.</>}
+          {buildRevenueHeadline(lang, scenario, revenueDeltaUnavailable)}
         </h1>
 
         <p className="rc-keep-words" style={{ fontSize: 14.5, color: 'var(--rc-fg-muted)', maxWidth: 620, margin: '0 0 18px', lineHeight: 1.66 }}>
@@ -367,4 +370,23 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
       </aside>
     </div>
   );
+}
+
+function buildRevenueHeadline(lang: RcLang, scenario: Scenario, unavailable: boolean) {
+  if (unavailable) {
+    return lang === 'ko'
+      ? <>등록된 매출 데이터를 기준으로 초기 브리프를 생성했습니다.</>
+      : <>An initial brief was generated from the registered revenue data.</>;
+  }
+
+  const delta = Math.abs(scenario.revenueChange).toFixed(1);
+  if (scenario.revenueChange < 0) {
+    return lang === 'ko'
+      ? <>{scenario.compare.ko} 추정매출이 직전 분기 대비 <span style={{ color: 'var(--rc-accent-strong)' }}>{delta}%</span> 줄었습니다.</>
+      : <>Estimated revenue fell <span style={{ color: 'var(--rc-accent-strong)' }}>{delta}%</span> from the prior quarter.</>;
+  }
+
+  return lang === 'ko'
+    ? <>{scenario.compare.ko} 추정매출이 직전 분기 대비 <span style={{ color: 'var(--rc-accent-strong)' }}>{delta}%</span> 늘었습니다.</>
+    : <>Estimated revenue rose <span style={{ color: 'var(--rc-accent-strong)' }}>{delta}%</span> from the prior quarter.</>;
 }

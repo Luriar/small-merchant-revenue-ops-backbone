@@ -9,6 +9,14 @@ import {
 
 const ROOT_ID = 'revenue-cognito-auth-overlay';
 
+function currentLang(): 'ko' | 'en' {
+  try {
+    return localStorage.getItem('rc-lang') === 'en' ? 'en' : 'ko';
+  } catch {
+    return 'ko';
+  }
+}
+
 function ensureOverlayRoot(): HTMLDivElement {
   const existing = document.getElementById(ROOT_ID);
   if (existing instanceof HTMLDivElement) {
@@ -39,11 +47,14 @@ function ensureOverlayRoot(): HTMLDivElement {
 function renderOverlay(message?: string) {
   const root = ensureOverlayRoot();
   const session = getStoredAuthSession();
+  const lang = currentLang();
 
   root.innerHTML = '';
 
   const label = document.createElement('span');
-  label.textContent = message ?? (session?.email ? `Cognito: ${session.email}` : 'Cognito: not signed in');
+  label.textContent = message ?? (session?.email
+    ? `${lang === 'ko' ? '계정' : 'Account'}: ${session.email}`
+    : (lang === 'ko' ? '로그인이 필요합니다' : 'Sign in required'));
   root.appendChild(label);
 
   const button = document.createElement('button');
@@ -56,16 +67,16 @@ function renderOverlay(message?: string) {
   button.style.cursor = 'pointer';
 
   if (session) {
-    button.textContent = 'Logout';
+    button.textContent = lang === 'ko' ? '로그아웃' : 'Logout';
     button.onclick = () => {
       markRevenueLogoutRedirect();
       clearStoredAuthSession();
       window.location.assign(buildCognitoLogoutUrl());
     };
   } else {
-    button.textContent = 'Login';
+    button.textContent = lang === 'ko' ? '로그인' : 'Login';
     button.onclick = async () => {
-      renderOverlay('Redirecting to Cognito...');
+      renderOverlay(lang === 'ko' ? '로그인 페이지로 이동 중입니다.' : 'Redirecting to sign in...');
       await startCognitoLogin();
     };
   }
@@ -79,7 +90,10 @@ async function bootRevenueCognitoAuth() {
   try {
     const session = await handleCognitoRedirectIfPresent();
     if (session) {
-      renderOverlay(session.email ? `Cognito: ${session.email}` : 'Signed in with Cognito');
+      const lang = currentLang();
+      renderOverlay(session.email
+        ? `${lang === 'ko' ? '계정' : 'Account'}: ${session.email}`
+        : (lang === 'ko' ? '로그인되었습니다' : 'Signed in'));
 
       window.setTimeout(() => {
         renderOverlay();
@@ -88,7 +102,7 @@ async function bootRevenueCognitoAuth() {
       window.dispatchEvent(new HashChangeEvent('hashchange'));
     }
   } catch (error) {
-    renderOverlay(error instanceof Error ? error.message : 'Cognito login failed.');
+    renderOverlay(error instanceof Error ? error.message : (currentLang() === 'ko' ? '로그인에 실패했습니다.' : 'Login failed.'));
   }
 }
 

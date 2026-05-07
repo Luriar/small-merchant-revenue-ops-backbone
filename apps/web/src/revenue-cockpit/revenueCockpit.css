@@ -2,24 +2,24 @@
 
 .rc-root {
   /* LIGHT — premium SaaS warm */
-  --rc-bg: #f6f2ea;
-  --rc-surface-0: #fbf8f1;
+  --rc-bg: #f4f6f5;
+  --rc-surface-0: #fbfcfb;
   --rc-surface-1: #ffffff;
-  --rc-surface-2: #f0eadf;
-  --rc-surface-3: #e6dfd2;
-  --rc-fg: #1f1b16;
-  --rc-fg-strong: #0d0b08;
-  --rc-fg-muted: #6b6258;
-  --rc-fg-dim: #9a9087;
-  --rc-rule: rgba(40,30,20,0.09);
-  --rc-rule-strong: rgba(40,30,20,0.18);
-  --rc-shadow-sm: 0 1px 2px rgba(40,30,20,0.04), 0 1px 1px rgba(40,30,20,0.03);
-  --rc-shadow-md: 0 4px 14px rgba(40,30,20,0.06), 0 1px 3px rgba(40,30,20,0.04);
-  --rc-shadow-lg: 0 12px 32px rgba(40,30,20,0.08), 0 2px 6px rgba(40,30,20,0.04);
-  --rc-accent: #b8542a;
-  --rc-accent-strong: #8a3a18;
-  --rc-accent-soft: #fbe9dc;
-  --rc-accent-soft-bd: rgba(184,84,42,0.18);
+  --rc-surface-2: #edf2f1;
+  --rc-surface-3: #dfe8e6;
+  --rc-fg: #18201f;
+  --rc-fg-strong: #081311;
+  --rc-fg-muted: #5e6a67;
+  --rc-fg-dim: #8a9794;
+  --rc-rule: rgba(20,45,40,0.10);
+  --rc-rule-strong: rgba(20,45,40,0.20);
+  --rc-shadow-sm: 0 1px 2px rgba(20,45,40,0.04), 0 1px 1px rgba(20,45,40,0.03);
+  --rc-shadow-md: 0 4px 14px rgba(20,45,40,0.06), 0 1px 3px rgba(20,45,40,0.04);
+  --rc-shadow-lg: 0 12px 32px rgba(20,45,40,0.08), 0 2px 6px rgba(20,45,40,0.04);
+  --rc-accent: #2b7a78;
+  --rc-accent-strong: #175d5c;
+  --rc-accent-soft: #e0f0ee;
+  --rc-accent-soft-bd: rgba(43,122,120,0.22);
   --rc-good: #2f6b48;
   --rc-good-strong: #234f36;
   --rc-good-soft: #e3eee5;
@@ -31,9 +31,9 @@
   --rc-info: #4a5a78;
   --rc-info-soft: #e3e8f0;
   --rc-info-soft-bd: rgba(74,90,120,0.20);
-  --rc-chip-bg: #efe9dd;
-  --rc-chip-fg: #4a4239;
-  --rc-chip-bd: rgba(40,30,20,0.10);
+  --rc-chip-bg: #e7eeec;
+  --rc-chip-fg: #384844;
+  --rc-chip-bd: rgba(20,45,40,0.12);
   --rc-serif: 'Source Serif 4', 'Iowan Old Style', Georgia, serif;
   --rc-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --rc-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -245,6 +245,12 @@
   width: min(280px, 100%);
 }
 
+.rc-file-input {
+  min-height: 30px;
+  color: var(--rc-fg-muted);
+  font-size: 12px;
+}
+
 .rc-store-button {
   min-height: 30px;
   border: 1px solid var(--rc-rule-strong);
@@ -261,6 +267,11 @@
   border-color: var(--rc-accent-soft-bd);
   background: var(--rc-accent);
   color: #fff;
+}
+
+.rc-store-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .rc-store-notice {
@@ -338,6 +349,163 @@
   background: var(--rc-accent-soft);
 }
 
+.rc-demo-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 32px;
+  border-bottom: 1px solid var(--rc-rule);
+  background: var(--rc-info-soft);
+  color: var(--rc-info);
+  font-size: 11.5px;
+}
+
+.rc-demo-strip span:first-child {
+  border: 1px solid var(--rc-info-soft-bd);
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: var(--rc-surface-1);
+  color: var(--rc-fg-strong);
+  font-weight: 750;
+}
+
+.rc-revenue-upload-panel {
+  border-bottom: 1px solid var(--rc-rule);
+  background: var(--rc-surface-0);
+  padding: 16px 32px 18px;
+}
+
+.rc-revenue-upload-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 1180px;
+}
+
+.rc-revenue-upload-head strong {
+  color: var(--rc-fg-strong);
+  font-size: 15px;
+}
+
+.rc-revenue-upload-head p {
+  margin: 4px 0 0;
+  color: var(--rc-fg-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.rc-revenue-upload-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+  max-width: 1180px;
+  margin-top: 14px;
+}
+
+.rc-revenue-upload-card {
+  padding: 14px;
+}
+
+.rc-revenue-upload-card h2 {
+  margin: 0 0 10px;
+  color: var(--rc-fg-strong);
+  font-size: 14px;
+}
+
+.rc-revenue-upload-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.rc-revenue-upload-fields .rc-store-input,
+.rc-revenue-upload-fields .rc-store-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.rc-upload-note {
+  margin: 0 0 10px;
+  color: var(--rc-fg-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rc-revenue-csv {
+  width: 100%;
+  min-height: 108px;
+  margin: 9px 0;
+  resize: vertical;
+  border: 1px solid var(--rc-rule-strong);
+  border-radius: 7px;
+  background: var(--rc-surface-1);
+  color: var(--rc-fg-strong);
+  font: 12px/1.45 var(--rc-mono);
+  padding: 8px 9px;
+}
+
+.rc-upload-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  max-width: 1180px;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--rc-good-soft-bd);
+  border-radius: 7px;
+  background: var(--rc-good-soft);
+  color: var(--rc-good-strong);
+  font-size: 12px;
+}
+
+.rc-upload-error {
+  border-color: var(--rc-bad-soft-bd);
+  background: var(--rc-bad-soft);
+  color: var(--rc-bad-strong);
+}
+
+.rc-empty-revenue-state {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 32px;
+  background: var(--rc-surface-0);
+}
+
+.rc-empty-revenue-inner {
+  width: min(620px, 100%);
+  border: 1px solid var(--rc-rule);
+  border-radius: 8px;
+  background: var(--rc-surface-1);
+  box-shadow: var(--rc-shadow-sm);
+  padding: 26px 28px;
+}
+
+.rc-empty-revenue-inner h1 {
+  margin: 8px 0 8px;
+  color: var(--rc-fg-strong);
+  font: 500 26px/1.25 var(--rc-serif);
+  letter-spacing: 0;
+}
+
+.rc-empty-revenue-inner p {
+  margin: 0;
+  color: var(--rc-fg-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.rc-empty-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
 @media (max-width: 900px) {
   .rc-bootstrap-head {
     flex-direction: column;
@@ -345,6 +513,10 @@
 
   .rc-bootstrap-steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rc-revenue-upload-grid {
+    grid-template-columns: 1fr;
   }
 }
 

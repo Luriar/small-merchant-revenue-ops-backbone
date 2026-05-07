@@ -1,4 +1,4 @@
-// Relative TraceOps read-path endpoint builders.
+// Relative Revenue OS read-path endpoint builders.
 // This module is a compile-time contract utility only; it is not a fetch client.
 
 const API_PREFIX = "/api/v1";
