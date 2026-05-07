@@ -1,13 +1,15 @@
 const { randomUUID } = require("node:crypto");
 
 const exportData = require("./data/revenue_ops_export.json");
+const m6DemoDataset = require("./data/m6_demo_revenue_dataset.json");
 const { getJwtClaimsFromEvent, normalizeClaims } = require("./revenue-ops-auth");
 const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
 const { planStorePublicContextCollection, normalizeContextCollectionReason } = require("./context-collectors");
 const { previewRevenueUploadPayload } = require("./revenue-upload-parsers");
 
-const DEMO_STORE_NAME = "성수 커피음료 매장";
-const DEMO_TENANT_NAME = "Demo Merchant Tenant";
+const DEFAULT_DEMO_PROFILE = m6DemoDataset.stores[0];
+const DEMO_STORE_NAME = DEFAULT_DEMO_PROFILE.store_name;
+const DEMO_TENANT_NAME = DEFAULT_DEMO_PROFILE.tenant_name;
 const RELIABILITY_NOTE_KO = "이 분석은 업로드된 매출 데이터와 공개 맥락 데이터를 함께 관측한 결과입니다. 인과가 확정된 것은 아니며, 실행 전 추가 확인이 필요합니다.";
 const RELIABILITY_NOTE_EN = "This analysis combines uploaded revenue data with public context signals. It does not prove causality and should be reviewed before execution.";
 const BOOTSTRAP_REASON = "store_onboarding_bootstrap";
@@ -112,7 +114,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   function listStoresForUser(appUserId) {
     let stores = listActiveStoresForUser(appUserId);
     if (stores.length === 0) {
-      seedDemoStoreForUser(appUserId);
+      seedDemoStoresForUser(appUserId);
       stores = listActiveStoresForUser(appUserId);
     }
     return stores;
@@ -201,30 +203,32 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   }
 
   function seedDemoStoreForUser(appUserId) {
-    const existing = state.storeMembers
-      .filter((member) => member.app_user_id === appUserId)
-      .map((member) => state.stores.get(member.store_id))
-      .find((store) => store?.store_type === "demo" && store?.store_name === DEMO_STORE_NAME);
+    return seedDemoStoresForUser(appUserId)[0] ?? null;
+  }
 
-    if (existing) {
-      return existing;
+  function seedDemoStoresForUser(appUserId) {
+    const seeded = [];
+    for (const profile of m6DemoDataset.stores ?? []) {
+      const existing = state.storeMembers
+        .filter((member) => member.app_user_id === appUserId)
+        .map((member) => state.stores.get(member.store_id))
+        .find((store) => store?.store_type === "demo" && store?.metadata?.demo_scenario === profile.demo_scenario);
+
+      const store = existing ?? createStoreForUser(appUserId, {
+        tenant_name: profile.tenant_name,
+        tenant_type: "demo",
+        store_name: profile.store_name,
+        store_type: "demo",
+        business_category: profile.business_category,
+        region: profile.region,
+        address_text: profile.address_text,
+        timezone: "Asia/Seoul",
+        metadata: profile.metadata,
+      });
+      seedStoreContent(store.store_id);
+      seeded.push(state.stores.get(store.store_id) ?? store);
     }
-
-    const store = createStoreForUser(appUserId, {
-      tenant_name: DEMO_TENANT_NAME,
-      tenant_type: "demo",
-      store_name: DEMO_STORE_NAME,
-      store_type: "demo",
-      business_category: "cafe",
-      region: "Seoul Seongsu",
-      address_text: "서울 성동구 성수동 일대",
-      timezone: "Asia/Seoul",
-      metadata: {
-        synthetic_notice: "Realistic synthetic POS data calibrated by public commercial-district benchmark assumptions. Not real individual store revenue.",
-      },
-    });
-    seedStoreContent(store.store_id);
-    return state.stores.get(store.store_id);
+    return seeded;
   }
 
   function seedStoreScaffold(store) {
@@ -256,7 +260,11 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
 
     const timestamp = nowIso();
     const store = state.stores.get(storeId);
-    seedRevenueFacts(storeId, timestamp);
+    const profile = demoProfileForStore(store);
+    if (store?.store_type !== "demo" && !profile) {
+      return;
+    }
+    seedRevenueFacts(storeId, timestamp, profile);
     seedContextForStore(storeId, timestamp);
     seedCauseActionLoop(storeId, timestamp);
 
@@ -290,27 +298,30 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     })));
   }
 
-  function seedRevenueFacts(storeId, timestamp) {
+  function seedRevenueFacts(storeId, timestamp, profile = null) {
     if (state.dailyFacts.some((row) => row.store_id === storeId)) {
       return;
     }
 
     const uploadId = `upload_seed_${storeId}`;
-    const dailyRows = buildSyntheticDailyRows();
+    const dailyRows = profile?.revenue_daily_rows ?? buildSyntheticDailyRows();
     const itemRows = buildSyntheticItemRows(dailyRows);
 
     state.uploads.push({
       upload_id: uploadId,
       store_id: storeId,
       uploaded_by: null,
-      source_type: "synthetic_seed",
-      original_filename: "seongsu_cafe_daily_revenue.csv",
+      source_type: "m6_synthetic_demo_seed",
+      original_filename: profile ? `${profile.demo_scenario}.json` : "synthetic_daily_revenue.csv",
       file_type: "csv",
       status: "accepted",
       row_count: dailyRows.length + itemRows.length,
       accepted_count: dailyRows.length + itemRows.length,
       rejected_count: 0,
       metadata: {
+        is_demo: true,
+        demo_scenario: profile?.demo_scenario ?? "seongsu_cafe_seed",
+        generated_for: "m6_presentation",
         synthetic_notice: "Not real individual store revenue. Realistic synthetic POS data calibrated by public commercial-district benchmark assumptions.",
       },
       created_at: timestamp,
@@ -334,6 +345,9 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   }
 
   function seedContextForStore(storeId, timestamp) {
+    const store = state.stores.get(storeId);
+    const region = store?.region ?? "Seoul Seongsu";
+    const category = store?.business_category ?? "cafe";
     ensureContextSource({
       source_id: "manual_seed_weather",
       source_name: "Manual seed weather context",
@@ -368,7 +382,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         metric_value: 38,
         metric_unit: "mm",
         label: "비 오는 날 오프라인 매출 하락 신호와 함께 관측되었습니다",
-        region: "Seoul Seongsu",
+        region,
       },
       {
         source_id: "manual_seed_foot_traffic",
@@ -378,7 +392,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         metric_value: -14,
         metric_unit: "pct",
         label: "유동인구 프록시 하락이 함께 관측되었습니다",
-        region: "Seoul Seongsu",
+        region,
       },
       {
         source_id: "manual_seed_commercial_benchmark",
@@ -388,7 +402,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         metric_value: -8,
         metric_unit: "pct",
         label: "상권 벤치마크 약세가 함께 관측되었습니다",
-        region: "Seoul Seongsu",
+        region,
       },
       {
         source_id: "manual_seed_commercial_benchmark",
@@ -398,7 +412,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         metric_value: 61,
         metric_unit: "stores",
         label: "동종 업종 점포 밀도는 원인 후보일 뿐 추가 확인이 필요합니다",
-        region: "Seoul Seongsu",
+        region,
       },
     ];
 
@@ -431,13 +445,13 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       });
     }
 
-    if (!state.publicBenchmarks.some((row) => row.region === "Seoul Seongsu" && row.business_category === "cafe")) {
+    if (!state.publicBenchmarks.some((row) => row.region === region && row.business_category === category)) {
       state.publicBenchmarks.push({
         benchmark_id: newId("bench"),
         source_id: "manual_seed_commercial_benchmark",
-        region: "Seoul Seongsu",
+        region,
         commercial_area_code: null,
-        business_category: "cafe",
+        business_category: category,
         period_start: "2026-04-01",
         period_end: "2026-04-30",
         sales_amount: 148000000,
@@ -457,9 +471,9 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         mapping_id: newId("area"),
         store_id: storeId,
         commercial_area_code: null,
-        commercial_area_name: "Seongsu commercial district seed label",
-        administrative_dong: "Seongsu-dong",
-        business_category: "cafe",
+        commercial_area_name: `${region} seed label`,
+        administrative_dong: region,
+        business_category: category,
         mapping_method: "manual_seed",
         confidence: "medium",
         metadata: {
@@ -476,7 +490,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
         store_id: storeId,
         snapshot_date: "2026-04-18",
         radius_m: 500,
-        business_category: "cafe",
+        business_category: category,
         same_category_store_count: 61,
         total_store_count: 228,
         source_id: "manual_seed_commercial_benchmark",
@@ -673,6 +687,9 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   function ensureCauseCandidatesForStore(storeId) {
     const timestamp = nowIso();
     seedContextForStore(storeId, timestamp);
+    if (!state.dailyFacts.some((row) => row.store_id === storeId)) {
+      return [];
+    }
     if (!state.causeCandidates.some((row) => row.store_id === storeId)) {
       seedCauseActionLoop(storeId, timestamp);
     }
@@ -685,6 +702,9 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   }
 
   function ensureActionPlannerItemsForStore(storeId) {
+    if (!state.dailyFacts.some((row) => row.store_id === storeId)) {
+      return [];
+    }
     const timestamp = nowIso();
     const candidates = ensureCauseCandidatesForStore(storeId);
     for (const candidate of candidates) {
@@ -748,14 +768,26 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   }
 
   function getBriefsForStore(storeId) {
-    seedStoreContent(storeId);
+    const store = state.stores.get(storeId);
+    if (isDemoStoreRecord(store)) {
+      seedStoreContent(storeId);
+    }
+    if (!state.dailyFacts.some((row) => row.store_id === storeId)) {
+      return [];
+    }
     ensureActionPlannerItemsForStore(storeId);
     const briefs = state.briefs.filter((brief) => brief.store_id === storeId);
     return clone(briefs.length ? briefs : [buildBriefFromFacts(storeId)]);
   }
 
   function getAnomaliesForStore(storeId) {
-    seedStoreContent(storeId);
+    const store = state.stores.get(storeId);
+    if (isDemoStoreRecord(store)) {
+      seedStoreContent(storeId);
+    }
+    if (!state.dailyFacts.some((row) => row.store_id === storeId)) {
+      return [];
+    }
     const anomalies = state.anomalies.filter((anomaly) => anomaly.store_id === storeId);
     return clone(anomalies.length ? anomalies : buildAnomaliesFromFacts(storeId));
   }
@@ -782,7 +814,10 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   }
 
   function getPipelineMetaForStore(storeId) {
-    seedStoreContent(storeId);
+    const store = state.stores.get(storeId);
+    if (isDemoStoreRecord(store)) {
+      seedStoreContent(storeId);
+    }
     const latestUpload = latestBy(state.uploads.filter((row) => row.store_id === storeId), "created_at");
     const latestContext = latestBy(state.contextObservations.filter((row) => row.store_id === storeId), "fetched_at");
     const latestBenchmark = latestBy(state.publicBenchmarks, "fetched_at");
@@ -792,6 +827,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
 
     return clone({
       store_id: storeId,
+      store_name: store?.store_name ?? null,
       latest_revenue_upload: latestUpload,
       latest_context_observation: latestContext,
       latest_public_benchmark_period: latestBenchmark ? {
@@ -1529,6 +1565,23 @@ function buildAnomaliesFromFacts(storeId) {
     interpretation_note: "Store-scoped revenue pattern. Not proven causality.",
     detected_at: new Date().toISOString(),
   }];
+}
+
+function isDemoStoreRecord(store) {
+  return Boolean(store && (
+    store.store_type === "demo"
+    || store.tenant_type === "demo"
+    || store.metadata?.is_demo === true
+  ));
+}
+
+function demoProfileForStore(store) {
+  if (!store) return null;
+  const scenario = store.metadata?.demo_scenario;
+  return (m6DemoDataset.stores ?? []).find((profile) => (
+    profile.demo_scenario === scenario
+    || profile.store_name === store.store_name
+  )) ?? null;
 }
 
 function sanitizeRevenueRow(row) {

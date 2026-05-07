@@ -21,7 +21,8 @@ test("store-scoped API requires auth, resolves app user, and lists a seed store"
   const stores = await requestJson({ server, method: "GET", routePath: "/api/v1/stores", authSub: "user-a" });
   assert.equal(stores.statusCode, 200);
   assert.equal(stores.value.stores.length >= 1, true);
-  assert.equal(stores.value.stores[0].store_name, "성수 커피음료 매장");
+  assert.equal(stores.value.stores[0].store_name, "성수 카페 / 디저트");
+  assert.equal(stores.value.stores.some((store) => store.store_type === "demo" && store.metadata?.is_demo === true), true);
 });
 
 test("POST /stores creates tenant, store, and owner membership for current user", async () => {
@@ -69,6 +70,52 @@ test("POST /stores returns a non-blocking bootstrap hint when context prerequisi
   assert.equal(created.statusCode, 201);
   assert.equal(created.value.context_bootstrap_hint.recommended, false);
   assert.deepEqual(created.value.context_bootstrap_hint.missing_prerequisites.sort(), ["address_text", "business_category"]);
+});
+
+test("new real stores do not receive demo revenue or action analysis before explicit upload", async () => {
+  const server = createTestServer();
+  const authSub = "empty-real-store-owner";
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub,
+    input: {
+      store_name: "매출 없는 실제 매장",
+      business_category: "cafe",
+      region: "서울 마포구",
+      address_text: "서울 마포구 월드컵북로 1",
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const storeId = created.value.store.store_id;
+
+  const briefs = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`,
+    authSub,
+  });
+  assert.equal(briefs.statusCode, 200);
+  assert.deepEqual(briefs.value.briefs, []);
+
+  const actions = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/actions`,
+    authSub,
+  });
+  assert.equal(actions.statusCode, 200);
+  assert.deepEqual(actions.value.actions, []);
+
+  const meta = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/pipeline-meta`,
+    authSub,
+  });
+  assert.equal(meta.statusCode, 200);
+  assert.equal(meta.value.pipeline_meta.latest_revenue_upload, null);
 });
 
 test("store-scoped actions reject non-members and persist status with outcome placeholder", async () => {

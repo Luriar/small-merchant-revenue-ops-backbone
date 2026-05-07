@@ -4,6 +4,7 @@ const { SecretsManagerClient, GetSecretValueCommand } = require("@aws-sdk/client
 const { Pool } = require("pg");
 
 const exportData = require("./data/revenue_ops_export.json");
+const m6DemoDataset = require("./data/m6_demo_revenue_dataset.json");
 const { parseSecretJson } = require("./aurora-action-status-store");
 const { getJwtClaimsFromEvent, normalizeClaims } = require("./revenue-ops-auth");
 const {
@@ -27,6 +28,7 @@ const { loadRevenueConnectorCredentials } = require("./connector-credentials");
 const { previewRevenueUploadPayload } = require("./revenue-upload-parsers");
 const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
 
+const DEFAULT_DEMO_PROFILE = m6DemoDataset.stores[0];
 const ROLE_RANK = {
   viewer: 1,
   operator: 2,
@@ -174,7 +176,7 @@ function createAuroraRevenueOpsSaasStore({
       [appUserId],
     );
     if (result.rows.length === 0) {
-      await seedDemoStoreForUser(appUserId);
+      await seedDemoStoresForUser(appUserId);
       result = await query(
         `
           SELECT s.*, sm.role AS member_role, t.tenant_name, t.tenant_type
@@ -260,18 +262,34 @@ function createAuroraRevenueOpsSaasStore({
   }
 
   async function seedDemoStoreForUser(appUserId) {
+    const stores = await seedDemoStoresForUser(appUserId);
+    return stores[0] ?? null;
+  }
+
+  async function seedDemoStoresForUser(appUserId) {
+    const stores = [];
+    for (const profile of m6DemoDataset.stores ?? [DEFAULT_DEMO_PROFILE]) {
+      stores.push(await seedDemoStoreProfileForUser(appUserId, profile));
+    }
+    return stores;
+  }
+
+  async function seedDemoStoreProfileForUser(appUserId, profile) {
     return withTransaction(async (client) => {
       const existing = await client.query(
         `
           SELECT s.*
           FROM store_members sm
           JOIN stores s ON s.store_id = sm.store_id
-          WHERE sm.app_user_id = $1 AND s.store_name = $2 AND s.store_type = 'demo'
+          WHERE sm.app_user_id = $1
+            AND s.store_type = 'demo'
+            AND (s.metadata->>'demo_scenario' = $2 OR s.store_name = $3)
           LIMIT 1
         `,
-        [appUserId, DEMO_STORE_NAME],
+        [appUserId, profile.demo_scenario, profile.store_name],
       );
       if (existing.rows[0]) {
+        await seedStoreContentWithClient(client, existing.rows[0], appUserId, profile);
         return existing.rows[0];
       }
 
@@ -281,7 +299,7 @@ function createAuroraRevenueOpsSaasStore({
           VALUES ($1, 'demo', $2)
           RETURNING *
         `,
-        [DEMO_TENANT_NAME, appUserId],
+        [profile.tenant_name, appUserId],
       );
       const tenant = tenantResult.rows[0];
       const storeResult = await client.query(
@@ -290,16 +308,16 @@ function createAuroraRevenueOpsSaasStore({
             tenant_id, store_name, store_type, business_category, region,
             address_text, timezone, metadata, created_by
           )
-          VALUES ($1, $2, 'demo', 'cafe', 'Seoul Seongsu', $3, 'Asia/Seoul', $4::jsonb, $5)
+          VALUES ($1, $2, 'demo', $3, $4, $5, 'Asia/Seoul', $6::jsonb, $7)
           RETURNING *
         `,
         [
           tenant.tenant_id,
-          DEMO_STORE_NAME,
-          "서울 성동구 성수동 일대",
-          JSON.stringify({
-            synthetic_notice: "Realistic synthetic POS data calibrated by public commercial-district benchmark assumptions. Not real individual store revenue.",
-          }),
+          profile.store_name,
+          profile.business_category,
+          profile.region,
+          profile.address_text,
+          JSON.stringify(profile.metadata),
           appUserId,
         ],
       );
@@ -313,7 +331,7 @@ function createAuroraRevenueOpsSaasStore({
         [store.store_id, appUserId],
       );
       await seedStoreLocation(client, store);
-      await seedStoreContentWithClient(client, store, appUserId);
+      await seedStoreContentWithClient(client, store, appUserId, profile);
       return store;
     });
   }
@@ -347,16 +365,16 @@ function createAuroraRevenueOpsSaasStore({
     );
   }
 
-  async function seedStoreContentWithClient(client, store, appUserId) {
-    await seedRevenueFactsWithClient(client, store, appUserId);
+  async function seedStoreContentWithClient(client, store, appUserId, profile = null) {
+    await seedRevenueFactsWithClient(client, store, appUserId, profile);
     await seedContextWithClient(client, store);
     await seedCauseActionLoopWithClient(client, store);
   }
 
-  async function seedRevenueFactsWithClient(client, store, appUserId) {
-    const exists = await client.query("SELECT 1 FROM revenue_uploads WHERE store_id = $1 AND source_type = 'synthetic_seed' LIMIT 1", [store.store_id]);
+  async function seedRevenueFactsWithClient(client, store, appUserId, profile = null) {
+    const exists = await client.query("SELECT 1 FROM revenue_uploads WHERE store_id = $1 AND source_type IN ('synthetic_seed', 'm6_synthetic_demo_seed') LIMIT 1", [store.store_id]);
     if (exists.rows[0]) return;
-    const dailyRows = buildSyntheticDailyRows();
+    const dailyRows = profile?.revenue_daily_rows ?? buildSyntheticDailyRows();
     const itemRows = buildSyntheticItemRows(dailyRows);
     const upload = await client.query(
       `
@@ -364,7 +382,7 @@ function createAuroraRevenueOpsSaasStore({
           store_id, uploaded_by, source_type, original_filename, file_type,
           status, row_count, accepted_count, rejected_count, metadata
         )
-        VALUES ($1, $2, 'synthetic_seed', 'seongsu_cafe_daily_revenue.csv', 'csv',
+        VALUES ($1, $2, 'm6_synthetic_demo_seed', $5, 'json',
           'accepted', $3, $3, 0, $4::jsonb)
         RETURNING upload_id
       `,
@@ -372,7 +390,13 @@ function createAuroraRevenueOpsSaasStore({
         store.store_id,
         appUserId,
         dailyRows.length + itemRows.length,
-        JSON.stringify({ synthetic_notice: "Not real individual store revenue." }),
+        JSON.stringify({
+          is_demo: true,
+          demo_scenario: profile?.demo_scenario ?? "seongsu_cafe_seed",
+          generated_for: "m6_presentation",
+          synthetic_notice: "Not real individual store revenue.",
+        }),
+        profile ? `${profile.demo_scenario}.json` : "synthetic_daily_revenue.json",
       ],
     );
     const uploadId = upload.rows[0].upload_id;
@@ -595,6 +619,8 @@ function createAuroraRevenueOpsSaasStore({
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`cause-actions:${storeId}`]);
     const store = await getStoreWithClient(client, storeId);
     if (!store) return [];
+    const hasRevenueFacts = await client.query("SELECT 1 FROM revenue_daily_facts WHERE store_id = $1 LIMIT 1", [storeId]);
+    if (!hasRevenueFacts.rows[0]) return [];
     const existingAny = await client.query("SELECT 1 FROM cause_candidates WHERE store_id = $1 LIMIT 1", [storeId]);
     if (store.store_type === "demo" && existingAny.rows[0]) {
       return selectCauseCandidatesWithClient(client, storeId);
@@ -1005,12 +1031,15 @@ function createAuroraRevenueOpsSaasStore({
   }
 
   async function getBriefsForStore(storeId) {
-    await ensureActionPlannerItemsForStore(storeId);
     const store = await getStore(storeId);
     const latest = await query(
       "SELECT max(business_date) AS latest_date, count(*)::int AS day_count FROM revenue_daily_facts WHERE store_id = $1",
       [storeId],
     );
+    if (Number(latest.rows[0]?.day_count ?? 0) === 0) {
+      return [];
+    }
+    await ensureActionPlannerItemsForStore(storeId);
     const freshness = latest.rows[0]?.latest_date ? 0.92 : 0.5;
     return (data.briefs ?? []).slice(0, 1).map((brief) => ({
       ...brief,
@@ -1041,6 +1070,9 @@ function createAuroraRevenueOpsSaasStore({
       [storeId],
     );
     const row = result.rows[0] ?? {};
+    if (Number(row.day_count ?? 0) === 0) {
+      return [];
+    }
     const delta = row.avg_net_sales && row.min_net_sales
       ? Math.round(((Number(row.min_net_sales) - Number(row.avg_net_sales)) / Number(row.avg_net_sales)) * 10000) / 100
       : 0;
@@ -1051,7 +1083,7 @@ function createAuroraRevenueOpsSaasStore({
       service_category_name: store?.business_category ?? "merchant",
       metric: "revenue_amount",
       baseline_period: "uploaded revenue facts",
-      compare_period: "lowest observed day",
+      compare_period: "observed minimum day",
       baseline_value: Number(row.avg_net_sales ?? 0),
       actual_value: Number(row.min_net_sales ?? 0),
       delta_pct: delta,
@@ -1500,6 +1532,7 @@ function createAuroraRevenueOpsSaasStore({
       .sort((left, right) => String(right.collected_at).localeCompare(String(left.collected_at)))[0] ?? null;
     return {
       store_id: storeId,
+      store_name: (await getStore(storeId))?.store_name ?? null,
       latest_revenue_upload: latestUpload,
       latest_context_observation: latestContext,
       latest_public_benchmark_period: latestBenchmark ? {
