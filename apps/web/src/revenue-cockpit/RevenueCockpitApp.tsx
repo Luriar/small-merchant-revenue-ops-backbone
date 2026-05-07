@@ -298,9 +298,9 @@ function OnboardingBootstrapPanel({
   const isReady      = status.phase === 'ready';
 
   const title = isCollecting
-    ? (lang === 'ko' ? '초기 맥락데이터를 수집하고 있습니다.' : 'Collecting initial context data.')
+    ? (lang === 'ko' ? '맥락 수집 중...' : 'Collecting context...')
     : isPartial
-      ? (lang === 'ko' ? '일부 맥락데이터 갱신이 지연되었습니다.' : 'Some context collection is delayed.')
+      ? (lang === 'ko' ? '맥락 수집 지연 · 재시도 가능' : 'Context collection delayed · retry available')
       : isReady
         ? (lang === 'ko' ? '초기 맥락데이터 수집이 완료되었습니다.' : 'Initial context collection is complete.')
         : (lang === 'ko' ? '맥락데이터 수집이 준비되지 않았습니다.' : 'Context collection is not ready.');
@@ -836,7 +836,7 @@ export function RevenueCockpitApp() {
     }
 
     setStoreLoading(true);
-    setStoreNotice(lang === 'ko' ? '가게 목록을 불러오는 중입니다.' : 'Loading stores.');
+    setStoreNotice(lang === 'ko' ? '가게 목록 불러오는 중' : 'Loading stores');
 
     apiFetchStores()
       .then(envelope => {
@@ -923,7 +923,7 @@ export function RevenueCockpitApp() {
       skipped: 0,
       timedOut: 0,
     });
-    setStoreNotice(lang === 'ko' ? '초기 맥락데이터를 수집하고 있습니다.' : 'Collecting initial context data.');
+    setStoreNotice(lang === 'ko' ? '맥락 수집 중...' : 'Collecting context...');
     apiCollectStoreContext(storeId, { mode: hint?.mode || 'live', reason })
       .then(envelope => {
         const summary = isRecord(envelope.summary) ? envelope.summary : {};
@@ -939,11 +939,12 @@ export function RevenueCockpitApp() {
           skipped: Number(summary.skipped_collector_count ?? collectors.filter(c => c.status === 'skipped').length) || 0,
           timedOut,
         });
+          setStoreNotice(failed > 0 || timedOut > 0 ? (lang === 'ko' ? '맥락 수집 지연 · 재시도 가능' : 'Context collection delayed · retry available') : (lang === 'ko' ? '최근 맥락 갱신 완료 · 실패 0' : 'Context refreshed · 0 failures'));
         pollPipelineMetaForBootstrap(storeId);
       })
       .catch(() => {
         setBootstrapStatus(prev => prev ? { ...prev, phase: 'partial', message: 'context_collect_failed' } : prev);
-        setStoreNotice(lang === 'ko' ? '일부 맥락데이터 수집이 지연되었습니다.' : 'Some context collection is delayed.');
+        setStoreNotice(lang === 'ko' ? '맥락 수집 지연 · 재시도 가능' : 'Context collection delayed · retry available');
       });
   }
 
@@ -1113,7 +1114,7 @@ export function RevenueCockpitApp() {
         setShowCreateStore(false);
         setShowRevenueUpload(false);
         if (envelope.context_bootstrap_hint?.recommended) {
-          setStoreNotice(lang === 'ko' ? '가게 등록 완료 · 초기 맥락데이터를 수집하고 있습니다.' : 'Store created · collecting initial context data.');
+          setStoreNotice(lang === 'ko' ? '가게 등록 완료 · 맥락 수집 중...' : 'Store created · collecting context...');
           startContextCollection(created.store_id, envelope.context_bootstrap_hint);
         } else {
           setBootstrapStatus({

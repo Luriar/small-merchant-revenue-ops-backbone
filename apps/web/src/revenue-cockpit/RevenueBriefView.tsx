@@ -160,10 +160,35 @@ function ShortlistRow({ a, lang, state, setState }: { a: RcAction; lang: RcLang;
 // ─── reliability compact (right rail bottom) ──────────────────────────────────
 
 function ReliabilityCompact({ lang, scenario, onOpen }: { lang: RcLang; scenario: Scenario; onOpen: () => void }) {
-  const healthyCollectorCount = scenario.reliability.sources.filter(source => source.status === 'ok').length;
+  const publicContextCollectorIds = new Set([
+    'kakao_geocoding',
+    'kma_weather',
+    'seoul_commercial_benchmark',
+    'seoul_foot_traffic_proxy',
+    'seoul_store_density_proxy',
+    'naver_local_competitor_search',
+    'naver_search_trend',
+    'korean_holiday_calendar',
+  ]);
+  const connectorFoundationCollectorIds = new Set([
+    'toss_place_connector_smoke',
+    'delivery_provider_connector_smoke',
+  ]);
+  const publicSources = scenario.reliability.sources.filter(source => publicContextCollectorIds.has(source.id));
+  const publicScope = publicSources.length > 0
+    ? publicSources
+    : scenario.reliability.sources.filter(source => !connectorFoundationCollectorIds.has(source.id));
+  const publicOk = publicScope.filter(source => source.status === 'ok').length;
+  const connectorWaiting = scenario.reliability.sources
+    .filter(source => connectorFoundationCollectorIds.has(source.id) && source.status === 'skipped')
+    .length;
+  const failures = Math.max(
+    scenario.reliability.failures,
+    scenario.reliability.sources.filter(source => source.status === 'failed').length,
+  );
   const summary = lang === 'ko'
-    ? `${healthyCollectorCount}개 맥락데이터 정상 · 최근 실행 실패 ${scenario.reliability.failures}`
-    : `${healthyCollectorCount} sources OK · ${scenario.reliability.failures} failures`;
+    ? `공개 맥락 ${publicOk}/${publicScope.length} 정상 · 외부 연동 ${connectorWaiting}개 대기 · 실패 ${failures}`
+    : `Public context ${publicOk}/${publicScope.length} OK · ${connectorWaiting} waiting · ${failures} failures`;
   return (
     <button onClick={onOpen} className="rc-card" style={{
       all: 'unset', cursor: 'pointer', display: 'block', boxSizing: 'border-box',

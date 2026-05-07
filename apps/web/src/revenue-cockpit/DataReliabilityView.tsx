@@ -4,33 +4,70 @@ import type { RcLang, Scenario } from './revenueCockpitTypes';
 
 interface DataReliabilityViewProps { lang: RcLang; scenario?: Scenario }
 
+const PUBLIC_CONTEXT_COLLECTOR_IDS = new Set([
+  'kakao_geocoding',
+  'kma_weather',
+  'seoul_commercial_benchmark',
+  'seoul_foot_traffic_proxy',
+  'seoul_store_density_proxy',
+  'naver_local_competitor_search',
+  'naver_search_trend',
+  'korean_holiday_calendar',
+]);
+
+const CONNECTOR_FOUNDATION_COLLECTOR_IDS = new Set([
+  'toss_place_connector_smoke',
+  'delivery_provider_connector_smoke',
+]);
+
+function summarizeReliability(rel: Scenario['reliability']) {
+  const publicSources = rel.sources.filter(source => PUBLIC_CONTEXT_COLLECTOR_IDS.has(source.id));
+  const connectorSources = rel.sources.filter(source => CONNECTOR_FOUNDATION_COLLECTOR_IDS.has(source.id));
+  const publicScope = publicSources.length > 0
+    ? publicSources
+    : rel.sources.filter(source => !CONNECTOR_FOUNDATION_COLLECTOR_IDS.has(source.id));
+
+  const publicOk = publicScope.filter(source => source.status === 'ok').length;
+  const publicTotal = publicScope.length;
+  const connectorWaiting = connectorSources.filter(source => source.status === 'skipped').length;
+  const actualFailures = Math.max(rel.failures, rel.sources.filter(source => source.status === 'failed').length);
+
+  return { publicOk, publicTotal, connectorWaiting, actualFailures };
+}
+
 export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabilityViewProps) {
   const rel = scenario.reliability;
-  const partial = rel.failures > 0 || rel.sources.some(source => source.status === 'failed' || source.status === 'partial');
-  const healthyCollectorCount = rel.sources.filter(source => source.status === 'ok').length;
-  const latestRunCopy = lang === 'ko' && rel.failures === 0 && healthyCollectorCount > 0
-    ? `${healthyCollectorCount}개 맥락데이터 정상 수집 · 최근 실행 실패 없음`
-    : lang === 'ko'
-      ? `최근 ${rel.runs}회 실행 · 실패 ${rel.failures}`
-      : `Last ${rel.runs} runs · ${rel.failures} failures`;
+  const summary = summarizeReliability(rel);
+  const partial = summary.actualFailures > 0 || summary.publicOk < summary.publicTotal;
+  const latestRunCopy = lang === 'ko'
+    ? `공개 맥락 ${summary.publicOk}/${summary.publicTotal} 정상 · 외부 연동 ${summary.connectorWaiting}개 대기 · 실패 ${summary.actualFailures}`
+    : `Public context ${summary.publicOk}/${summary.publicTotal} OK · ${summary.connectorWaiting} connectors waiting · ${summary.actualFailures} failures`;
 
   const trustCards = [
     {
       icon: partial ? 'shield' : 'check', tone: partial ? 'warm' : 'good',
-      title: lang === 'ko' ? `${rel.sources.length}개 수집기 상태 확인` : `${rel.sources.length} collectors checked`,
-      body:  partial
-        ? (lang === 'ko' ? '일부 맥락데이터 수집이 지연되었습니다.' : 'Some context collection is delayed.')
-        : (lang === 'ko' ? '최근 수집 결과가 정상 범위입니다.' : 'Latest collection is in a healthy range.'),
+      title: lang === 'ko'
+        ? `공개 맥락 데이터 ${summary.publicOk}/${summary.publicTotal} 정상`
+        : `Public context ${summary.publicOk}/${summary.publicTotal} OK`,
+      body:  summary.publicOk === summary.publicTotal
+        ? (lang === 'ko' ? '날씨·상권·유동인구·검색·공휴일 맥락이 정상 수집되었습니다.' : 'Weather, trade-area, foot-traffic, search, and holiday context were collected.')
+        : (lang === 'ko' ? '일부 공개 맥락 수집 결과가 비어 있습니다. 실패와는 구분해 표시합니다.' : 'Some public context is unavailable. This is shown separately from failures.'),
     },
     {
-      icon: 'spark2', tone: partial ? 'warm' : 'good',
-      title: lang === 'ko' ? latestRunCopy : `Latest run · ${rel.failures} failures`,
-      body:  lang === 'ko' ? '현재 수집된 데이터만으로 초기 분석을 시작할 수 있습니다.' : 'The current data is enough to start an initial analysis.',
+      icon: 'spark2', tone: 'warm',
+      title: lang === 'ko'
+        ? `외부 연동 ${summary.connectorWaiting}개 연동 대기`
+        : `${summary.connectorWaiting} connectors waiting`,
+      body:  lang === 'ko'
+        ? 'Toss Place와 배달앱 연동은 자격 정보가 연결되기 전까지 대기 상태로 봅니다.'
+        : 'Toss Place and delivery provider connectors wait until credentials are configured.',
     },
     {
-      icon: 'shield', tone: 'warm',
-      title: lang === 'ko' ? '추정치임을 잊지 마세요' : 'Remember — estimates',
-      body:  lang === 'ko' ? '상권/업종 단위 추정이며, 우리 매장 매출 자체가 아닙니다.' : "Trade-area estimates, not your store's direct sales.",
+      icon: summary.actualFailures > 0 ? 'shield' : 'check', tone: summary.actualFailures > 0 ? 'warm' : 'good',
+      title: lang === 'ko' ? `최근 실행 실패 ${summary.actualFailures}건` : `${summary.actualFailures} recent failures`,
+      body:  summary.actualFailures > 0
+        ? (lang === 'ko' ? '실패한 수집기가 있어 세부 사유 확인이 필요합니다.' : 'One or more collectors failed and need review.')
+        : (lang === 'ko' ? '최근 live 수집 실행에서 실패한 수집기는 없습니다.' : 'The latest live collection has no failed collectors.'),
     },
   ];
 
@@ -158,16 +195,19 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
 
 function formatSourceStatus(status: string, reason: string | null | undefined, lang: RcLang): string {
   if (status === 'ok') return lang === 'ko' ? '정상' : 'OK';
-  if (status === 'failed') return lang === 'ko' ? '지연' : 'Delayed';
+  if (status === 'failed') return lang === 'ko' ? '실패' : 'Failed';
   if (status === 'skipped') {
     const reasonText = reason ?? '';
+    if (reasonText.includes('no_weather_items')) {
+      return lang === 'ko' ? '관측 없음' : 'No observation';
+    }
     if (reasonText.includes('secret') || reasonText.includes('credential')) {
       return lang === 'ko' ? '연동 대기' : 'Waiting';
     }
     if (reasonText.includes('permission')) {
       return lang === 'ko' ? '권한 필요' : 'Permission needed';
     }
-    return lang === 'ko' ? '설정 필요' : 'Setup needed';
+    return lang === 'ko' ? '대기' : 'Waiting';
   }
   return lang === 'ko' ? '부분' : 'Partial';
 }

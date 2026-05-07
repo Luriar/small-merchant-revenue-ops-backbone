@@ -127,7 +127,21 @@ function buildCauses(brief: ApiRecord | undefined, anomalies: ApiRecord[]): Caus
   const source = candidates.length > 0 ? candidates : anomalies.slice(0, 4);
   if (source.length === 0) return SCENARIO.causes;
 
-  return source.slice(0, 4).map((item, index) => inferCause(item, index, SCENARIO.causes[index] ?? SCENARIO.causes[0]));
+  const seen = new Set<string>();
+  const deduped: CauseCandidate[] = [];
+
+  source.forEach((item, index) => {
+    const cause = inferCause(item, index, SCENARIO.causes[index] ?? SCENARIO.causes[0]);
+    const key = cause.id.startsWith('context')
+      ? `${cause.title.ko}:${cause.headline.ko}`
+      : cause.id;
+
+    if (seen.has(key)) return;
+    seen.add(key);
+    deduped.push(cause);
+  });
+
+  return deduped.length > 0 ? deduped.slice(0, 4) : SCENARIO.causes;
 }
 
 function buildActions(actions: ApiRecord[], causes: CauseCandidate[]): RcAction[] {

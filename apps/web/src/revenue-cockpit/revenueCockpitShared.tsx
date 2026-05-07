@@ -290,9 +290,10 @@ export function ChromeBar({ lang, setLang, theme, setTheme, label, authEmail, on
       {(authEmail || onLogin) && (
         <div style={{
           display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
-          padding: '3px 8px 3px 6px', borderRadius: 999,
+          minHeight: 26, boxSizing: 'border-box',
+          padding: '2px 8px 2px 6px', borderRadius: 999,
           border: '1px solid var(--rc-rule)', background: 'var(--rc-surface-0)',
-          fontSize: 11.5,
+          fontSize: 11.5, lineHeight: 1,
         }}>
           {authEmail ? (
             <>
@@ -310,9 +311,9 @@ export function ChromeBar({ lang, setLang, theme, setTheme, label, authEmail, on
               {onLogout && (
                 <button onClick={onLogout} style={{
                   all: 'unset', cursor: 'pointer', fontSize: 10.5, fontWeight: 500,
-                  color: 'var(--rc-fg-dim)', padding: '1px 5px', borderRadius: 4,
+                  color: 'var(--rc-fg-dim)', height: 18, padding: '0 6px', borderRadius: 4,
                   border: '1px solid var(--rc-rule)', background: 'var(--rc-surface-1)',
-                  marginLeft: 2,
+                  marginLeft: 2, display: 'inline-flex', alignItems: 'center', lineHeight: 1,
                 }}>
                   {lang === 'ko' ? '로그아웃' : 'Logout'}
                 </button>

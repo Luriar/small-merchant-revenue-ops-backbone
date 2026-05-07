@@ -33,10 +33,16 @@ aws s3 sync "${dist_dir}/" "s3://${bucket}/releases/${release_id}/" \
   --delete \
   --region "${region}"
 
-aws s3 sync "s3://${bucket}/releases/${release_id}/" "s3://${bucket}/" \
+aws s3 sync "${dist_dir}/" "s3://${bucket}/" \
   --delete \
   --exclude "releases/*" \
   --region "${region}"
+
+aws s3api head-object \
+  --bucket "${bucket}" \
+  --key "index.html" \
+  --region "${region}" \
+  >/dev/null
 
 invalidation_id="$(aws cloudfront create-invalidation \
   --distribution-id "${distribution_id}" \
