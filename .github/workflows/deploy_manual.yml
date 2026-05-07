@@ -77,6 +77,17 @@ jobs:
           role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Validate manual deploy mode
+        run: |
+          if [ "${{ inputs.deploy_backend }}" = "true" ] && [ "${{ inputs.run_canary_probe }}" = "true" ]; then
+            echo "run_canary_probe creates its own CodeDeploy deployment. Run it separately from deploy_backend to avoid overlapping deployments." >&2
+            exit 1
+          fi
+          if [ "${{ inputs.run_canary_probe }}" = "true" ] && { [ -z "${API_BASE}" ] || [ -z "${SMOKE_ID_TOKEN}" ]; }; then
+            echo "API_BASE and REVENUE_OS_SMOKE_ID_TOKEN are required for standalone M7 canary probe." >&2
+            exit 1
+          fi
+
       - name: Install dependencies
         run: |
           npm ci
@@ -129,18 +140,6 @@ jobs:
             --region "${AWS_REGION}" \
             --api-base "${API_BASE}" \
             --id-token "${SMOKE_ID_TOKEN}"
-
-      - name: Validate standalone M7 canary probe mode
-        if: inputs.run_canary_probe
-        run: |
-          if [ "${{ inputs.deploy_backend }}" = "true" ]; then
-            echo "run_canary_probe creates its own CodeDeploy deployment. Run it separately from deploy_backend to avoid overlapping deployments." >&2
-            exit 1
-          fi
-          if [ -z "${API_BASE}" ] || [ -z "${SMOKE_ID_TOKEN}" ]; then
-            echo "API_BASE and REVENUE_OS_SMOKE_ID_TOKEN are required for standalone M7 canary probe." >&2
-            exit 1
-          fi
 
       - name: Run standalone M7 CodeDeploy canary probe
         if: inputs.run_canary_probe
