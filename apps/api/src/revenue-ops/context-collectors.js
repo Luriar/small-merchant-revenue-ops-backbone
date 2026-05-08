@@ -1479,20 +1479,105 @@ function buildNaverLocalQuery(store = {}) {
 }
 
 function buildNaverSearchTrendKeywords(store = {}) {
-  const category = textValue(store.business_category);
-  const region = textValue(store.region) || regionFromAddress(store.address_text);
   const metadata = store.metadata && typeof store.metadata === "object" && !Array.isArray(store.metadata) ? store.metadata : {};
+  const rawCategory = textValue(store.business_category);
+  const categoryLabel = textValue(metadata.business_category_label)
+    || textValue(metadata.business_category_label_ko)
+    || humanizeBusinessCategory(rawCategory);
+  const category = normalizeSearchCategory(categoryLabel || rawCategory);
+  const region = textValue(store.region) || regionFromAddress(store.address_text);
+  const regionParts = splitKoreanRegion(region);
+  const storeName = normalizeStoreSearchName(textValue(store.store_name));
   const menuKeywords = Array.isArray(metadata.representative_menu_keywords)
     ? metadata.representative_menu_keywords.map(textValue).filter(Boolean)
     : [];
+
   const keywords = [];
+
+  if (storeName) keywords.push(storeName);
+  if (regionParts.dong && category) keywords.push(`${regionParts.dong} ${category}`);
+  if (regionParts.gu && category) keywords.push(`${regionParts.gu} ${category}`);
   if (region && category) keywords.push(`${region} ${category}`);
-  keywords.push(...menuKeywords);
-  if (/cafe|coffee|카페|커피/i.test(category)) {
-    keywords.push("성수 카페", "디저트 카페", "소금빵", "커피");
+
+  if (regionParts.dong) {
+    keywords.push(`${regionParts.dong} 맛집`);
+    if (/양식|western|파스타|이탈리/i.test(categoryLabel || rawCategory)) {
+      keywords.push(`${regionParts.dong} 양식`, `${regionParts.dong} 파스타`, `${regionParts.dong} 레스토랑`);
+    }
+    if (/카페|커피|cafe|coffee/i.test(categoryLabel || rawCategory)) {
+      keywords.push(`${regionParts.dong} 카페`, `${regionParts.dong} 디저트`, `${regionParts.dong} 커피`);
+    }
+    if (/한식|korean/i.test(categoryLabel || rawCategory)) {
+      keywords.push(`${regionParts.dong} 한식`, `${regionParts.dong} 밥집`);
+    }
+    if (/중식|chinese/i.test(categoryLabel || rawCategory)) {
+      keywords.push(`${regionParts.dong} 중식`, `${regionParts.dong} 중국집`);
+    }
+    if (/치킨/i.test(categoryLabel || rawCategory)) {
+      keywords.push(`${regionParts.dong} 치킨`, `${regionParts.dong} 배달`);
+    }
   }
+
+  keywords.push(...menuKeywords);
+
   if (category) keywords.push(category);
-  return [...new Set(keywords.map((keyword) => keyword.trim()).filter(Boolean))].slice(0, 20);
+
+  return [...new Set(
+    keywords
+      .map((keyword) => keyword.replace(/음식점/g, "").replace(/점$/g, "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .filter((keyword) => !/^CS\d+$/i.test(keyword))
+  )].slice(0, 20);
+}
+
+function humanizeBusinessCategory(category) {
+  const value = textValue(category);
+  const map = {
+    CS100001: "한식",
+    CS100002: "중식",
+    CS100003: "일식",
+    CS100004: "양식",
+    CS100005: "제과점",
+    CS100006: "패스트푸드",
+    CS100007: "치킨",
+    CS100008: "분식",
+    CS100009: "호프",
+    CS100010: "커피",
+  };
+  return map[value] || value;
+}
+
+function normalizeSearchCategory(category) {
+  const value = textValue(category)
+    .replace(/음식점/g, "")
+    .replace(/전문점/g, "")
+    .replace(/점$/g, "")
+    .trim();
+
+  if (/양식|western/i.test(value)) return "양식";
+  if (/카페|커피|cafe|coffee/i.test(value)) return "카페";
+  if (/한식|korean/i.test(value)) return "한식";
+  if (/중식|chinese/i.test(value)) return "중식";
+  if (/일식|japanese/i.test(value)) return "일식";
+  if (/분식/i.test(value)) return "분식";
+  if (/치킨/i.test(value)) return "치킨";
+  return value;
+}
+
+function splitKoreanRegion(region) {
+  const parts = textValue(region).split(/\s+/).filter(Boolean);
+  return {
+    sido: parts.find((part) => /시$|도$|서울|경기|부산|대구|인천|광주|대전|울산|세종/.test(part)) || parts[0] || "",
+    gu: parts.find((part) => /구$|군$|시$/.test(part) && !/특별시$|광역시$/.test(part)) || "",
+    dong: parts.find((part) => /동$|가$|로$|읍$|면$/.test(part)) || "",
+  };
+}
+
+function normalizeStoreSearchName(name) {
+  return textValue(name)
+    .replace(/\s+Tenant$/i, "")
+    .replace(/\s*매장$/g, "")
+    .trim();
 }
 
 function normalizeNaverLocalItem(item = {}) {
