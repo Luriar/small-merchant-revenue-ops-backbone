@@ -125,7 +125,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       .filter((member) => member.app_user_id === appUserId && member.status === "active")
       .map((member) => {
         const store = state.stores.get(member.store_id);
-        if (!store || store.status !== "active") {
+        if (!store || store.status !== "active" || store.status === "archived") {
           return null;
         }
         const tenant = state.tenants.get(store.tenant_id);
@@ -142,7 +142,34 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
 
   function createStoreForUser(appUserId, payload = {}) {
     const storeName = text(payload.store_name);
-    if (!storeName) {
+    const businessCategory = text(payload.business_category);
+    const addressText = text(payload.address_text);
+    const isDemoTenant = text(payload.tenant_type) === "demo" || text(payload.store_type) === "demo";
+    const metadata = safeObject(payload.metadata);
+    const addressSource = text(metadata.address_source) || text(payload.address_source);
+    const addressSelected = metadata.address_selected === true
+      || payload.address_selected === true
+      || addressSource === "postcode_search"
+      || addressSource === "search";
+
+    // Required-field validation. Demo seeds bypass via tenant_type/store_type=demo.
+    if (!isDemoTenant) {
+      const missing = [];
+      if (!storeName) missing.push("store_name");
+      if (!businessCategory) missing.push("business_category");
+      if (!addressText) missing.push("address_text");
+      if (addressText && !addressSelected) missing.push("address_selected");
+
+      if (missing.length > 0) {
+        const err = new Error(
+          "가게 이름, 업종, 주소는 필수입니다. 주소는 주소 검색을 통해 선택해 주세요."
+        );
+        err.code = "INVALID_STORE_INPUT";
+        err.statusCode = 400;
+        err.details = { missing };
+        throw err;
+      }
+    } else if (!storeName) {
       const err = new Error("store_name is required");
       err.code = "invalid_body";
       throw err;
@@ -163,12 +190,16 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       tenant_id: tenant.tenant_id,
       store_name: storeName,
       store_type: text(payload.store_type) || "single_store",
-      business_category: text(payload.business_category) || null,
+      business_category: businessCategory || null,
       region: text(payload.region) || null,
-      address_text: text(payload.address_text) || null,
+      address_text: addressText || null,
       timezone: text(payload.timezone) || "Asia/Seoul",
       status: "active",
-      metadata: safeObject(payload.metadata),
+      metadata: {
+        ...metadata,
+        ...(addressSource ? { address_source: addressSource } : {}),
+        ...(addressSelected ? { address_selected: true } : {}),
+      },
       created_by: appUserId,
       created_at: timestamp,
       updated_at: timestamp,
@@ -200,6 +231,114 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       tenant_name: tenant.tenant_name,
       tenant_type: tenant.tenant_type,
     });
+  }
+
+  function updateStoreForUser(appUserId, storeId, payload = {}) {
+    const member = requireStoreAccess(appUserId, storeId, "owner");
+    if (!member) {
+      const err = new Error("Store access is required");
+      err.code = "forbidden";
+      err.statusCode = 403;
+      throw err;
+    }
+    const store = state.stores.get(storeId);
+    if (!store || store.status === "archived") {
+      const err = new Error("Store not found");
+      err.code = "not_found";
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const timestamp = nowIso();
+    const next = { ...store };
+    if (Object.prototype.hasOwnProperty.call(payload, "store_name")) {
+      const value = text(payload.store_name);
+      if (!value) {
+        const err = new Error("store_name cannot be empty");
+        err.code = "INVALID_STORE_INPUT";
+        err.statusCode = 400;
+        throw err;
+      }
+      next.store_name = value;
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, "business_category")) {
+      const value = text(payload.business_category);
+      if (!value) {
+        const err = new Error("business_category cannot be empty");
+        err.code = "INVALID_STORE_INPUT";
+        err.statusCode = 400;
+        throw err;
+      }
+      next.business_category = value;
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, "address_text")) {
+      const value = text(payload.address_text);
+      const incomingMeta = safeObject(payload.metadata);
+      const addressSource = text(incomingMeta.address_source) || text(payload.address_source);
+      const addressSelected = incomingMeta.address_selected === true
+        || payload.address_selected === true
+        || addressSource === "postcode_search"
+        || addressSource === "search";
+      if (!value || !addressSelected) {
+        const err = new Error("주소는 주소 검색을 통해 선택해 주세요.");
+        err.code = "INVALID_STORE_INPUT";
+        err.statusCode = 400;
+        throw err;
+      }
+      next.address_text = value;
+      next.metadata = {
+        ...safeObject(next.metadata),
+        ...incomingMeta,
+        address_source: addressSource,
+        address_selected: true,
+      };
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, "region")) {
+      next.region = text(payload.region) || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, "metadata") && payload.address_text === undefined) {
+      next.metadata = { ...safeObject(next.metadata), ...safeObject(payload.metadata) };
+    }
+    next.updated_at = timestamp;
+    state.stores.set(storeId, next);
+    const tenant = state.tenants.get(next.tenant_id);
+    return clone({
+      ...next,
+      member_role: member.role,
+      tenant_name: tenant?.tenant_name ?? null,
+      tenant_type: tenant?.tenant_type ?? null,
+    });
+  }
+
+  function archiveStoreForUser(appUserId, storeId) {
+    const member = requireStoreAccess(appUserId, storeId, "owner");
+    if (!member) {
+      const err = new Error("Store access is required");
+      err.code = "forbidden";
+      err.statusCode = 403;
+      throw err;
+    }
+    const store = state.stores.get(storeId);
+    if (!store) {
+      const err = new Error("Store not found");
+      err.code = "not_found";
+      err.statusCode = 404;
+      throw err;
+    }
+    const timestamp = nowIso();
+    state.stores.set(storeId, {
+      ...store,
+      status: "archived",
+      updated_at: timestamp,
+    });
+    // Soft-archive store membership entries so the store hides from default lists.
+    for (const m of state.storeMembers) {
+      if (m.store_id === storeId && m.app_user_id === appUserId) {
+        m.status = "archived";
+        m.updated_at = timestamp;
+      }
+    }
+    return { store_id: storeId, status: "archived", archived_at: timestamp };
   }
 
   function seedDemoStoreForUser(appUserId) {
@@ -520,7 +659,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
   }
 
   function seedCauseActionLoop(storeId, timestamp) {
-    if (state.causeCandidates.some((row) => row.store_id === storeId)) {
+    if (state.causeCandidates.some((row) => row.store_id === storeId && row.status !== "superseded")) {
       return;
     }
 
@@ -690,14 +829,14 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     if (!state.dailyFacts.some((row) => row.store_id === storeId)) {
       return [];
     }
-    if (!state.causeCandidates.some((row) => row.store_id === storeId)) {
+    if (!state.causeCandidates.some((row) => row.store_id === storeId && row.status !== "superseded")) {
       seedCauseActionLoop(storeId, timestamp);
     }
     return clone(state.causeCandidates
-      .filter((row) => row.store_id === storeId)
+      .filter((row) => row.store_id === storeId && row.status !== "superseded")
       .map((candidate) => ({
         ...candidate,
-        evidence: state.causeEvidence.filter((row) => row.cause_candidate_id === candidate.cause_candidate_id),
+        evidence: filterEvidenceForQuality(state.causeEvidence.filter((row) => row.cause_candidate_id === candidate.cause_candidate_id)),
       })));
   }
 
@@ -772,12 +911,70 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     if (isDemoStoreRecord(store)) {
       seedStoreContent(storeId);
     }
-    if (!state.dailyFacts.some((row) => row.store_id === storeId)) {
+    const facts = state.dailyFacts.filter((row) => row.store_id === storeId);
+    if (facts.length === 0) {
       return [];
     }
     ensureActionPlannerItemsForStore(storeId);
+
+    // For real stores with an accepted upload, compose the brief from latest
+    // facts so /briefs reflects the uploaded period instead of the seed
+    // brief's "2024Q4" placeholder.
+    const latestUpload = latestBy(state.uploads.filter((row) => row.store_id === storeId), "created_at");
+    const isRealUpload = latestUpload && latestUpload.source_type !== "m6_synthetic_demo_seed";
+    if (isRealUpload || !isDemoStoreRecord(store)) {
+      return [composeBriefFromFacts(storeId, store, facts, latestUpload)];
+    }
+
     const briefs = state.briefs.filter((brief) => brief.store_id === storeId);
-    return clone(briefs.length ? briefs : [buildBriefFromFacts(storeId)]);
+    if (!briefs.length) {
+      return [composeBriefFromFacts(storeId, store, facts, latestUpload)];
+    }
+    // Even the seeded brief gets dedupe + caution sanitizing.
+    return briefs.map((brief) => sanitizeBriefShape(brief, storeId));
+  }
+
+  function composeBriefFromFacts(storeId, store, facts, latestUpload) {
+    const causeCandidates = state.causeCandidates.filter((row) => row.store_id === storeId);
+    const causeEvidence = state.causeEvidence.filter((row) =>
+      causeCandidates.some((cand) => cand.cause_candidate_id === row.cause_candidate_id),
+    );
+    const actions = state.actions.filter((row) => row.store_id === storeId);
+    return composeBriefFromUploadedFacts({
+      storeId,
+      store,
+      facts,
+      causeCandidates,
+      causeEvidence,
+      actions,
+      latestUpload,
+    });
+  }
+
+  function sanitizeBriefShape(brief, storeId) {
+    const cloned = clone(brief);
+    cloned.summary = sanitizeCautionText(cloned.summary);
+    cloned.headline = sanitizeCautionText(cloned.headline);
+    cloned.reliability_note = sanitizeCautionText(cloned.reliability_note);
+    if (Array.isArray(cloned.top_cause_candidates)) {
+      cloned.top_cause_candidates = dedupeCauseCandidates(cloned.top_cause_candidates).map((candidate) => ({
+        ...candidate,
+        summary: sanitizeCautionText(candidate.summary),
+      }));
+    } else {
+      cloned.top_cause_candidates = [];
+    }
+    if (Array.isArray(cloned.recommended_actions)) {
+      cloned.recommended_actions = dedupeActionsByFamily(cloned.recommended_actions).map((action) => ({
+        ...action,
+        why_this_action: sanitizeCautionText(action.why_this_action),
+        risk_note: sanitizeCautionText(action.risk_note),
+      }));
+    } else {
+      cloned.recommended_actions = [];
+    }
+    cloned.store_id = storeId;
+    return cloned;
   }
 
   function getAnomaliesForStore(storeId) {
@@ -1076,7 +1273,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       },
     });
     if (upload.accepted_count > 0) {
-      ensureActionPlannerItemsForStore(storeId);
+      rebuildCauseAndActionsAfterUpload(storeId, upload, timestamp);
     }
 
     return clone({
@@ -1085,6 +1282,43 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       rejected_count: upload.rejected_count,
       rejected_rows: state.rejectedRows.filter((row) => row.upload_id === upload.upload_id),
     });
+  }
+
+  function rebuildCauseAndActionsAfterUpload(storeId, upload, timestamp) {
+    // Supersede prior generated cause candidates whose latest source upload
+    // differs. The currently accepted upload becomes the active source.
+    const factsForUpload = state.dailyFacts.filter((row) => row.store_id === storeId && row.source_upload_id === upload.upload_id);
+    if (factsForUpload.length === 0) {
+      return;
+    }
+    const totalDays = state.dailyFacts.filter((row) => row.store_id === storeId).length;
+
+    // For 1-row uploads we don't generate new candidates — keep existing items
+    // but still mark prior generated candidates as superseded so the brief
+    // reflects insufficient_data state.
+    for (const candidate of state.causeCandidates) {
+      if (candidate.store_id !== storeId) continue;
+      if (candidate.created_from === "user_managed") continue;
+      candidate.status = "superseded";
+      candidate.superseded_at = timestamp;
+      candidate.updated_at = timestamp;
+    }
+    // Drop generated actions that are still in the default 'recommended' state.
+    // Preserve user-modified actions (selected/planned/done/dismissed).
+    const preserved = state.actions.filter((action) => action.store_id !== storeId
+      || action.status !== "recommended"
+      || action.status_updated_by);
+    state.actions.length = 0;
+    state.actions.push(...preserved);
+
+    if (totalDays >= 2) {
+      // Re-seed the cause/action loop with the latest facts as basis. The
+      // existing seedCauseActionLoop is no-op when candidates exist, so we
+      // call ensureActionPlannerItemsForStore which creates fresh items if
+      // none remain active.
+      seedCauseActionLoop(storeId, timestamp);
+      ensureActionPlannerItemsForStore(storeId);
+    }
   }
 
   function previewRevenueUpload(payload = {}) {
@@ -1388,6 +1622,8 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     requireStoreAccess,
     listStoresForUser,
     createStoreForUser,
+    updateStoreForUser,
+    archiveStoreForUser,
     getBriefsForStore,
     getAnomaliesForStore,
     getContextForStore,
@@ -1551,6 +1787,80 @@ function buildBriefFromFacts(storeId) {
     data_freshness: 1,
     generated_at: new Date().toISOString(),
   };
+}
+
+// ─── Brief / evidence quality helpers (M7 correctness) ──────────────────────
+
+function normalizeCopy(value) {
+  return typeof value === "string"
+    ? value.replace(/\s+/g, " ").replace(/\.{2,}/g, ".").trim().toLowerCase()
+    : "";
+}
+
+function sanitizeCautionText(value) {
+  if (typeof value !== "string") return value;
+  // Collapse repeated periods and de-duplicate the trailing
+  // "인과가 확정된 것은 아닙니다." sentence if it appears multiple times.
+  let cleaned = value.replace(/\.{2,}/g, ".").replace(/\s+/g, " ").trim();
+  const cautionKo = "인과가 확정된 것은 아닙니다";
+  const cautionEn = "this does not prove causality";
+  for (const phrase of [cautionKo, cautionEn]) {
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(${escaped}\\.?)([\\s.,]*\\1\\.?)+`, "gi");
+    cleaned = cleaned.replace(re, "$1");
+  }
+  return cleaned;
+}
+
+function looksMissingMetric(evidence) {
+  if (!evidence) return true;
+  const value = evidence.metric_value;
+  if (value === null || value === undefined) return true;
+  if (typeof value === "number" && !Number.isFinite(value)) return true;
+  return false;
+}
+
+function isZeroRainEvidence(evidence) {
+  if (!evidence) return false;
+  if (evidence.metric_name !== "rainfall_mm") return false;
+  return Number(evidence.metric_value) === 0;
+}
+
+// Drop cause-candidate evidence rows that fail quality gates.
+function filterEvidenceForQuality(evidenceRows = []) {
+  return evidenceRows.filter((row) => {
+    if (looksMissingMetric(row)) return false;
+    if (isZeroRainEvidence(row)) return false;
+    return true;
+  });
+}
+
+function dedupeCauseCandidates(candidates = []) {
+  const seen = new Map();
+  for (const candidate of candidates) {
+    const key = `${normalizeCopy(candidate.evidence_type ?? candidate.candidate_type ?? "")}::${normalizeCopy(candidate.summary ?? candidate.title ?? "")}`;
+    if (!seen.has(key)) seen.set(key, candidate);
+  }
+  return Array.from(seen.values());
+}
+
+function dedupeActionsByFamily(actions = []) {
+  const seen = new Map();
+  for (const action of actions) {
+    const key = `${normalizeCopy(action.action_type ?? action.action_family ?? "")}::${normalizeCopy(action.title ?? "")}`;
+    if (!seen.has(key)) {
+      seen.set(key, { ...action });
+    } else {
+      // Merge tied causes when duplicate action templates exist.
+      const existing = seen.get(key);
+      const tied = new Set([
+        ...(existing.tied_cause_candidate_ids ?? (existing.cause_candidate_id ? [existing.cause_candidate_id] : [])),
+        ...(action.tied_cause_candidate_ids ?? (action.cause_candidate_id ? [action.cause_candidate_id] : [])),
+      ]);
+      existing.tied_cause_candidate_ids = Array.from(tied);
+    }
+  }
+  return Array.from(seen.values());
 }
 
 function buildAnomaliesFromFacts(storeId) {
@@ -1748,4 +2058,103 @@ module.exports = {
   int,
   safeObject,
   clone,
+  // Brief-correctness helpers (shared by memory + Aurora paths).
+  sanitizeCautionText,
+  dedupeCauseCandidates,
+  dedupeActionsByFamily,
+  filterEvidenceForQuality,
+  composeBriefFromUploadedFacts,
 };
+
+// Standalone composer that the Aurora path can call after it has loaded
+// daily facts + cause candidates + evidence + actions for a store.
+function composeBriefFromUploadedFacts({
+  storeId,
+  store,
+  facts,
+  causeCandidates = [],
+  causeEvidence = [],
+  actions = [],
+  latestUpload = null,
+  insufficientThresholdDays = 2,
+}) {
+  const sortedFacts = [...(facts || [])].sort((a, b) => String(a.business_date).localeCompare(String(b.business_date)));
+  if (sortedFacts.length === 0) return null;
+  const startDate = String(sortedFacts[0].business_date);
+  const endDate = String(sortedFacts[sortedFacts.length - 1].business_date);
+  const periodLabel = `${startDate} ~ ${endDate}`;
+  const totalNet = sortedFacts.reduce((sum, row) => sum + Number(row.net_sales_amount || 0), 0);
+  const totalOrders = sortedFacts.reduce((sum, row) => sum + Number(row.order_count || 0), 0);
+  const avgDailyNet = sortedFacts.length ? Math.round(totalNet / sortedFacts.length) : 0;
+  const avgTicket = totalOrders > 0 ? Math.round(totalNet / totalOrders) : 0;
+  const insufficient = sortedFacts.length < insufficientThresholdDays;
+
+  const evidenceByCause = new Map();
+  for (const evi of causeEvidence) {
+    const key = evi.cause_candidate_id;
+    if (!evidenceByCause.has(key)) evidenceByCause.set(key, []);
+    evidenceByCause.get(key).push(evi);
+  }
+  const qualityCauses = (causeCandidates || [])
+    .filter((row) => row.status !== "superseded")
+    .map((candidate) => ({
+      ...candidate,
+      evidence: filterEvidenceForQuality(evidenceByCause.get(candidate.cause_candidate_id) || candidate.evidence || []),
+    }))
+    .filter((candidate) => Array.isArray(candidate.evidence) && candidate.evidence.length > 0);
+  const dedupedCauses = dedupeCauseCandidates(qualityCauses).map((candidate) => ({
+    ...candidate,
+    summary: sanitizeCautionText(candidate.summary),
+  }));
+
+  const dedupedActions = dedupeActionsByFamily(actions || []).map((action) => ({
+    ...action,
+    why_this_action: sanitizeCautionText(action.why_this_action),
+    risk_note: sanitizeCautionText(action.risk_note),
+    description: sanitizeCautionText(action.description),
+  }));
+
+  const dailySeries = sortedFacts.map((row) => ({
+    date: String(row.business_date),
+    net_sales: Number(row.net_sales_amount || 0),
+    order_count: Number(row.order_count || 0),
+  }));
+
+  const headline = insufficient
+    ? `${store?.store_name ?? "매장"}: 1일치 매출이 등록되었습니다. 추세 분석을 위해 비교 일자를 더 추가해 주세요.`
+    : `${store?.store_name ?? "매장"}: 업로드 매출과 공개 맥락 신호가 함께 관측되었습니다.`;
+  const summary = sanitizeCautionText(
+    insufficient
+      ? "짧은 기간 기준의 초기 분석입니다. 추가 일자가 등록되면 추세와 원인 후보가 갱신됩니다. " + RELIABILITY_NOTE_KO
+      : "업로드된 매출 데이터와 공개 맥락 데이터를 함께 관측한 결과입니다. 가능성 높은 원인 후보가 있으나 인과가 확정된 것은 아닙니다. 추가 확인이 필요합니다."
+  );
+
+  return {
+    brief_id: `brief_${storeId}_${endDate}`,
+    store_id: storeId,
+    store_name: store?.store_name ?? null,
+    trade_area_name: store?.region ?? null,
+    service_category_name: store?.business_category ?? null,
+    period_label: periodLabel,
+    period_start: startDate,
+    period_end: endDate,
+    headline,
+    summary,
+    reliability_note: RELIABILITY_NOTE_KO,
+    daily_series: dailySeries,
+    revenue_summary: {
+      net_sales_total: totalNet,
+      order_count_total: totalOrders,
+      avg_daily_net_sales: avgDailyNet,
+      avg_ticket: avgTicket,
+      days_in_period: sortedFacts.length,
+      latest_upload_id: latestUpload?.upload_id ?? null,
+      not_proven_causality: true,
+    },
+    top_cause_candidates: dedupedCauses.slice(0, 4),
+    recommended_actions: dedupedActions.slice(0, 6),
+    insufficient_data: insufficient,
+    data_freshness: 1,
+    generated_at: new Date().toISOString(),
+  };
+}

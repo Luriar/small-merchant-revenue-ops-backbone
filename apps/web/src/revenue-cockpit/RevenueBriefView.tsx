@@ -1,7 +1,30 @@
+import { useState } from 'react';
 import { SCENARIO, tr, fmtPct } from './revenueCockpitCopy';
 import { Icon, Pill, StrengthDots, Sparkline, StatePill, StateMenu, stateTone } from './revenueCockpitShared';
 import { RevenueTrendChart } from './RevenueTrendChart';
+import { resolveTrend, trendCopy, buildUpsideScenario } from './revenueTrendScenarios';
 import type { RcLang, RcScreen, ActionStatuses, ActionStatus, RcAction, CauseCandidate, Scenario } from './revenueCockpitTypes';
+
+type TrendWindow = '8Q' | '4Q' | 'YoY' | 'daily' | 'weekly' | 'monthly';
+
+interface UploadedDailyPoint {
+  date: string;
+  net_sales: number;
+  order_count?: number;
+}
+
+// Demo trend toggle (Auto/Down/Up) is hidden in production-facing UI. It only
+// surfaces when the bundle is built in dev AND the URL has demoControls=1.
+function shouldShowDemoTrendToggle(): boolean {
+  type DevImportMeta = ImportMeta & { env?: { DEV?: boolean } };
+  const isDev = Boolean((import.meta as DevImportMeta).env?.DEV);
+  if (!isDev) return false;
+  if (typeof window === 'undefined') return false;
+  const search = new URLSearchParams(window.location.search);
+  if (search.get('demoControls') === '1') return true;
+  const [, hashQuery = ''] = window.location.hash.split('?');
+  return new URLSearchParams(hashQuery).get('demoControls') === '1';
+}
 
 // ─── cause rail (compact row for right rail) ──────────────────────────────────
 
@@ -238,12 +261,45 @@ interface RevenueBriefViewProps {
 }
 
 export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, statuses, onSetStatus }: RevenueBriefViewProps) {
-  const thisWeekActions = scenario.actions.filter(a => a.timeframe === 'this-week');
-  const revenueDeltaUnavailable = Math.abs(scenario.revenueChange) < 0.05;
+  // Demo upside toggle: when running on the static SCENARIO and the user has
+  // not loaded API data yet, allow flipping to the upside scenario so the
+  // product surfaces a positive demo path. This is a pure client toggle.
+  const [demoTrend, setDemoTrend] = useState<'auto' | 'up' | 'down'>('auto');
+  const useUpsideDemo = demoTrend === 'up' && scenario === SCENARIO;
+  const useDownsideDemo = demoTrend === 'down' && scenario === SCENARIO;
+  const effectiveScenario = useUpsideDemo
+    ? buildUpsideScenario(scenario)
+    : useDownsideDemo
+      ? scenario
+      : scenario;
+
+  const uploadedSeries = effectiveScenario.uploadedDailySeries;
+  const isUploadedMode = Array.isArray(uploadedSeries) && uploadedSeries.length >= 2;
+  const [chartWindow, setChartWindow] = useState<TrendWindow>(isUploadedMode ? 'daily' : '8Q');
+  // When the chart mode flips between projection and uploaded modes, re-pin
+  // chartWindow to a value that exists in the active mode.
+  const validForUploaded: TrendWindow[] = ['daily', 'weekly', 'monthly'];
+  const validForProjection: TrendWindow[] = ['8Q', '4Q', 'YoY'];
+  const allowedWindows = isUploadedMode ? validForUploaded : validForProjection;
+  if (!allowedWindows.includes(chartWindow)) {
+    // Avoid setState during render; defer:
+    queueMicrotask(() => setChartWindow(allowedWindows[0]));
+  }
+  const trend = resolveTrend(effectiveScenario);
+  const tcopy = trendCopy(lang)[trend];
+
+  const thisWeekActions = effectiveScenario.actions.filter(a => a.timeframe === 'this-week');
+  const revenueDeltaUnavailable = Math.abs(effectiveScenario.revenueChange) < 0.05;
   const secondaryMetrics = [
-    { lab: lang === 'ko' ? '거래건수'  : 'Transactions', v: '11.9k',  d: scenario.txnChange,        spark: [{v:100},{v:101},{v:99},{v:102},{v:104},{v:103},{v:100},{v:90}] },
-    { lab: lang === 'ko' ? '객단가'    : 'Avg. ticket',  v: '₩6,450', d: scenario.ticketChange,     spark: [{v:100},{v:99},{v:101},{v:102},{v:101},{v:100},{v:100},{v:98}] },
-    { lab: lang === 'ko' ? '생활인구'  : 'Foot traffic', v: '142k',   d: scenario.populationChange, spark: [{v:104},{v:103},{v:102},{v:101},{v:101},{v:100},{v:100},{v:91.6}] },
+    { lab: lang === 'ko' ? '거래건수'  : 'Transactions', v: '11.9k',  d: effectiveScenario.txnChange,        spark: trend === 'up'
+      ? [{v:96},{v:97},{v:98},{v:99},{v:100},{v:102},{v:104},{v:108}]
+      : [{v:100},{v:101},{v:99},{v:102},{v:104},{v:103},{v:100},{v:90}] },
+    { lab: lang === 'ko' ? '객단가'    : 'Avg. ticket',  v: '₩6,450', d: effectiveScenario.ticketChange,     spark: trend === 'up'
+      ? [{v:100},{v:100},{v:100},{v:101},{v:101},{v:102},{v:103},{v:104}]
+      : [{v:100},{v:99},{v:101},{v:102},{v:101},{v:100},{v:100},{v:98}] },
+    { lab: lang === 'ko' ? '생활인구'  : 'Foot traffic', v: '142k',   d: effectiveScenario.populationChange, spark: trend === 'up'
+      ? [{v:96},{v:97},{v:98},{v:99},{v:99},{v:100},{v:100},{v:106}]
+      : [{v:104},{v:103},{v:102},{v:101},{v:101},{v:100},{v:100},{v:91.6}] },
   ];
 
   return (
@@ -255,61 +311,106 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
           padding: '4px 9px', borderRadius: 999, border: '1px solid var(--rc-rule)',
           background: 'var(--rc-surface-1)', boxShadow: 'var(--rc-shadow-sm)', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           <Icon name="dot" size={9}/>
-          {lang === 'ko' ? '이번 분기 매출 브리프' : 'This quarter — Revenue Brief'}
+          {tcopy.eyebrow}
         </div>
 
-        <h1 className="rc-serif rc-keep-words" style={{
-          fontSize: 40, lineHeight: 1.16, letterSpacing: 0,
+        {scenario === SCENARIO && shouldShowDemoTrendToggle() && (
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 8,
+            border: '1px solid var(--rc-rule)', borderRadius: 999, padding: 2, background: 'var(--rc-surface-0)',
+          }}
+            title="Dev only: demoControls=1"
+          >
+            {([
+              ['auto', lang === 'ko' ? '자동' : 'Auto'],
+              ['down', lang === 'ko' ? '하락' : 'Down'],
+              ['up',   lang === 'ko' ? '상승' : 'Up'],
+            ] as const).map(([key, label]) => (
+              <button key={key} type="button"
+                onClick={() => setDemoTrend(key)}
+                style={{
+                  all: 'unset', cursor: 'pointer', padding: '4px 10px', borderRadius: 999,
+                  fontSize: 11, fontWeight: 600,
+                  color: demoTrend === key ? 'var(--rc-fg-strong)' : 'var(--rc-fg-muted)',
+                  background: demoTrend === key ? 'var(--rc-surface-2)' : 'transparent',
+                }}>{label}</button>
+            ))}
+          </div>
+        )}
+
+        <h1 className="rc-serif rc-prose" style={{
+          fontSize: 40, lineHeight: 1.18, letterSpacing: 0,
           margin: '16px 0 13px', color: 'var(--rc-fg-strong)', fontWeight: 400,
           maxWidth: 760,
         }}>
-          {buildRevenueHeadline(lang, scenario, revenueDeltaUnavailable)}
+          {buildRevenueHeadline(lang, effectiveScenario, revenueDeltaUnavailable, trend)}
         </h1>
 
-        <p className="rc-keep-words" style={{ fontSize: 14.5, color: 'var(--rc-fg-muted)', maxWidth: 620, margin: '0 0 18px', lineHeight: 1.66 }}>
-          {lang === 'ko'
-            ? `거래건수 감소와 함께 관측되었습니다. 같은 기간 생활인구가 줄고 강수일수와 인근 점포수가 늘었습니다. 가능성 높은 원인 후보 ${scenario.causes.length}건과 이번 주 액션을 아래에서 확인해주세요.`
-            : `Transaction count fell alongside revenue. Foot traffic softened, rainy days rose, and nearby café count grew. ${scenario.causes.length} likely cause candidates and this week's actions are below.`}
+        <p className="rc-prose" style={{ fontSize: 14.5, color: 'var(--rc-fg-muted)', maxWidth: 640, margin: '0 0 18px', lineHeight: 1.7 }}>
+          {buildBriefSubcopy(lang, effectiveScenario, trend)}
         </p>
 
         {/* chart card */}
-        <div className="rc-card" style={{ padding: '16px 18px 12px', overflow: 'hidden' }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 0 }}>
-            <div>
+        <div className="rc-card" style={{ padding: '16px 18px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 10.5, color: 'var(--rc-fg-muted)', textTransform: 'uppercase', letterSpacing: '0.10em' }}>
-                {lang === 'ko' ? '추정매출 지수 · 2024 Q3 = 100' : 'Estimated revenue index · 2024 Q3 = 100'}
+                {isUploadedMode
+                  ? (lang === 'ko'
+                      ? `업로드된 매출 · ${effectiveScenario.periodLabel ?? ''}`
+                      : `Uploaded revenue · ${effectiveScenario.periodLabel ?? ''}`)
+                  : (lang === 'ko' ? '추정매출 지수 · 2024 Q3 = 100' : 'Estimated revenue index · 2024 Q3 = 100')}
               </div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 4 }}>
-                <span className="rc-serif rc-num" style={{ fontSize: 28, lineHeight: 1, color: 'var(--rc-fg-strong)', fontWeight: 500 }}>
-                  ₩ 1,224<span style={{ fontSize: 16, color: 'var(--rc-fg-muted)' }}>M</span>
-                </span>
-                <span className="rc-num" style={{ fontSize: 13, color: 'var(--rc-bad-strong)', fontWeight: 600,
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 4, flexWrap: 'wrap' }}>
+                {isUploadedMode ? (
+                  <span className="rc-serif rc-num" style={{ fontSize: 28, lineHeight: 1, color: 'var(--rc-fg-strong)', fontWeight: 500 }}>
+                    {formatKRWHero(uploadedSeriesTotal(uploadedSeries))}
+                  </span>
+                ) : (
+                  <span className="rc-serif rc-num" style={{ fontSize: 28, lineHeight: 1, color: 'var(--rc-fg-strong)', fontWeight: 500 }}>
+                    ₩ 1,224<span style={{ fontSize: 16, color: 'var(--rc-fg-muted)' }}>M</span>
+                  </span>
+                )}
+                <span className="rc-num" style={{ fontSize: 13, fontWeight: 600,
+                  color: trend === 'up' ? 'var(--rc-good-strong)' : trend === 'down' ? 'var(--rc-bad-strong)' : 'var(--rc-fg-muted)',
                   display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  <Icon name="arrow-down" size={12}/> {fmtPct(scenario.revenueChange)} {tr('vsBaseline', lang)}
+                  <Icon name={trend === 'up' ? 'arrow-up' : trend === 'down' ? 'arrow-down' : 'dot'} size={12}/>
+                  {isUploadedMode
+                    ? chartWindowLabel(chartWindow, lang)
+                    : `${fmtPct(effectiveScenario.revenueChange)} ${chartWindowLabel(chartWindow, lang)}`}
                 </span>
               </div>
             </div>
             <div style={{ display: 'flex', gap: 4 }}>
-              {['8Q', '4Q', 'YoY'].map((b, i) => (
-                <button key={b} style={{
+              {(allowedWindows).map(b => (
+                <button key={b} type="button" onClick={() => setChartWindow(b)} style={{
                   all: 'unset', cursor: 'pointer',
-                  padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500,
-                  color: i === 0 ? 'var(--rc-fg-strong)' : 'var(--rc-fg-muted)',
-                  background: i === 0 ? 'var(--rc-surface-2)' : 'transparent',
-                  border: i === 0 ? '1px solid var(--rc-rule)' : '1px solid transparent',
-                }}>{b}</button>
+                  padding: '6px 12px', borderRadius: 7, fontSize: 11.5, fontWeight: 600,
+                  color: chartWindow === b ? 'var(--rc-fg-strong)' : 'var(--rc-fg-muted)',
+                  background: chartWindow === b ? 'var(--rc-surface-2)' : 'transparent',
+                  border: chartWindow === b ? '1px solid var(--rc-rule-strong)' : '1px solid transparent',
+                  boxSizing: 'border-box',
+                }}>{windowLabel(b, lang)}</button>
               ))}
             </div>
           </div>
-          <RevenueTrendChart lang={lang} scenario={scenario} height={174}/>
+          <RevenueTrendChart
+            lang={lang}
+            scenario={effectiveScenario}
+            window={chartWindow}
+            height={208}
+            uploadedSeries={isUploadedMode ? uploadedSeries : undefined}
+          />
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, paddingTop: 8,
-            borderTop: '1px dashed var(--rc-rule)', fontSize: 11.5, color: 'var(--rc-fg-muted)', lineHeight: 1.45 }}>
+            borderTop: '1px dashed var(--rc-rule)', fontSize: 11.5, color: 'var(--rc-fg-muted)', lineHeight: 1.5 }}>
             <span style={{ color: 'var(--rc-accent-strong)', display: 'inline-flex', marginTop: 3 }}>
               <Icon name="shield" size={12}/>
             </span>
-            {lang === 'ko'
-              ? '이 신호는 매출 하락과 함께 관측된 원인 후보입니다. 인과관계를 확정하거나 매출 회복을 보장하지 않습니다.'
-              : 'These signals were observed alongside the revenue drop. They do not prove causality or guarantee revenue recovery.'}
+            <span className="rc-prose">
+              {lang === 'ko'
+                ? '함께 관측된 신호이며, 인과관계가 확정된 것은 아닙니다. 추가 확인이 필요합니다.'
+                : 'Signals observed together — causality is not confirmed. Needs further confirmation.'}
+            </span>
           </div>
         </div>
 
@@ -336,7 +437,7 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
         {/* weekly plan */}
         <div style={{ marginTop: 18 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 9 }}>
-            <h2 className="rc-serif rc-keep-words" style={{ fontSize: 22, fontWeight: 500, margin: 0, color: 'var(--rc-fg-strong)' }}>
+            <h2 className="rc-serif rc-prose" style={{ fontSize: 22, fontWeight: 500, margin: 0, color: 'var(--rc-fg-strong)' }}>
               {lang === 'ko' ? '이번 주 실행 계획' : "This week's execution plan"}
             </h2>
             <button onClick={() => onNavigate('actions')} style={{
@@ -344,6 +445,9 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
               display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 500,
             }}>{tr('seeAllActions', lang)} <Icon name="arrow-right" size={12}/></button>
           </div>
+          <p className="rc-prose" style={{ fontSize: 12, color: 'var(--rc-fg-muted)', margin: '0 0 9px' }}>
+            {tcopy.actionsLead}
+          </p>
           <WeeklyPlan lang={lang} actions={thisWeekActions} statuses={statuses} onSetStatus={onSetStatus}/>
         </div>
       </section>
@@ -361,29 +465,31 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
               display: 'inline-flex', alignItems: 'center', gap: 3, fontWeight: 500,
             }}>{tr('seeEvidence', lang)} <Icon name="arrow-right" size={11}/></button>
           </div>
-          <p style={{ fontSize: 11.5, color: 'var(--rc-fg-muted)', margin: '0 0 10px' }}>
-            {lang === 'ko' ? `${scenario.causes.length}개 후보 · 신호 강함 순` : `${scenario.causes.length} candidates · sorted by signal strength`}
+          <p className="rc-prose" style={{ fontSize: 11.5, color: 'var(--rc-fg-muted)', margin: '0 0 10px' }}>
+            {lang === 'ko' ? `${effectiveScenario.causes.length}개 후보 · 신호 강함 순` : `${effectiveScenario.causes.length} candidates · sorted by signal strength`}
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {scenario.causes.map((c, i) => (
+            {effectiveScenario.causes.map((c, i) => (
               <CauseRail key={c.id} c={c} lang={lang} rank={i+1} onOpen={() => onNavigate('evidence')}/>
             ))}
           </div>
         </div>
 
-        {/* this week shortlist */}
+        {/* this week shortlist — softened active orange */}
         <div style={{
-          border: '1px solid var(--rc-accent-soft-bd)', background: 'var(--rc-accent-soft)',
-          borderRadius: 12, padding: '16px 18px', boxShadow: 'var(--rc-shadow-sm)',
+          border: '1px solid var(--rc-rule)',
+          background: 'var(--rc-surface-1)',
+          borderLeft: '3px solid var(--rc-accent)',
+          borderRadius: 10, padding: '16px 18px', boxShadow: 'var(--rc-shadow-sm)',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <h2 className="rc-serif" style={{ fontSize: 18, fontWeight: 500, margin: 0, color: 'var(--rc-accent-strong)' }}>
+            <h2 className="rc-serif" style={{ fontSize: 17, fontWeight: 500, margin: 0, color: 'var(--rc-fg-strong)' }}>
               {tr('thisWeek', lang)}
             </h2>
-            <Pill tone="warm" size="sm">{Math.min(thisWeekActions.length, 3)} / {scenario.actions.length}</Pill>
+            <Pill tone="quiet" size="sm">{Math.min(thisWeekActions.length, 3)} / {effectiveScenario.actions.length}</Pill>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {scenario.actions.filter(a => a.timeframe === 'this-week').slice(0, 3).map(a => (
+            {effectiveScenario.actions.filter(a => a.timeframe === 'this-week').slice(0, 3).map(a => (
               <ShortlistRow key={a.id} a={a} lang={lang}
                 state={statuses[a.id] ?? 'recommended'}
                 setState={st => onSetStatus(a.id, st)}/>
@@ -391,27 +497,91 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
           </div>
         </div>
 
-        <ReliabilityCompact lang={lang} scenario={scenario} onOpen={() => onNavigate('reliability')}/>
+        <ReliabilityCompact lang={lang} scenario={effectiveScenario} onOpen={() => onNavigate('reliability')}/>
       </aside>
     </div>
   );
 }
 
-function buildRevenueHeadline(lang: RcLang, scenario: Scenario, unavailable: boolean) {
+function chartWindowLabel(window: TrendWindow, lang: 'ko' | 'en'): string {
+  if (window === 'YoY')     return lang === 'ko' ? '전년 동분기 대비' : 'YoY vs same Q';
+  if (window === '4Q')      return lang === 'ko' ? '직전 4분기 대비' : 'vs prior 4Q';
+  if (window === 'daily')   return lang === 'ko' ? '업로드 일별 (평균 대비)' : 'Uploaded daily (vs avg)';
+  if (window === 'weekly')  return lang === 'ko' ? '업로드 주별 합계' : 'Uploaded weekly total';
+  if (window === 'monthly') return lang === 'ko' ? '업로드 월별 합계' : 'Uploaded monthly total';
+  return lang === 'ko' ? '직전 분기 대비' : 'vs prior quarter';
+}
+
+function windowLabel(window: TrendWindow, lang: 'ko' | 'en'): string {
+  if (lang === 'ko') {
+    if (window === '8Q') return '8분기';
+    if (window === '4Q') return '4분기';
+    if (window === 'YoY') return '전년';
+    if (window === 'daily') return '일별';
+    if (window === 'weekly') return '주별';
+    if (window === 'monthly') return '월별';
+  } else {
+    if (window === 'daily') return 'Daily';
+    if (window === 'weekly') return 'Weekly';
+    if (window === 'monthly') return 'Monthly';
+  }
+  return window;
+}
+
+function uploadedSeriesTotal(series: UploadedDailyPoint[] | undefined): number {
+  if (!series) return 0;
+  return series.reduce((sum, point) => sum + (Number.isFinite(point.net_sales) ? point.net_sales : 0), 0);
+}
+
+function formatKRWHero(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  if (Math.abs(value) >= 100_000_000) return `₩${(value / 100_000_000).toFixed(1)}억`;
+  if (Math.abs(value) >= 1_000_000)   return `₩${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 1_000)       return `₩${Math.round(value / 1000)}K`;
+  return `₩${Math.round(value)}`;
+}
+
+function buildBriefSubcopy(lang: 'ko' | 'en', scenario: Scenario, trend: 'up' | 'down' | 'flat'): string {
+  if (lang === 'ko') {
+    if (trend === 'up') {
+      return `거래건수 증가와 함께 관측되었습니다. 같은 기간 생활인구가 늘고 강수일수는 줄었으며, 특정 메뉴군의 객단가가 함께 상승했습니다. 가능성 높은 상승 요인 후보 ${scenario.causes.length}건과 유지·확대 액션을 아래에서 확인해 주세요.`;
+    }
+    if (trend === 'down') {
+      return `거래건수 감소와 함께 관측되었습니다. 같은 기간 생활인구가 줄고 강수일수와 인근 점포수가 늘었습니다. 가능성 높은 원인 후보 ${scenario.causes.length}건과 이번 주 액션을 아래에서 확인해주세요.`;
+    }
+    return `매출에 큰 변화가 없습니다. 거래건수와 객단가도 안정적으로 관측되었습니다. 관찰을 유지하면서 작은 실험으로 신호를 확인해 보세요. 후보 ${scenario.causes.length}건이 있습니다.`;
+  }
+  if (trend === 'up') {
+    return `Transaction count rose alongside revenue. Foot traffic grew, rainy days fell, and ticket size on certain sets lifted. ${scenario.causes.length} likely uplift candidates and maintain/amplify actions are below.`;
+  }
+  if (trend === 'down') {
+    return `Transaction count fell alongside revenue. Foot traffic softened, rainy days rose, and nearby café count grew. ${scenario.causes.length} likely cause candidates and this week's actions are below.`;
+  }
+  return `Revenue stayed roughly flat. Transactions and ticket size both held steady. Keep monitoring and run small experiments to surface signals. ${scenario.causes.length} candidates available.`;
+}
+
+function buildRevenueHeadline(lang: RcLang, scenario: Scenario, unavailable: boolean, trend: 'up' | 'down' | 'flat') {
   if (unavailable) {
     return lang === 'ko'
       ? <>등록된 매출 데이터를 기준으로 초기 브리프를 생성했습니다.</>
       : <>An initial brief was generated from the registered revenue data.</>;
   }
-
+  // Calm single-line headline, with a single emphasized percentage span — no
+  // small-caps lead, no fragmenting. Korean keep-all wrapping prevents
+  // mid-word breaks at common widths.
   const delta = Math.abs(scenario.revenueChange).toFixed(1);
-  if (scenario.revenueChange < 0) {
-    return lang === 'ko'
-      ? <>{scenario.compare.ko} 추정매출이 직전 분기 대비 <span style={{ color: 'var(--rc-accent-strong)' }}>{delta}%</span> 줄었습니다.</>
-      : <>Estimated revenue fell <span style={{ color: 'var(--rc-accent-strong)' }}>{delta}%</span> from the prior quarter.</>;
+  const semanticColor = trend === 'up'
+    ? 'var(--rc-good-strong)'
+    : trend === 'down'
+      ? 'var(--rc-bad-strong)'
+      : 'var(--rc-fg-strong)';
+  const pct = <span style={{ color: semanticColor, fontWeight: 700 }}>{delta}%</span>;
+  if (lang === 'ko') {
+    if (trend === 'up') return <>{scenario.periodLabel || scenario.compare.ko} 추정매출이 직전 분기 대비 {pct} 늘었습니다.</>;
+    if (trend === 'down') return <>{scenario.periodLabel || scenario.compare.ko} 추정매출이 직전 분기 대비 {pct} 줄었습니다.</>;
+    return <>{scenario.periodLabel || scenario.compare.ko} 추정매출에 큰 변화가 없습니다.</>;
   }
-
-  return lang === 'ko'
-    ? <>{scenario.compare.ko} 추정매출이 직전 분기 대비 <span style={{ color: 'var(--rc-accent-strong)' }}>{delta}%</span> 늘었습니다.</>
-    : <>Estimated revenue rose <span style={{ color: 'var(--rc-accent-strong)' }}>{delta}%</span> from the prior quarter.</>;
+  if (trend === 'up') return <>Estimated revenue rose {pct} from the prior quarter.</>;
+  if (trend === 'down') return <>Estimated revenue fell {pct} from the prior quarter.</>;
+  return <>Estimated revenue stayed roughly flat.</>;
 }

@@ -1,5 +1,7 @@
-import { SCENARIO, tr, fmtPct } from './revenueCockpitCopy';
+import { SCENARIO, tr } from './revenueCockpitCopy';
 import { Icon, Pill, StatePill, StateMenu, DotMeter, STATES, stateTone } from './revenueCockpitShared';
+import { resolveTrend } from './revenueTrendScenarios';
+import { trendOrderedActions, trendActionsKicker } from './revenueActionPlannerLogic';
 import type { RcLang, ActionStatuses, ActionStatus, RcAction, Scenario } from './revenueCockpitTypes';
 
 function ActionCard({ a, lang, scenario, state, setState }: { a: RcAction; lang: RcLang; scenario: Scenario; state: ActionStatus; setState: (s: ActionStatus) => void }) {
@@ -15,13 +17,13 @@ function ActionCard({ a, lang, scenario, state, setState }: { a: RcAction; lang:
       display: 'flex', flexDirection: 'column', gap: 8,
       opacity: state === 'dismissed' ? 0.6 : 1,
     }}>
-      <div className="rc-serif" style={{
+      <div className="rc-serif rc-prose" style={{
         fontSize: 14.5, fontWeight: 500, color: 'var(--rc-fg-strong)', lineHeight: 1.3,
         textDecoration: state === 'done' ? 'line-through' : 'none',
       }}>
         {a.title[lang]}
       </div>
-      <div style={{ fontSize: 11.5, color: 'var(--rc-fg-muted)', lineHeight: 1.5 }}>{a.summary[lang]}</div>
+      <div className="rc-prose" style={{ fontSize: 11.5, color: 'var(--rc-fg-muted)', lineHeight: 1.55 }}>{a.summary[lang]}</div>
 
       {/* difficulty & expected effect */}
       <div style={{
@@ -33,18 +35,23 @@ function ActionCard({ a, lang, scenario, state, setState }: { a: RcAction; lang:
         <DotMeter label={lang === 'ko' ? '예상 효과' : 'Expected effect'} value={impN} max={3} hint={tr(`impact_${a.impact}`, lang)} positive/>
       </div>
 
-      {/* tied evidence */}
+      {/* tied evidence — soft neutral pills, no heavy orange */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div style={{ fontSize: 10, color: 'var(--rc-fg-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          {lang === 'ko' ? '연결된 근거' : 'Tied evidence'}
+          {lang === 'ko' ? '연결 근거' : 'Linked evidence'}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {tiedCauses.length === 0 && (
+            <span style={{ fontSize: 11, color: 'var(--rc-fg-dim)' }}>
+              {lang === 'ko' ? '근거 없음' : 'None'}
+            </span>
+          )}
           {tiedCauses.map(c => (
             <span key={c.id} style={{
               display: 'inline-flex', alignItems: 'center', gap: 4,
-              padding: '2px 7px 2px 5px', borderRadius: 999,
-              background: 'var(--rc-accent-soft)', color: 'var(--rc-accent-strong)',
-              border: '1px solid var(--rc-accent-soft-bd)',
+              padding: '2px 9px 2px 7px', borderRadius: 999,
+              background: 'var(--rc-surface-2)', color: 'var(--rc-fg)',
+              border: '1px solid var(--rc-rule)',
               fontSize: 10.5, fontWeight: 500,
             }}>
               <Icon name={c.icon} size={10}/> {c.title[lang]}
@@ -75,9 +82,11 @@ interface ActionPlannerViewProps {
 }
 
 export function ActionPlannerView({ lang, scenario = SCENARIO, statuses, onSetStatus }: ActionPlannerViewProps) {
+  const orderedActions = trendOrderedActions(scenario);
+  const trend = resolveTrend(scenario);
   const groups = STATES.map(s => ({
     key: s,
-    items: scenario.actions.filter(a => (statuses[a.id] ?? 'recommended') === s),
+    items: orderedActions.filter(a => (statuses[a.id] ?? 'recommended') === s),
   }));
 
   return (
@@ -87,14 +96,16 @@ export function ActionPlannerView({ lang, scenario = SCENARIO, statuses, onSetSt
           <h1 className="rc-serif" style={{ fontSize: 28, fontWeight: 500, margin: 0, color: 'var(--rc-fg-strong)' }}>
             {tr('navActions', lang)}
           </h1>
-          <p className="rc-prose" style={{ fontSize: 13.5, color: 'var(--rc-fg-muted)', marginTop: 6, lineHeight: 1.6 }}>
+          <p className="rc-prose" style={{ fontSize: 13.5, color: 'var(--rc-fg-muted)', marginTop: 6, lineHeight: 1.65 }}>
+            {trendActionsKicker(trend, lang)}
+            {' · '}
             {lang === 'ko'
-              ? `근거 후보에 연결된 ${scenario.actions.length}개의 추천 액션입니다. 매출 회복을 보장하지 않습니다 — 검토하고 본인 매장에 맞춰 결정해주세요.`
-              : `${scenario.actions.length} actions tied to the cause candidates. None guarantees revenue recovery — review and decide what fits your shop.`}
+              ? `근거 후보에 연결된 추천 액션 ${orderedActions.length}건입니다. 본인 매장에 맞춰 검토 후 결정해 주세요.`
+              : `${orderedActions.length} actions linked to evidence — review and decide what fits your shop.`}
           </p>
         </div>
         <div style={{ flexShrink: 0, paddingTop: 6 }}>
-          <Pill tone="warm">{lang === 'ko' ? `${scenario.actions.length}개 추천` : `${scenario.actions.length} recommended`}</Pill>
+          <Pill tone="quiet">{lang === 'ko' ? `${orderedActions.length}개 추천` : `${orderedActions.length} recommended`}</Pill>
         </div>
       </div>
 
@@ -111,12 +122,12 @@ export function ActionPlannerView({ lang, scenario = SCENARIO, statuses, onSetSt
         ))}
       </div>
 
-      {/* kanban */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginTop: 18 }}>
+      {/* kanban — compact empty state, no oversized blank columns */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 10, marginTop: 16 }}>
         {groups.map(g => (
           <div key={g.key} style={{
-            border: '1px solid var(--rc-rule)', borderRadius: 12, background: 'var(--rc-surface-0)',
-            padding: 12, display: 'flex', flexDirection: 'column', gap: 10, minHeight: 380,
+            border: '1px solid var(--rc-rule)', borderRadius: 10, background: 'var(--rc-surface-0)',
+            padding: 10, display: 'flex', flexDirection: 'column', gap: 8,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <StatePill state={g.key} lang={lang}/>
@@ -124,9 +135,10 @@ export function ActionPlannerView({ lang, scenario = SCENARIO, statuses, onSetSt
             </div>
             {g.items.length === 0 && (
               <div style={{
-                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 11, color: 'var(--rc-fg-dim)',
-                border: '1px dashed var(--rc-rule)', borderRadius: 8, padding: 16, textAlign: 'center',
+                border: '1px dashed var(--rc-rule)', borderRadius: 7, padding: '8px 10px', textAlign: 'center',
+                minHeight: 36,
               }}>
                 {lang === 'ko' ? '비어있음' : 'Empty'}
               </div>

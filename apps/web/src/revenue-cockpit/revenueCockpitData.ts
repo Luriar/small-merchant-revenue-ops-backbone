@@ -164,10 +164,12 @@ function buildActions(actions: ApiRecord[], causes: CauseCandidate[]): RcAction[
       },
       summary: { ko: description, en: description },
       tied: causes.length ? [causes[index % causes.length].id] : fallback.tied,
+      // Per-card guarantee disclaimers removed; the global footer carries the
+      // single SaaS-wide disclaimer. Keep risk_note only when supplied.
       steps: [
         { ko: description, en: description },
-        { ko: expected || '실행 후 지표 변화를 확인합니다.', en: expected || 'Review the metric movement after launch.' },
-        { ko: risk || '매출 회복을 보장하지 않는 액션 후보입니다.', en: risk || 'This action does not guarantee revenue recovery.' },
+        { ko: expected || '실행 후 관측 지표 변화를 확인하고 다음 단계로 검토합니다.', en: expected || 'Observe the metric and review the next step.' },
+        ...(risk ? [{ ko: risk, en: risk }] : []),
       ],
     };
   });
@@ -269,8 +271,28 @@ export function buildScenarioFromApi(payload: RevenueApiPayload): { scenario: Sc
     || str(latestRevenueUpload?.source_type).includes('synthetic')
     || str(storeName).toLowerCase().includes('demo');
 
+  const dailySeriesRaw = Array.isArray(brief?.daily_series) ? brief.daily_series : [];
+  const uploadedDailySeries: Array<{ date: string; net_sales: number; order_count?: number }> = [];
+  for (const row of dailySeriesRaw) {
+    if (!isRecord(row)) continue;
+    const date = str(row.date);
+    const net = num(row.net_sales, NaN);
+    if (!date || !Number.isFinite(net)) continue;
+    const orders = num(row.order_count, NaN);
+    uploadedDailySeries.push({
+      date,
+      net_sales: net,
+      ...(Number.isFinite(orders) ? { order_count: orders } : {}),
+    });
+  }
+  const periodLabelFromBrief = str(brief?.period_label);
+  const insufficientFlag = brief?.insufficient_data === true;
+
   const scenario: Scenario = {
     ...SCENARIO,
+    uploadedDailySeries: uploadedDailySeries.length ? uploadedDailySeries : undefined,
+    insufficientData: insufficientFlag || undefined,
+    periodLabel: periodLabelFromBrief || undefined,
     area: {
       ko: str(brief?.trade_area_name, str(context?.trade_area_name, SCENARIO.area.ko)),
       en: str(brief?.trade_area_name, SCENARIO.area.en),

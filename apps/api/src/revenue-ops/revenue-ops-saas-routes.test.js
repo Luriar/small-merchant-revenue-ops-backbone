@@ -36,14 +36,17 @@ test("POST /stores creates tenant, store, and owner membership for current user"
     input: {
       store_name: "합정 샌드위치 매장",
       tenant_name: "Hapjeong Test Tenant",
-      business_category: "sandwich",
+      business_category: "CS100006",
       region: "Seoul Hapjeong",
       address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
     },
   });
   assert.equal(created.statusCode, 201);
   assert.equal(created.value.store.store_name, "합정 샌드위치 매장");
   assert.equal(created.value.store.member_role, "owner");
+  assert.equal(created.value.store.metadata.address_selected, true);
   assert.equal(created.value.context_bootstrap_hint.recommended, true);
   assert.equal(created.value.context_bootstrap_hint.mode, "live");
   assert.equal(created.value.context_bootstrap_hint.reason, "store_onboarding_bootstrap");
@@ -54,10 +57,10 @@ test("POST /stores creates tenant, store, and owner membership for current user"
   assert.equal(stores.value.stores.some((store) => store.store_id === created.value.store.store_id), true);
 });
 
-test("POST /stores returns a non-blocking bootstrap hint when context prerequisites are missing", async () => {
+test("POST /stores rejects payload missing required fields with INVALID_STORE_INPUT", async () => {
   const server = createTestServer();
 
-  const created = await requestJson({
+  const missingAll = await requestJson({
     server,
     method: "POST",
     routePath: "/api/v1/stores",
@@ -66,10 +69,35 @@ test("POST /stores returns a non-blocking bootstrap hint when context prerequisi
       store_name: "주소 없는 매장",
     },
   });
+  assert.equal(missingAll.statusCode, 400);
+  assert.equal(missingAll.value.error.code, "INVALID_STORE_INPUT");
+  assert.match(missingAll.value.error.message, /가게 이름, 업종, 주소는 필수/);
 
-  assert.equal(created.statusCode, 201);
-  assert.equal(created.value.context_bootstrap_hint.recommended, false);
-  assert.deepEqual(created.value.context_bootstrap_hint.missing_prerequisites.sort(), ["address_text", "business_category"]);
+  const missingCategory = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "store-owner-missing-category",
+    input: {
+      store_name: "업종 없는 매장",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+    },
+  });
+  assert.equal(missingCategory.statusCode, 400);
+
+  const typedAddressNotSelected = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "store-owner-typed-address",
+    input: {
+      store_name: "수동 주소 매장",
+      business_category: "CS100010",
+      address_text: "임의로 입력한 주소",
+    },
+  });
+  assert.equal(typedAddressNotSelected.statusCode, 400);
 });
 
 test("new real stores do not receive demo revenue or action analysis before explicit upload", async () => {
@@ -82,9 +110,11 @@ test("new real stores do not receive demo revenue or action analysis before expl
     authSub,
     input: {
       store_name: "매출 없는 실제 매장",
-      business_category: "cafe",
+      business_category: "CS100010",
       region: "서울 마포구",
       address_text: "서울 마포구 월드컵북로 1",
+      address_source: "search",
+      address_selected: true,
     },
   });
   assert.equal(created.statusCode, 201);
@@ -416,9 +446,11 @@ test("new store upload and context collect persist generated cause candidates an
     input: {
       store_name: "연남 테스트 카페",
       tenant_name: "Yeonnam Test Tenant",
-      business_category: "cafe",
+      business_category: "CS100010",
       region: "Seoul Yeonnam",
       address_text: "서울 마포구 연남동",
+      address_source: "search",
+      address_selected: true,
     },
   });
   assert.equal(created.statusCode, 201);
@@ -556,6 +588,308 @@ test("new store upload and context collect persist generated cause candidates an
   assert.equal(patched.statusCode, 200);
   assert.equal(patched.value.action.status, "done");
   assert.equal(patched.value.action.outcome_tracking.summary.includes("결과 추적 대기 중"), true);
+});
+
+test("PATCH /stores/{id} updates owner-managed fields and rejects address typed without search", async () => {
+  const server = createTestServer();
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "edit-owner",
+    input: {
+      store_name: "최초 매장",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const storeId = created.value.store.store_id;
+
+  const updated = await requestJson({
+    server,
+    method: "PATCH",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}`,
+    authSub: "edit-owner",
+    input: {
+      store_name: "리뉴얼 매장",
+      business_category: "CS100007",
+    },
+  });
+  assert.equal(updated.statusCode, 200);
+  assert.equal(updated.value.store.store_name, "리뉴얼 매장");
+  assert.equal(updated.value.store.business_category, "CS100007");
+
+  const typedOnly = await requestJson({
+    server,
+    method: "PATCH",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}`,
+    authSub: "edit-owner",
+    input: { address_text: "임의로 입력한 주소" },
+  });
+  assert.equal(typedOnly.statusCode, 400);
+  assert.equal(typedOnly.value.error.code, "INVALID_STORE_INPUT");
+
+  const otherUser = await requestJson({
+    server,
+    method: "PATCH",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}`,
+    authSub: "not-the-owner",
+    input: { store_name: "탈취 시도" },
+  });
+  assert.equal(otherUser.statusCode, 403);
+});
+
+test("DELETE /stores/{id} archives the store and hides it from default list", async () => {
+  const server = createTestServer();
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "archive-owner",
+    input: {
+      store_name: "철수 매장",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  const storeId = created.value.store.store_id;
+
+  const archived = await requestJson({
+    server,
+    method: "DELETE",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}`,
+    authSub: "archive-owner",
+  });
+  assert.equal(archived.statusCode, 200);
+  assert.equal(archived.value.store.status, "archived");
+
+  const list = await requestJson({ server, method: "GET", routePath: "/api/v1/stores", authSub: "archive-owner" });
+  assert.equal(list.value.stores.some((store) => store.store_id === storeId), false);
+});
+
+test("/briefs uses latest accepted upload period and dedupes top_cause_candidates", async () => {
+  const server = createTestServer();
+  const authSub = "brief-owner";
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub,
+    input: {
+      store_name: "브리프 매장",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  const storeId = created.value.store.store_id;
+
+  const days = [];
+  for (let i = 0; i < 4; i += 1) {
+    const date = new Date(Date.UTC(2026, 1, 8 + i));
+    days.push({
+      business_date: date.toISOString().slice(0, 10),
+      channel: "offline_pos",
+      gross_sales_amount: 1200000 + i * 5000,
+      net_sales_amount: 1100000 + i * 5000,
+      order_count: 80 + i,
+    });
+  }
+  const upload = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub,
+    input: {
+      source_type: "manual_template",
+      original_filename: "brief.json",
+      daily_rows: days,
+    },
+  });
+  assert.equal(upload.statusCode, 201);
+
+  const briefs = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`,
+    authSub,
+  });
+  assert.equal(briefs.statusCode, 200);
+  assert.equal(briefs.value.briefs.length, 1);
+  const brief = briefs.value.briefs[0];
+  assert.equal(brief.period_label.includes("2024Q4"), false);
+  assert.equal(brief.period_label, `${days[0].business_date} ~ ${days[3].business_date}`);
+  assert.equal(brief.period_start, days[0].business_date);
+  assert.equal(brief.period_end, days[3].business_date);
+  assert.equal(brief.insufficient_data, false);
+  assert.equal(brief.revenue_summary.days_in_period, 4);
+
+  const summaryKeys = brief.top_cause_candidates.map((cand) => `${cand.candidate_type}::${(cand.summary || "").trim()}`);
+  assert.equal(new Set(summaryKeys).size, summaryKeys.length, "top_cause_candidates must be deduped");
+
+  const actionKeys = brief.recommended_actions.map((act) => `${act.action_type || act.action_family}::${(act.title || "").trim()}`);
+  assert.equal(new Set(actionKeys).size, actionKeys.length, "recommended_actions must be deduped");
+
+  // Caution-text sanitizer: no doubled "인과가 확정된 것은 아닙니다" phrase.
+  const cautionRe = /인과가 확정된 것은 아닙니다(\.?\s*인과가 확정된 것은 아닙니다)/;
+  assert.equal(cautionRe.test(brief.summary), false);
+  for (const cand of brief.top_cause_candidates) {
+    assert.equal(cautionRe.test(cand.summary || ""), false);
+  }
+});
+
+test("1-row upload reports insufficient_data; 90-row upload supersedes the 1-row state", async () => {
+  const server = createTestServer();
+  const authSub = "rebuild-owner";
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub,
+    input: {
+      store_name: "재빌드 매장",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  const storeId = created.value.store.store_id;
+
+  const oneRow = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub,
+    input: {
+      source_type: "manual_template",
+      original_filename: "one.json",
+      daily_rows: [{
+        business_date: "2026-02-08",
+        channel: "offline_pos",
+        gross_sales_amount: 600000,
+        net_sales_amount: 540000,
+        order_count: 40,
+      }],
+    },
+  });
+  assert.equal(oneRow.statusCode, 201);
+
+  const briefAfterOne = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`,
+    authSub,
+  });
+  assert.equal(briefAfterOne.value.briefs[0].insufficient_data, true);
+  assert.match(briefAfterOne.value.briefs[0].headline, /1일치 매출이 등록되었습니다/);
+
+  // Now upload 90 rows. The 1-row generated cause candidates must be
+  // superseded so /cause-candidates reflects the latest upload window.
+  const ninety = [];
+  for (let i = 0; i < 90; i += 1) {
+    const date = new Date(Date.UTC(2026, 1, 8 + i));
+    ninety.push({
+      business_date: date.toISOString().slice(0, 10),
+      channel: "offline_pos",
+      gross_sales_amount: 1100000 + i * 100,
+      net_sales_amount: 1000000 + i * 100,
+      order_count: 70 + (i % 5),
+    });
+  }
+  const ninetyRow = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub,
+    input: {
+      source_type: "generic_pos_csv",
+      original_filename: "revenue_daily_3months_realistic_cafe.csv",
+      daily_rows: ninety,
+    },
+  });
+  assert.equal(ninetyRow.statusCode, 201);
+  assert.equal(ninetyRow.value.upload.accepted_count, 90);
+
+  const briefAfterNinety = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`,
+    authSub,
+  });
+  assert.equal(briefAfterNinety.value.briefs[0].insufficient_data, false);
+  assert.equal(briefAfterNinety.value.briefs[0].period_start, "2026-02-08");
+  assert.equal(briefAfterNinety.value.briefs[0].period_end, ninety[89].business_date);
+});
+
+test("evidence quality gate: null metric_value and rainfall_mm=0 are not promoted as cause candidates", async () => {
+  const { createRevenueOpsSaasStore: createSaasStore } = require("./revenue-ops-saas-store");
+  const store = createSaasStore();
+  const user = store.resolveAppUserFromJwtClaims({ sub: "quality-gate", email: "qg@example.com" });
+  const created = store.createStoreForUser(user.app_user_id, {
+    store_name: "품질 게이트 매장",
+    business_category: "CS100010",
+    address_text: "서울 마포구 합정동",
+    address_source: "search",
+    address_selected: true,
+  });
+  const storeId = created.store_id;
+
+  // Inject one upload + facts directly so cause/action loop runs against them.
+  store.ingestRevenueUpload({
+    appUserId: user.app_user_id,
+    storeId,
+    payload: {
+      source_type: "manual_template",
+      original_filename: "facts.json",
+      daily_rows: [
+        { business_date: "2026-02-08", channel: "offline_pos", gross_sales_amount: 1, net_sales_amount: 1, order_count: 1 },
+        { business_date: "2026-02-09", channel: "offline_pos", gross_sales_amount: 2, net_sales_amount: 2, order_count: 2 },
+      ],
+    },
+  });
+
+  // Inject low-quality evidence rows directly into state.
+  const stateRef = store._state;
+  const causeId = stateRef.causeCandidates.find((row) => row.store_id === storeId)?.cause_candidate_id;
+  if (causeId) {
+    stateRef.causeEvidence.push({
+      evidence_id: "evi_null_metric",
+      cause_candidate_id: causeId,
+      evidence_type: "weather",
+      strength: "weak",
+      summary: "metric_value 없음",
+      metric_name: "rainfall_mm",
+      metric_value: null,
+      created_at: new Date().toISOString(),
+    });
+    stateRef.causeEvidence.push({
+      evidence_id: "evi_zero_rain",
+      cause_candidate_id: causeId,
+      evidence_type: "weather",
+      strength: "weak",
+      summary: "비 0mm",
+      metric_name: "rainfall_mm",
+      metric_value: 0,
+      created_at: new Date().toISOString(),
+    });
+  }
+
+  const candidates = store.getCauseCandidatesForStore(storeId);
+  for (const candidate of candidates) {
+    for (const evi of candidate.evidence ?? []) {
+      assert.notEqual(evi.metric_value, null);
+      if (evi.metric_name === "rainfall_mm") {
+        assert.notEqual(Number(evi.metric_value), 0);
+      }
+    }
+  }
 });
 
 test("store-scoped OPTIONS preflight returns 204", async () => {

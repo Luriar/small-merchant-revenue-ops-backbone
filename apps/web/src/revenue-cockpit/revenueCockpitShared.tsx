@@ -252,34 +252,37 @@ interface ChromeBarProps {
   setLang: (l: RcLang) => void;
   theme: RcTheme;
   setTheme: (t: RcTheme) => void;
-  label: string;
   authEmail?: string | null;
   onLogout?: () => void;
   loginSlot?: ReactNode;
+  leadSlot?: ReactNode;
+  navSlot?: ReactNode;
 }
-export function ChromeBar({ lang, setLang, theme, setTheme, label, authEmail, onLogout, loginSlot }: ChromeBarProps) {
+export function ChromeBar({ lang, setLang, theme, setTheme, authEmail, onLogout, loginSlot, leadSlot, navSlot }: ChromeBarProps) {
   const Btn = ({ active, onClick, title, children }: { active: boolean; onClick: () => void; title?: string; children: React.ReactNode }) => (
     <button onClick={onClick} title={title} style={{
-      all: 'unset', cursor: 'pointer', padding: '0 8px', height: 26, borderRadius: 6,
+      all: 'unset', cursor: 'pointer', padding: '0 10px', height: 26, borderRadius: 6,
       display: 'inline-flex', alignItems: 'center', gap: 4,
-      color: active ? 'var(--rc-fg)' : 'var(--rc-fg-muted)',
+      color: active ? 'var(--rc-fg-strong)' : 'var(--rc-fg-muted)',
       background: active ? 'var(--rc-surface-2)' : 'transparent',
-      fontSize: 12, fontWeight: 500,
+      fontSize: 12, fontWeight: 600, boxSizing: 'border-box',
     }}>{children}</button>
   );
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '6px 12px', borderBottom: '1px solid var(--rc-rule)',
-      background: 'var(--rc-surface-1)', flexShrink: 0,
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '8px 24px', borderBottom: '1px solid var(--rc-rule)',
+      background: 'var(--rc-surface-1)', flexShrink: 0, minHeight: 52,
     }}>
-      <span style={{
-        fontSize: 11.5, color: 'var(--rc-fg-dim)', letterSpacing: '0.03em',
-        marginRight: 'auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
-      }}>
-        {label}
-      </span>
-      <div className="rc-chrome-control-group">
+      <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 12 }}>
+        {leadSlot}
+      </div>
+      {navSlot && (
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', minWidth: 0, flexShrink: 1 }}>
+          {navSlot}
+        </div>
+      )}
+      <div className="rc-chrome-control-group" style={navSlot ? undefined : { marginLeft: 'auto' }}>
         <Btn active={lang === 'ko'} onClick={() => setLang('ko')}>KO</Btn>
         <Btn active={lang === 'en'} onClick={() => setLang('en')}>EN</Btn>
       </div>

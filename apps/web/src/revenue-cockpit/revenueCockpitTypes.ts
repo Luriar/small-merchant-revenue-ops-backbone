@@ -62,6 +62,12 @@ export interface ReliabilityInfo {
   lastRun: BiLingual;
 }
 
+export interface UploadedDailyRevenuePoint {
+  date: string;
+  net_sales: number;
+  order_count?: number;
+}
+
 export interface Scenario {
   area: BiLingual;
   category: BiLingual;
@@ -80,6 +86,9 @@ export interface Scenario {
   hasRevenueData?: boolean;
   isDemo?: boolean;
   storeName?: string;
+  uploadedDailySeries?: UploadedDailyRevenuePoint[];
+  insufficientData?: boolean;
+  periodLabel?: string;
 }
 
 export type ActionStatuses = Record<string, ActionStatus>;

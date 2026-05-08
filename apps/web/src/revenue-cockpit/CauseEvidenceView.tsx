@@ -104,6 +104,59 @@ function fallbackCompareBlock(cause: CauseCandidate, scenario: Scenario): Compar
 
 interface CauseEvidenceViewProps { lang: RcLang; scenario?: Scenario }
 
+function sanitizeProse(value: string): string {
+  if (!value) return value;
+  let out = value.replace(/\.{2,}/g, '.').replace(/\s+/g, ' ').trim();
+  // Collapse repeated identical sentences (separated by space/period).
+  // Pattern: "<sentence>. <sentence>." → "<sentence>." (case-insensitive).
+  out = out.replace(/(.{8,}?[.!?])\s*\1+/gi, '$1');
+  return out;
+}
+
+function normalizeForCompare(text: string): string {
+  return sanitizeProse(text).toLowerCase();
+}
+
+function isNearlyIdentical(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const na = normalizeForCompare(a);
+  const nb = normalizeForCompare(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.length > 30 && nb.length > 30) {
+    if (na.includes(nb) || nb.includes(na)) return true;
+  }
+  return false;
+}
+
+// Render the highlighted observation and supporting paragraph as two visually
+// distinct text blocks. Both strings are sanitized first (collapse "..", trim,
+// drop a duplicated trailing sentence). If the body is identical or nearly
+// identical to the headline after that, the body is suppressed.
+function EvidenceProse({ headline, body }: { headline: string; body: string }) {
+  const cleanHeadline = sanitizeProse(headline);
+  const cleanBody = sanitizeProse(body);
+  const showBody = Boolean(cleanBody) && !isNearlyIdentical(cleanHeadline, cleanBody);
+  return (
+    <div style={{ maxWidth: 720, marginTop: 0, marginBottom: 4 }}>
+      <p className="rc-prose" style={{
+        fontSize: 15.5, color: 'var(--rc-fg-strong)',
+        lineHeight: 1.6, margin: '0 0 10px', fontWeight: 500,
+      }}>
+        {cleanHeadline}
+      </p>
+      {showBody && (
+        <p className="rc-prose" style={{
+          fontSize: 13.5, color: 'var(--rc-fg-muted)',
+          lineHeight: 1.7, margin: 0,
+        }}>
+          {cleanBody}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function CauseEvidenceView({ lang, scenario = SCENARIO }: CauseEvidenceViewProps) {
   const [activeId, setActiveId] = useState(scenario.causes[0].id);
   const cause = scenario.causes.find(x => x.id === activeId) ?? scenario.causes[0];
@@ -161,15 +214,10 @@ export function CauseEvidenceView({ lang, scenario = SCENARIO }: CauseEvidenceVi
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10.5, color: 'var(--rc-fg-muted)', textTransform: 'uppercase', letterSpacing: '0.10em' }}>
           <Icon name={cause.icon} size={12}/> {tr(`strength_${cause.strength}`, lang)} · {tr('observedTogether', lang)}
         </div>
-        <h1 className="rc-serif rc-prose" style={{ fontSize: 30, lineHeight: 1.18, fontWeight: 400, margin: '10px 0 10px', color: 'var(--rc-fg-strong)' }}>
+        <h1 className="rc-serif rc-prose" style={{ fontSize: 30, lineHeight: 1.18, fontWeight: 400, margin: '10px 0 8px', color: 'var(--rc-fg-strong)' }}>
           {cause.title[lang]}
         </h1>
-        <p className="rc-prose" style={{ fontSize: 14, color: 'var(--rc-fg-muted)', maxWidth: 720, lineHeight: 1.7, marginTop: 0 }}>
-          <span className="rc-serif" style={{ color: 'var(--rc-fg)', fontStyle: 'italic', marginRight: 6 }}>
-            {cause.headline[lang]}
-          </span>
-          {cause.body[lang]}
-        </p>
+        <EvidenceProse headline={cause.headline[lang]} body={cause.body[lang]}/>
 
         {/* baseline vs compare card */}
         <div className="rc-card" style={{ marginTop: 22, padding: '20px 22px', boxShadow: 'var(--rc-shadow-sm)' }}>

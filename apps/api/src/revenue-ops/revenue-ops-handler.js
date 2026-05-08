@@ -63,6 +63,18 @@ async function handleStoreRouteError(response, error) {
     return writeError(response, error.statusCode, error.code, error.message);
   }
 
+  if (error?.code === "INVALID_STORE_INPUT") {
+    return writeError(response, error.statusCode || 400, "INVALID_STORE_INPUT", error.message);
+  }
+
+  if (error?.code === "forbidden") {
+    return writeError(response, error.statusCode || 403, "forbidden", error.message);
+  }
+
+  if (error?.code === "not_found") {
+    return writeError(response, error.statusCode || 404, "not_found", error.message);
+  }
+
   if (error?.code === "invalid_body" || error?.code === "invalid_status") {
     return writeError(response, 400, "bad_request", error.message);
   }
@@ -167,6 +179,27 @@ async function handleCreateStore({ request, response, store }) {
       store: created,
       context_bootstrap_hint: buildContextBootstrapHint(created),
     });
+  } catch (error) {
+    return handleStoreRouteError(response, error);
+  }
+}
+
+async function handleUpdateStore({ request, response, store, storeId }) {
+  try {
+    const appUser = await resolveAppUser({ request, store });
+    const body = await readJsonBody(request);
+    const updated = await store.updateStoreForUser(appUser.app_user_id, storeId, body);
+    return writeJson(response, 200, { store: updated });
+  } catch (error) {
+    return handleStoreRouteError(response, error);
+  }
+}
+
+async function handleArchiveStore({ request, response, store, storeId }) {
+  try {
+    const appUser = await resolveAppUser({ request, store });
+    const archived = await store.archiveStoreForUser(appUser.app_user_id, storeId);
+    return writeJson(response, 200, { store: archived });
   } catch (error) {
     return handleStoreRouteError(response, error);
   }
@@ -361,6 +394,8 @@ module.exports = {
   handleGetMe,
   handleListStores,
   handleCreateStore,
+  handleUpdateStore,
+  handleArchiveStore,
   handleGetStoreBriefs,
   handleGetStoreAnomalies,
   handleGetStoreActions,

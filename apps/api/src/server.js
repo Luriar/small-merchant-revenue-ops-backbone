@@ -36,6 +36,8 @@ const {
   handleGetMe,
   handleListStores,
   handleCreateStore,
+  handleUpdateStore,
+  handleArchiveStore,
   handleGetStoreBriefs,
   handleGetStoreAnomalies,
   handleGetStoreActions,
@@ -379,7 +381,7 @@ function dispatchRequest({
     }
 
     if (request.method === "OPTIONS" && (request.url.startsWith("/api/v1/revenue") || request.url.startsWith("/api/v1/stores") || request.url.startsWith("/api/v1/me"))) {
-      response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,PATCH,OPTIONS", "access-control-allow-headers": "authorization,content-type" });
+      response.writeHead(204, { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "authorization,content-type" });
       return response.end();
     }
 
@@ -393,6 +395,17 @@ function dispatchRequest({
 
     if (request.method === "POST" && /^\/api\/v1\/stores(?:\?.*)?$/.test(request.url)) {
       return handleCreateStore({ request, response, store: revenueOpsSaasStore });
+    }
+
+    const storeRootMatch = request.url.match(/^\/api\/v1\/stores\/([^/?]+)(?:\?.*)?$/);
+    if (storeRootMatch) {
+      const storeId = decodeURIComponent(storeRootMatch[1]);
+      if (request.method === "PATCH") {
+        return handleUpdateStore({ request, response, store: revenueOpsSaasStore, storeId });
+      }
+      if (request.method === "DELETE") {
+        return handleArchiveStore({ request, response, store: revenueOpsSaasStore, storeId });
+      }
     }
 
     const storeScopedMatch = request.url.match(/^\/api\/v1\/stores\/([^/?]+)\/(.+?)(?:\?.*)?$/);

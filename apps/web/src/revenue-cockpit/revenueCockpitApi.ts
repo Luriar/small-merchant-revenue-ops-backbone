@@ -33,6 +33,8 @@ export interface CreateRevenueStorePayload {
   business_category?: string;
   region?: string;
   address_text?: string;
+  address_source?: string;
+  address_selected?: boolean;
   timezone?: string;
   metadata?: Record<string, unknown>;
 }
@@ -168,6 +170,26 @@ export async function apiCreateStore(payload: CreateRevenueStorePayload): Promis
       body: JSON.stringify(payload),
     },
     'create store',
+  );
+}
+
+export async function apiUpdateStore(storeId: string, payload: Partial<CreateRevenueStorePayload>): Promise<{ store?: RevenueStoreSummary }> {
+  return fetchJson(
+    `${ROOT_BASE}/stores/${encodeURIComponent(storeId)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    'update store',
+  );
+}
+
+export async function apiArchiveStore(storeId: string): Promise<{ store?: { store_id: string; status: string; archived_at?: string } }> {
+  return fetchJson(
+    `${ROOT_BASE}/stores/${encodeURIComponent(storeId)}`,
+    { method: 'DELETE' },
+    'archive store',
   );
 }
 

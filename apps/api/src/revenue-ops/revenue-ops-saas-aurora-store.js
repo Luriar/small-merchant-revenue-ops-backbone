@@ -21,6 +21,7 @@ const {
   text,
   safeObject,
   clone,
+  composeBriefFromUploadedFacts,
 } = require("./revenue-ops-saas-store");
 const { collectStorePublicContext, planStorePublicContextCollection, normalizeContextCollectionReason } = require("./context-collectors");
 const { loadPublicContextCredentials } = require("./public-context-credentials");
@@ -1032,27 +1033,66 @@ function createAuroraRevenueOpsSaasStore({
 
   async function getBriefsForStore(storeId) {
     const store = await getStore(storeId);
-    const latest = await query(
-      "SELECT max(business_date) AS latest_date, count(*)::int AS day_count FROM revenue_daily_facts WHERE store_id = $1",
+    const dayCountResult = await query(
+      "SELECT count(*)::int AS day_count FROM revenue_daily_facts WHERE store_id = $1",
       [storeId],
     );
-    if (Number(latest.rows[0]?.day_count ?? 0) === 0) {
+    const dayCount = Number(dayCountResult.rows[0]?.day_count ?? 0);
+    if (dayCount === 0) {
       return [];
     }
     await ensureActionPlannerItemsForStore(storeId);
-    const freshness = latest.rows[0]?.latest_date ? 0.92 : 0.5;
-    return (data.briefs ?? []).slice(0, 1).map((brief) => ({
-      ...brief,
-      store_id: storeId,
-      store_name: store?.store_name ?? DEMO_STORE_NAME,
-      trade_area_name: store?.region ?? brief.trade_area_name,
-      service_category_name: store?.business_category ?? brief.service_category_name,
-      headline: `${store?.store_name ?? DEMO_STORE_NAME}: 매출 변화와 공개 맥락 신호가 함께 관측되었습니다`,
-      summary: RELIABILITY_NOTE_KO,
-      data_freshness: freshness,
-      latest_revenue_date: latest.rows[0]?.latest_date ?? null,
-      generated_at: new Date().toISOString(),
-    }));
+
+    // Pull facts, candidates, evidence, actions, and the latest upload row in
+    // parallel so /briefs is composed deterministically from uploaded data
+    // — never the static export fallback.
+    const [factsResult, candidatesResult, evidenceResult, actionsResult, latestUploadResult] = await Promise.all([
+      query(
+        `SELECT business_date, net_sales_amount, gross_sales_amount, order_count
+         FROM revenue_daily_facts
+         WHERE store_id = $1
+         ORDER BY business_date ASC`,
+        [storeId],
+      ),
+      query(
+        `SELECT *
+         FROM cause_candidates
+         WHERE store_id = $1 AND COALESCE(status, 'active') <> 'superseded'`,
+        [storeId],
+      ),
+      query(
+        `SELECT e.*
+         FROM cause_candidate_evidence e
+         INNER JOIN cause_candidates c ON c.cause_candidate_id = e.cause_candidate_id
+         WHERE c.store_id = $1 AND COALESCE(c.status, 'active') <> 'superseded'`,
+        [storeId],
+      ),
+      query(
+        `SELECT *
+         FROM action_planner_items
+         WHERE store_id = $1`,
+        [storeId],
+      ),
+      query(
+        `SELECT *
+         FROM revenue_uploads
+         WHERE store_id = $1 AND status IN ('accepted', 'partially_accepted')
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [storeId],
+      ),
+    ]);
+
+    const composed = composeBriefFromUploadedFacts({
+      storeId,
+      store,
+      facts: factsResult.rows,
+      causeCandidates: candidatesResult.rows,
+      causeEvidence: evidenceResult.rows,
+      actions: actionsResult.rows,
+      latestUpload: latestUploadResult.rows[0] ?? null,
+    });
+    return composed ? [composed] : [];
   }
 
   async function getAnomaliesForStore(storeId) {

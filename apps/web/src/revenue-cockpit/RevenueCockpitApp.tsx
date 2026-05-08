@@ -5,6 +5,7 @@ import { SCENARIO, tr, DEFAULT_STATUSES } from './revenueCockpitCopy';
 import {
   apiCollectStoreContext,
   apiCreateStore,
+  apiArchiveStore,
   apiCreateRevenueUpload,
   apiPreviewRevenueUpload,
   apiFetchActions,
@@ -33,6 +34,12 @@ import type { RevenueAuthSession } from './revenueCockpitAuth';
 import { buildScenarioFromApi, wantsApiData } from './revenueCockpitData';
 import { Icon, ChromeBar } from './revenueCockpitShared';
 import { AuthPopover } from './AuthPopover';
+import {
+  SEOUL_SERVICE_CATEGORIES,
+  SEOUL_COMMERCIAL_SALES_ENDPOINT,
+  findSeoulServiceCategory,
+  seoulCategoryLabel,
+} from './seoulServiceCategories';
 import { RevenueBriefView } from './RevenueBriefView';
 import { CauseEvidenceView } from './CauseEvidenceView';
 import { ActionPlannerView } from './ActionPlannerView';
@@ -140,56 +147,57 @@ function resolveTheme(theme: RcTheme): 'light' | 'dark' {
 
 // ─── header (brand + tab nav + optional store bar) ───────────────────────────
 
-interface HeaderProps {
+// Report-level navigation for the selected store. Rendered on its own row,
+// right-aligned, beneath the store toolbar — distinct from global product
+// nav.
+function RcReportNavRow({
+  lang,
+  screen,
+  onSetScreen,
+  periodLabel,
+}: {
   lang: RcLang;
-  scenario: Scenario;
   screen: RcScreen;
   onSetScreen: (s: RcScreen) => void;
-  storeBar?: ReactNode;
-}
-
-function RcHeader({ lang, scenario, screen, onSetScreen, storeBar }: HeaderProps) {
+  periodLabel?: string | null;
+}) {
   const items: Array<{ id: RcScreen; label: string }> = [
-    { id: 'brief',       label: tr('navBrief', lang) },
-    { id: 'evidence',    label: tr('navEvidence', lang) },
-    { id: 'actions',     label: tr('navActions', lang) },
-    { id: 'reliability', label: tr('navReliability', lang) },
+    { id: 'brief',       label: lang === 'ko' ? '매출 요약' : 'Revenue summary' },
+    { id: 'evidence',    label: lang === 'ko' ? '원인 근거' : 'Cause evidence' },
+    { id: 'actions',     label: lang === 'ko' ? '실행 계획' : 'Action plan' },
+    { id: 'reliability', label: lang === 'ko' ? '데이터 상태' : 'Data status' },
   ];
   return (
-    <header className="rc-header">
-      {/* top row: logo + brand + scenario (left) · nav tabs (right) */}
-      <div className="rc-header-top">
-        <div className="rc-header-brand">
-          <img
-            className="rc-app-icon"
-            src="/brand/revenue-os-icon-512.png"
-            alt="Revenue OS"
-          />
-          <span className="rc-serif" style={{ fontSize: 16, letterSpacing: 0, color: 'var(--rc-fg-strong)', whiteSpace: 'nowrap', flexShrink: 0 }}>
-            Revenue&nbsp;<span style={{ fontStyle: 'italic', color: 'var(--rc-accent-strong)' }}>OS</span>
-          </span>
-          <span className="rc-header-scenario">
-            {scenario.area[lang]} · {scenario.category[lang]} · {scenario.compare[lang]}
-          </span>
-        </div>
-        <nav className="rc-header-nav">
-          {items.map(it => (
-            <button key={it.id} onClick={() => onSetScreen(it.id)} style={{
-              all: 'unset', cursor: 'pointer', padding: '8px 14px',
-              fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap',
-              color: screen === it.id ? 'var(--rc-fg-strong)' : 'var(--rc-fg-muted)',
-              borderBottom: screen === it.id ? '2px solid var(--rc-accent)' : '2px solid transparent',
-              marginBottom: -1,
-            }}>{it.label}</button>
-          ))}
-        </nav>
+    <div className="rc-report-nav-row">
+      <div className="rc-report-nav-period">
+        {periodLabel ? periodLabel : (lang === 'ko' ? '선택된 매장 리포트' : 'Selected store report')}
       </div>
-      {/* store bar row — only visible when logged in */}
-      {storeBar && (
-        <div className="rc-header-store-bar">
-          {storeBar}
-        </div>
-      )}
+      <nav className="rc-report-nav">
+        {items.map(it => (
+          <button
+            key={it.id}
+            type="button"
+            className={`rc-report-nav-tab${screen === it.id ? ' is-active' : ''}`}
+            onClick={() => onSetScreen(it.id)}
+          >
+            {it.label}
+          </button>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+interface StoreBarShellProps {
+  storeBar?: ReactNode;
+}
+function StoreBarShell({ storeBar }: StoreBarShellProps) {
+  if (!storeBar) return null;
+  return (
+    <header className="rc-header">
+      <div className="rc-header-store-bar">
+        {storeBar}
+      </div>
     </header>
   );
 }
@@ -201,13 +209,17 @@ interface StoreSwitcherProps {
   loading: boolean;
   notice: string | null;
   showCreate: boolean;
+  createError: string | null;
   form: StoreCreateForm;
   onSelectStore: (storeId: string) => void;
-  onToggleCreate: () => void;
+  onOpenCreate: () => void;
+  onCancelCreate: () => void;
   onChangeForm: (patch: Partial<StoreCreateForm>) => void;
   onCreateStore: () => void;
   onOpenAddressSearch: () => void;
   onOpenRevenueUpload: () => void;
+  onArchiveStore?: () => void;
+  canArchive?: boolean;
   compact?: boolean;
 }
 
@@ -231,22 +243,13 @@ interface BootstrapStatus {
 }
 
 const BOOTSTRAP_GROUPS = [
-  { key: 'registered', names: [], ko: '가게 등록 완료', en: 'Store registered' },
-  { key: 'location', names: ['kakao_geocoding'], ko: '위치 확인', en: 'Location' },
-  { key: 'weather', names: ['kma_weather'], ko: '날씨 맥락', en: 'Weather context' },
-  {
-    key: 'commerce',
-    names: ['seoul_commercial_benchmark', 'seoul_foot_traffic_proxy', 'seoul_store_density_proxy'],
-    ko: '서울 상권/유동인구',
-    en: 'Seoul trade-area context',
-  },
-  {
-    key: 'search',
-    names: ['naver_local_competitor_search', 'naver_search_trend', 'korean_holiday_calendar'],
-    ko: '검색/공휴일 맥락',
-    en: 'Search and holiday context',
-  },
-  { key: 'ready', names: [], ko: '초기 분석 준비 완료', en: 'Initial analysis ready' },
+  { key: 'registered', names: [],                  ko: '가게 등록 완료',     en: 'Store registered' },
+  { key: 'location',   names: ['kakao_geocoding'], ko: '주소·상권 확인',     en: 'Address & trade area' },
+  { key: 'baseline',   names: [],                  ko: '매출 기준 설정',     en: 'Revenue baseline' },
+  { key: 'population', names: ['seoul_foot_traffic_proxy'], ko: '생활인구 수집',  en: 'Foot traffic' },
+  { key: 'weather',    names: ['kma_weather'],     ko: '날씨 수집',          en: 'Weather' },
+  { key: 'commerce',   names: ['seoul_commercial_benchmark', 'seoul_store_density_proxy', 'naver_local_competitor_search'], ko: '점포·경쟁 맥락', en: 'Stores & competition' },
+  { key: 'ready',      names: [],                  ko: '초기 분석 준비',     en: 'Initial analysis ready' },
 ];
 
 function summarizeBootstrapFromMeta(storeId: string, pipelineMeta: Record<string, unknown> | undefined): BootstrapStatus | null {
@@ -273,15 +276,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function collectorGroupState(status: BootstrapStatus | null, names: string[]): 'done' | 'partial' | 'pending' {
+type StepState = 'done' | 'in-progress' | 'pending' | 'partial';
+
+function collectorGroupState(status: BootstrapStatus | null, names: string[]): StepState {
   if (!status) return 'pending';
-  if (names.length === 0) return status.phase === 'collecting' ? 'pending' : 'done';
+  if (names.length === 0) return status.phase === 'collecting' ? 'in-progress' : 'done';
   const matching = status.collectors.filter(collector => names.includes(String(collector.name ?? '')));
-  if (matching.length === 0) return 'pending';
+  if (matching.length === 0) return status.phase === 'collecting' ? 'in-progress' : 'pending';
   if (matching.some(collector => collector.status === 'completed')) return 'done';
   if (matching.some(collector => collector.status === 'failed')) return 'partial';
   if (matching.every(collector => collector.status === 'skipped')) return 'partial';
-  return 'pending';
+  return 'in-progress';
 }
 
 function OnboardingBootstrapPanel({
@@ -328,21 +333,31 @@ function OnboardingBootstrapPanel({
           </button>
         )}
       </div>
-      <div className="rc-bootstrap-steps">
-        {BOOTSTRAP_GROUPS.map(group => {
-          const state = group.key === 'registered'
+      <ol className="rc-bootstrap-steps">
+        {BOOTSTRAP_GROUPS.map((group, index) => {
+          const state: StepState = group.key === 'registered'
             ? 'done'
-            : group.key === 'ready'
-              ? (status.phase === 'ready' || status.phase === 'partial' ? 'done' : 'pending')
-              : collectorGroupState(status, group.names);
+            : group.key === 'baseline'
+              ? (status.phase === 'collecting' || status.phase === 'skipped' ? 'in-progress' : 'done')
+              : group.key === 'ready'
+                ? (status.phase === 'ready' || status.phase === 'partial' ? 'done' : 'pending')
+                : collectorGroupState(status, group.names);
+          const iconName = state === 'done'
+            ? 'check'
+            : state === 'in-progress'
+              ? 'spark'
+              : state === 'partial'
+                ? 'shield'
+                : 'dot';
           return (
-            <div key={group.key} className={`rc-bootstrap-step rc-bootstrap-step-${state}`}>
-              <Icon name={state === 'done' ? 'check' : state === 'partial' ? 'shield' : 'dot'} size={12}/>
-              <span>{lang === 'ko' ? group.ko : group.en}</span>
-            </div>
+            <li key={group.key} className={`rc-bootstrap-step rc-bootstrap-step-${state}`}>
+              <span className="rc-bootstrap-step-index" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+              <span className="rc-bootstrap-step-icon"><Icon name={iconName} size={12}/></span>
+              <span className="rc-bootstrap-step-label">{lang === 'ko' ? group.ko : group.en}</span>
+            </li>
           );
         })}
-      </div>
+      </ol>
     </section>
   );
 }
@@ -354,13 +369,17 @@ function StoreSwitcher({
   loading,
   notice,
   showCreate,
+  createError,
   form,
   onSelectStore,
-  onToggleCreate,
+  onOpenCreate,
+  onCancelCreate,
   onChangeForm,
   onCreateStore,
   onOpenAddressSearch,
   onOpenRevenueUpload,
+  onArchiveStore,
+  canArchive = false,
   compact = false,
 }: StoreSwitcherProps) {
   return (
@@ -375,15 +394,15 @@ function StoreSwitcher({
           onChange={event => onSelectStore(event.target.value)}
         >
           {stores.length === 0 && (
-            <option value="">{lang === 'ko' ? '등록된 가게 없음' : 'No stores'}</option>
+            <option value="">{lang === 'ko' ? '가게 미등록' : 'No store yet'}</option>
           )}
           {stores.map(store => (
             <option key={store.store_id} value={store.store_id}>
-              {formatStoreOption(store)}
+              {formatStoreOption(store, lang)}
             </option>
           ))}
         </select>
-        <button type="button" className="rc-store-button" onClick={onToggleCreate}>
+        <button type="button" className="rc-store-button" onClick={onOpenCreate}>
           {lang === 'ko' ? '새 가게 등록' : 'Add store'}
         </button>
         {selectedStoreId && (
@@ -391,62 +410,122 @@ function StoreSwitcher({
             {lang === 'ko' ? '매출 데이터 등록하기' : 'Add revenue data'}
           </button>
         )}
+        {canArchive && onArchiveStore && (
+          <button type="button" className="rc-store-button" onClick={onArchiveStore} title={lang === 'ko' ? '선택된 매장 보관' : 'Archive selected store'}>
+            {lang === 'ko' ? '보관' : 'Archive'}
+          </button>
+        )}
         {notice && <span className="rc-store-notice">{notice}</span>}
       </div>
-      {(showCreate || stores.length === 0) && (
-        <div className="rc-store-create">
-          <input
-            className="rc-store-input"
-            value={form.store_name}
-            placeholder={lang === 'ko' ? '가게 이름' : 'Store name'}
-            onChange={event => onChangeForm({ store_name: event.target.value })}
-          />
-          <input
-            className="rc-store-input"
-            value={form.tenant_name ?? ''}
-            placeholder={lang === 'ko' ? '테넌트 이름' : 'Tenant name'}
-            onChange={event => onChangeForm({ tenant_name: event.target.value })}
-          />
-          <input
-            className="rc-store-input"
-            value={form.business_category ?? ''}
-            placeholder={lang === 'ko' ? '업종' : 'Category'}
-            onChange={event => onChangeForm({ business_category: event.target.value })}
-          />
-          <input
-            className="rc-store-input"
-            value={form.region ?? ''}
-            placeholder={lang === 'ko' ? '지역' : 'Region'}
-            onChange={event => onChangeForm({ region: event.target.value })}
-          />
-          <input
-            className="rc-store-input rc-store-input-wide"
-            value={form.address_text ?? ''}
-            placeholder={lang === 'ko' ? '주소' : 'Address'}
-            onChange={event => onChangeForm({ address_text: event.target.value })}
-          />
-          <button type="button" className="rc-store-button" onClick={onOpenAddressSearch}>
-            {lang === 'ko' ? '주소 검색' : 'Search address'}
-          </button>
-          <input
-            className="rc-store-input"
-            value={form.detail_address ?? ''}
-            placeholder={lang === 'ko' ? '상세 주소' : 'Detail address'}
-            onChange={event => onChangeForm({ detail_address: event.target.value })}
-          />
-          <button type="button" className="rc-store-button rc-store-button-primary" onClick={onCreateStore}>
-            {lang === 'ko' ? '등록' : 'Create'}
-          </button>
+      {showCreate && (
+        <div className="rc-store-create-panel" role="dialog" aria-label={lang === 'ko' ? '새 가게 등록' : 'Add store'}>
+          <div className="rc-store-create-head">
+            <strong>{lang === 'ko' ? '새 가게 등록' : 'Add store'}</strong>
+            <button type="button" className="rc-store-create-close" onClick={onCancelCreate}>
+              {lang === 'ko' ? '취소' : 'Cancel'}
+            </button>
+          </div>
+          <div className="rc-store-create">
+            <input
+              className="rc-store-input"
+              value={form.store_name}
+              placeholder={lang === 'ko' ? '가게 이름 *' : 'Store name *'}
+              onChange={event => onChangeForm({ store_name: event.target.value })}
+              required
+            />
+            <input
+              className="rc-store-input"
+              value={form.tenant_name ?? ''}
+              placeholder={lang === 'ko' ? '건물명 / 호수 (선택)' : 'Building / Suite (optional)'}
+              onChange={event => onChangeForm({ tenant_name: event.target.value })}
+            />
+            <select
+              className="rc-store-select"
+              value={form.business_category ?? ''}
+              onChange={event => onChangeForm({ business_category: event.target.value })}
+              required
+            >
+              <option value="">{lang === 'ko' ? '업종 선택 (서울 상권코드) *' : 'Select category (Seoul code) *'}</option>
+              {SEOUL_SERVICE_CATEGORIES.map(category => (
+                <option key={category.code} value={category.code}>
+                  {category.code} · {category[lang]}
+                </option>
+              ))}
+            </select>
+            <input
+              className="rc-store-input"
+              value={form.region ?? ''}
+              placeholder={lang === 'ko' ? '지역 (주소 검색으로 자동)' : 'Region (auto from search)'}
+              readOnly
+              tabIndex={-1}
+              aria-readonly
+            />
+            <input
+              className="rc-store-input rc-store-input-wide"
+              value={form.address_text ?? ''}
+              placeholder={lang === 'ko' ? '주소 검색으로 주소를 선택해 주세요 *' : 'Select address via search *'}
+              readOnly
+              tabIndex={-1}
+              aria-readonly
+              onClick={onOpenAddressSearch}
+            />
+            <button type="button" className="rc-store-button" onClick={onOpenAddressSearch}>
+              {lang === 'ko' ? '주소 검색' : 'Search address'}
+            </button>
+            <input
+              className="rc-store-input"
+              value={form.detail_address ?? ''}
+              placeholder={lang === 'ko' ? '상세 주소 (선택)' : 'Detail address (optional)'}
+              onChange={event => onChangeForm({ detail_address: event.target.value })}
+            />
+            <button type="button" className="rc-store-button rc-store-button-primary" onClick={onCreateStore} disabled={loading}>
+              {lang === 'ko' ? '등록' : 'Create'}
+            </button>
+          </div>
+          {createError && (
+            <div className="rc-store-create-error rc-prose">
+              {createError}
+            </div>
+          )}
         </div>
       )}
     </section>
   );
 }
 
-function formatStoreOption(store: RevenueStoreSummary): string {
+// Header context summary: prefer the selected store's metadata; fall back to
+// the active scenario. Pending create-store form inputs must NOT leak in here.
+// Empty/junk fields are hidden rather than rendered as "업종 미입력".
+function buildHeaderContext(lang: RcLang, scenario: Scenario, store: RevenueStoreSummary | null): string {
+  if (store) {
+    const meta = store.metadata ?? {};
+    const labelFromMeta = lang === 'ko'
+      ? (typeof meta.business_category_label === 'string' ? meta.business_category_label : null)
+      : (typeof meta.business_category_label_en === 'string' ? meta.business_category_label_en : null);
+    const category = labelFromMeta
+      || seoulCategoryLabel(store.business_category, lang)
+      || store.business_category
+      || null;
+    const region = (typeof store.region === 'string' && store.region.trim()) ? store.region : null;
+    const period = scenario.periodLabel || scenario.compare[lang];
+    const parts = [region, category, period].filter((value): value is string => Boolean(value && value.trim()));
+    return parts.join(' · ');
+  }
+  return `${scenario.area[lang]} · ${scenario.category[lang]} · ${scenario.compare[lang]}`;
+}
+
+function formatStoreOption(store: RevenueStoreSummary, lang: RcLang): string {
+  const meta = store.metadata ?? {};
+  const labelFromMeta = lang === 'ko'
+    ? (typeof meta.business_category_label === 'string' ? meta.business_category_label : null)
+    : (typeof meta.business_category_label_en === 'string' ? meta.business_category_label_en : null);
+  const categoryDisplay = labelFromMeta
+    || seoulCategoryLabel(store.business_category, lang)
+    || store.business_category
+    || store.store_type;
   const parts = [
     store.store_name,
-    store.business_category || store.store_type,
+    categoryDisplay,
     store.region,
   ].filter(Boolean);
   if (isDemoStore(store)) parts.push('Demo');
@@ -662,12 +741,14 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
               ? '배달앱 계정 로그인 정보는 저장하지 않습니다. 내려받은 정산/주문 파일만 업로드합니다.'
               : 'Delivery account login credentials are not stored. Upload only exported settlement/order files.'}
           </p>
-          <select className="rc-store-select" value={sourceType} onChange={event => setSourceType(event.target.value)}>
-            <option value="generic_pos_csv">{lang === 'ko' ? '표준 일별 매출 CSV' : 'Standard daily sales CSV'}</option>
-            <option value="baemin_orders_csv">Baemin orders CSV</option>
-            <option value="coupangeats_orders_csv">CoupangEats orders CSV</option>
-          </select>
-          <input className="rc-file-input" type="file" accept=".csv,text/csv" onChange={event => onFileSelected(event.target.files?.[0] ?? null)}/>
+          <div className="rc-csv-source-row">
+            <select className="rc-store-select rc-csv-source-select" value={sourceType} onChange={event => setSourceType(event.target.value)}>
+              <option value="generic_pos_csv">{lang === 'ko' ? '표준 일별 매출 CSV' : 'Standard daily sales CSV'}</option>
+              <option value="baemin_orders_csv">Baemin orders CSV</option>
+              <option value="coupangeats_orders_csv">CoupangEats orders CSV</option>
+            </select>
+            <input className="rc-file-input rc-csv-file-input" type="file" accept=".csv,text/csv" onChange={event => onFileSelected(event.target.files?.[0] ?? null)}/>
+          </div>
           <textarea
             className="rc-revenue-csv"
             value={csvText}
@@ -874,6 +955,7 @@ export function RevenueCockpitApp() {
   const [storeLoading, setStoreLoading] = useState(false);
   const [storeNotice, setStoreNotice] = useState<string | null>(null);
   const [showCreateStore, setShowCreateStore] = useState(false);
+  const [createStoreError, setCreateStoreError] = useState<string | null>(null);
   const [showRevenueUpload, setShowRevenueUpload] = useState(false);
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
   const [latestPipelineMeta, setLatestPipelineMeta] = useState<Record<string, unknown> | null>(null);
@@ -1003,7 +1085,9 @@ export function RevenueCockpitApp() {
         setSelectedStoreId(nextSelected);
         setLatestPipelineMeta(null);
         setStoreNotice(nextStores.length === 0
-          ? (lang === 'ko' ? '등록된 가게가 없습니다.' : 'No stores yet.')
+          ? (lang === 'ko'
+              ? '예시 데이터로 보는 중입니다. 실제 매장 분석을 시작하려면 새 가게를 등록해 주세요.'
+              : 'Viewing demo data. To analyze your real shop, register a new store.')
           : null);
       })
       .catch(error => {
@@ -1118,6 +1202,10 @@ export function RevenueCockpitApp() {
               road_address: data.roadAddress || prev.road_address,
               jibun_address: data.jibunAddress || prev.jibun_address,
               address_source: 'postcode_search',
+              metadata: {
+                ...((prev as { metadata?: Record<string, unknown> }).metadata ?? {}),
+                address_selected: true,
+              },
             }));
             setStoreNotice(lang === 'ko' ? '주소가 선택되었습니다. 상세 주소를 확인해주세요.' : 'Address selected. Check the detail address.');
           },
@@ -1232,9 +1320,61 @@ export function RevenueCockpitApp() {
     return () => { cancelled = true; };
   }, [apiMode, authReloadTick, selectedStoreId]);
 
+  function handleArchiveSelectedStore() {
+    if (!selectedStoreId) return;
+    const target = stores.find((store) => store.store_id === selectedStoreId);
+    if (!target) return;
+    const label = target.store_name || (lang === 'ko' ? '선택된 매장' : 'this store');
+    const confirmed = window.confirm(
+      lang === 'ko'
+        ? `${label}을(를) 보관 처리하시겠습니까? 보관된 매장은 기본 목록에서 숨겨집니다. 매출/맥락 기록은 그대로 보존됩니다.`
+        : `Archive ${label}? It will be hidden from the default list. Revenue and context history is preserved.`,
+    );
+    if (!confirmed) return;
+    setStoreLoading(true);
+    apiArchiveStore(selectedStoreId)
+      .then(() => {
+        setStores((prev) => prev.filter((store) => store.store_id !== selectedStoreId));
+        const remaining = stores.filter((store) => store.store_id !== selectedStoreId);
+        const next = remaining[0]?.store_id ?? null;
+        setSelectedStoreId(next);
+        setLatestPipelineMeta(null);
+        setStoreNotice(lang === 'ko' ? '매장이 보관되었습니다.' : 'Store archived.');
+      })
+      .catch(() => {
+        setStoreNotice(lang === 'ko' ? '보관 처리에 실패했습니다.' : 'Could not archive the store.');
+      })
+      .finally(() => setStoreLoading(false));
+  }
+
+  function handleCancelCreateStore() {
+    setShowCreateStore(false);
+    setCreateStoreError(null);
+    setStoreForm({ store_name: '', tenant_name: '', business_category: '', region: '', address_text: '' });
+  }
+
   function handleCreateStore() {
+    setCreateStoreError(null);
     if (!storeForm.store_name.trim()) {
-      setStoreNotice(lang === 'ko' ? '가게 이름을 입력하세요.' : 'Enter a store name.');
+      setCreateStoreError(lang === 'ko' ? '가게 이름을 입력해 주세요.' : 'Enter a store name.');
+      return;
+    }
+    if (!storeForm.business_category?.trim()) {
+      setCreateStoreError(lang === 'ko' ? '업종을 선택해 주세요.' : 'Please select a category.');
+      return;
+    }
+    const addressSelected = storeForm.address_source === 'postcode_search'
+      || (storeForm.metadata as Record<string, unknown> | undefined)?.address_selected === true;
+    if (!storeForm.address_text?.trim() || !addressSelected) {
+      setCreateStoreError(lang === 'ko'
+        ? '주소 검색으로 주소를 선택해 주세요.'
+        : 'Please select an address via address search.');
+      return;
+    }
+    if (!getStoredCognitoToken()) {
+      setCreateStoreError(lang === 'ko'
+        ? '로그인 상태를 확인해 주세요. 다시 로그인하면 등록을 이어갈 수 있습니다.'
+        : 'Please sign in again to continue creating the store.');
       return;
     }
 
@@ -1244,19 +1384,30 @@ export function RevenueCockpitApp() {
 
     setStoreLoading(true);
     setStoreNotice(lang === 'ko' ? '가게를 등록하는 중입니다.' : 'Creating store.');
+    const categoryCode = storeForm.business_category?.trim() || undefined;
+    const seoulCategory = findSeoulServiceCategory(categoryCode);
     apiCreateStore({
       store_name: storeForm.store_name.trim(),
       tenant_name: storeForm.tenant_name?.trim() || undefined,
-      business_category: storeForm.business_category?.trim() || undefined,
+      business_category: categoryCode,
       region: storeForm.region?.trim() || undefined,
       address_text: addressText,
+      address_source: storeForm.address_source || 'postcode_search',
+      address_selected: true,
       metadata: {
         ...(storeForm.metadata ?? {}),
-        ...(storeForm.address_source ? { address_source: storeForm.address_source } : {}),
+        address_source: storeForm.address_source || 'postcode_search',
+        address_selected: true,
         ...(storeForm.postal_code ? { postal_code: storeForm.postal_code } : {}),
         ...(storeForm.road_address ? { road_address: storeForm.road_address } : {}),
         ...(storeForm.jibun_address ? { jibun_address: storeForm.jibun_address } : {}),
         ...(storeForm.detail_address?.trim() ? { detail_address: storeForm.detail_address.trim() } : {}),
+        ...(seoulCategory ? {
+          business_category_label: seoulCategory.ko,
+          business_category_label_en: seoulCategory.en,
+          business_category_source: 'seoul_open_data',
+          commercial_sales_endpoint: SEOUL_COMMERCIAL_SALES_ENDPOINT,
+        } : {}),
       },
     })
       .then(envelope => {
@@ -1267,6 +1418,7 @@ export function RevenueCockpitApp() {
         setLatestPipelineMeta(null);
         setStoreForm({ store_name: '', tenant_name: '', business_category: '', region: '', address_text: '' });
         setShowCreateStore(false);
+        setCreateStoreError(null);
         setShowRevenueUpload(false);
         if (envelope.context_bootstrap_hint?.recommended) {
           setStoreNotice(lang === 'ko' ? '가게 등록 완료 · 맥락 수집 중...' : 'Store created · collecting context...');
@@ -1285,8 +1437,24 @@ export function RevenueCockpitApp() {
           setStoreNotice(lang === 'ko' ? '가게가 등록되었습니다. 주소와 업종을 보강하면 맥락 수집을 시작할 수 있습니다.' : 'Store created. Add address and category to collect context.');
         }
       })
-      .catch(() => {
-        setStoreNotice(lang === 'ko' ? '가게 등록에 실패했습니다.' : 'Could not create store.');
+      .catch(error => {
+        // Surface a calm, specific message inside the create-store panel.
+        // The top-row store notice stays clear so the brief does not look broken.
+        setStoreNotice(null);
+        const status = error instanceof RevenueApiError ? error.status : 0;
+        if (status === 401 || status === 403) {
+          setCreateStoreError(lang === 'ko'
+            ? '로그인 상태를 확인해 주세요. 세션이 만료되었을 수 있습니다.'
+            : 'Please check your sign-in state — your session may have expired.');
+        } else if (status === 400 || status === 422) {
+          setCreateStoreError(lang === 'ko'
+            ? '입력값을 다시 확인해 주세요. 가게 이름, 업종, 주소(검색 선택)는 필수입니다.'
+            : 'Please double-check the inputs. Store name, category, and search-selected address are required.');
+        } else {
+          setCreateStoreError(lang === 'ko'
+            ? '등록에 실패했습니다. 입력값 또는 로그인 상태를 확인해 주세요.'
+            : 'Registration failed. Please check the inputs or your sign-in state.');
+        }
       })
       .finally(() => setStoreLoading(false));
   }
@@ -1302,9 +1470,6 @@ export function RevenueCockpitApp() {
     window.location.assign(buildCognitoLogoutUrl());
   }
 
-  const chromeLabel = lang === 'ko'
-    ? '매출 코크핏 — 근거 기반 액션 브리프'
-    : 'Merchant Revenue Cockpit — Evidence-backed Action Brief';
   const selectedStore = stores.find(store => store.store_id === selectedStoreId) ?? null;
   const selectedStoreIsDemo = isDemoStore(selectedStore);
   const latestRevenueUpload = isRecord(latestPipelineMeta?.latest_revenue_upload)
@@ -1312,7 +1477,17 @@ export function RevenueCockpitApp() {
     : null;
   const latestRevenueUploadIsDemo = isRecord(latestRevenueUpload?.metadata) && latestRevenueUpload.metadata.is_demo === true;
   const hasRevenueData = selectedStoreIsDemo || Boolean(latestRevenueUpload);
-  const noRevenueMode = Boolean(apiMode && selectedStoreId && !selectedStoreIsDemo && latestPipelineMeta && !hasRevenueData);
+  // The empty-state card duplicates the upload panel CTAs; hide it while
+  // create-store or revenue-upload panels are open.
+  const noRevenueMode = Boolean(
+    apiMode
+    && selectedStoreId
+    && !selectedStoreIsDemo
+    && latestPipelineMeta
+    && !hasRevenueData
+    && !showCreateStore
+    && !showRevenueUpload
+  );
   const showDemoBadge = selectedStoreIsDemo || latestRevenueUploadIsDemo || scenario.isDemo;
   const noticeCopy = apiNotice === 'loading'
     ? (lang === 'ko' ? 'API 데이터를 확인하는 중입니다.' : 'Checking API data.')
@@ -1335,7 +1510,18 @@ export function RevenueCockpitApp() {
   return (
     <div className="rc-root" data-theme={effectiveTheme}>
       <ChromeBar
-        lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} label={chromeLabel}
+        lang={lang} setLang={setLang} theme={theme} setTheme={setTheme}
+        leadSlot={
+          <div className="rc-chrome-brand">
+            <img className="rc-app-icon" src="/brand/revenue-os-icon-512.png" alt="Revenue OS"/>
+            <span className="rc-serif rc-chrome-brand-name">
+              Revenue&nbsp;<span style={{ fontStyle: 'italic', color: 'var(--rc-accent-strong)' }}>OS</span>
+            </span>
+            <span className="rc-chrome-brand-context">
+              {buildHeaderContext(lang, scenario, selectedStore)}
+            </span>
+          </div>
+        }
         authEmail={apiMode ? (authSession?.email ?? null) : null}
         onLogout={apiMode && authSession ? handleLogout : undefined}
         loginSlot={apiMode && !authSession ? (
@@ -1362,11 +1548,7 @@ export function RevenueCockpitApp() {
           </div>
         ) : null}
       />
-      <RcHeader
-        lang={lang}
-        scenario={scenario}
-        screen={screen}
-        onSetScreen={setScreen}
+      <StoreBarShell
         storeBar={isLoggedIn ? (
           <StoreSwitcher
             lang={lang}
@@ -1375,20 +1557,37 @@ export function RevenueCockpitApp() {
             loading={storeLoading}
             notice={storeNotice}
             showCreate={showCreateStore}
+            createError={createStoreError}
             form={storeForm}
             onSelectStore={storeId => {
               setSelectedStoreId(storeId);
               setLatestPipelineMeta(null);
               setShowRevenueUpload(false);
             }}
-            onToggleCreate={() => setShowCreateStore(value => !value)}
+            onOpenCreate={() => {
+              setShowCreateStore(true);
+              setCreateStoreError(null);
+            }}
+            onCancelCreate={handleCancelCreateStore}
             onChangeForm={patch => setStoreForm(prev => ({ ...prev, ...patch }))}
             onCreateStore={handleCreateStore}
             onOpenAddressSearch={handleOpenAddressSearch}
             onOpenRevenueUpload={() => setShowRevenueUpload(value => !value)}
+            onArchiveStore={handleArchiveSelectedStore}
+            canArchive={Boolean(selectedStoreId && selectedStore && !selectedStoreIsDemo)}
             compact
           />
         ) : null}
+      />
+      <RcReportNavRow
+        lang={lang}
+        screen={screen}
+        onSetScreen={setScreen}
+        periodLabel={selectedStore
+          ? (latestRevenueUpload?.created_at
+              ? (lang === 'ko' ? '최근 업로드 기준' : 'Latest upload')
+              : (lang === 'ko' ? '선택된 매장 리포트' : 'Selected store report'))
+          : (lang === 'ko' ? '예시 데이터 기준 리포트' : 'Demo data report')}
       />
       {showDemoBadge && (
         <div className="rc-demo-strip">
