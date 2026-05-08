@@ -97,7 +97,7 @@ function inferCause(candidate: ApiRecord, index: number, fallback: CauseCandidat
       ? { ko: '동종 점포수 증가', en: 'More nearby competitors' }
       : id === 'demand'
         ? { ko: '생활인구·수요 약화', en: 'Foot traffic / demand softened' }
-        : { ko: '컨텍스트 변화', en: 'Context shift' };
+        : causeFallbackTitle(str(candidate.candidate_type));
 
   const strengthValue = str(candidate.evidence_strength, str(candidate.strength, fallback.strength));
   const strength: SignalStrength =
@@ -118,8 +118,45 @@ function inferCause(candidate: ApiRecord, index: number, fallback: CauseCandidat
       en: rawText || fallback.body.en,
     },
     delta: num(candidate.delta_pct, fallback.delta),
-    sources: [str(candidate.source_ref, 'gold_export')],
+    sources: [displayCauseSource(str(candidate.source_ref, 'gold_export'), candidate)],
   };
+}
+
+
+function causeFallbackTitle(candidateType: string): { ko: string; en: string } {
+  const type = candidateType || '';
+
+  if (type === 'benchmark_downturn') {
+    return { ko: '상권 벤치마크 약세 가능성', en: 'Commercial benchmark downturn' };
+  }
+  if (type === 'foot_traffic_drop') {
+    return { ko: '유동인구 프록시 하락 가능성', en: 'Foot traffic proxy decline' };
+  }
+  if (type === 'rainy_day_offline_drop') {
+    return { ko: '비 오는 날 오프라인 주문 하락 가능성', en: 'Rainy-day offline order drop' };
+  }
+  if (type.includes('search')) {
+    return { ko: '검색 관심도 변화 가능성', en: 'Search interest shift' };
+  }
+
+  return { ko: '맥락 신호 변화', en: 'Context signal shift' };
+}
+
+function displayCauseSource(source: string, candidate: ApiRecord): string {
+  const type = str(candidate.candidate_type);
+  const normalized = (source || '').trim();
+
+  if (type === 'benchmark_downturn') return '서울 열린데이터 상권 벤치마크';
+  if (type === 'foot_traffic_drop') return '서울 열린데이터 유동인구 프록시';
+  if (type === 'rainy_day_offline_drop') return '기상청 ASOS · 서울';
+  if (type.includes('search')) return '네이버 DataLab 검색 관심도';
+
+  if (!normalized) return '업로드 매출 데이터';
+  if (normalized === 'gold_export') return '업로드 매출 데이터';
+  if (normalized.startsWith('revenue_daily_facts:')) return '업로드 매출 데이터';
+  if (normalized.includes('Seoul Open Data')) return normalized.replace('Seoul Open Data', '서울 열린데이터');
+
+  return normalized;
 }
 
 function buildCauses(brief: ApiRecord | undefined, anomalies: ApiRecord[]): CauseCandidate[] {
