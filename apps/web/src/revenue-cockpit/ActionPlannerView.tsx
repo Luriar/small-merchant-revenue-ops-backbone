@@ -81,19 +81,21 @@ export function ActionPlannerView({ lang, scenario = SCENARIO, statuses, onSetSt
   }));
 
   return (
-    <div style={{ padding: '32px 36px 44px' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <div>
+    <div className="rc-page">
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
           <h1 className="rc-serif" style={{ fontSize: 28, fontWeight: 500, margin: 0, color: 'var(--rc-fg-strong)' }}>
             {tr('navActions', lang)}
           </h1>
-          <p style={{ fontSize: 13.5, color: 'var(--rc-fg-muted)', marginTop: 6, maxWidth: 600, lineHeight: 1.6 }}>
+          <p className="rc-prose" style={{ fontSize: 13.5, color: 'var(--rc-fg-muted)', marginTop: 6, lineHeight: 1.6 }}>
             {lang === 'ko'
               ? `근거 후보에 연결된 ${scenario.actions.length}개의 추천 액션입니다. 매출 회복을 보장하지 않습니다 — 검토하고 본인 매장에 맞춰 결정해주세요.`
               : `${scenario.actions.length} actions tied to the cause candidates. None guarantees revenue recovery — review and decide what fits your shop.`}
           </p>
         </div>
-        <Pill tone="warm">{lang === 'ko' ? `${scenario.actions.length}개 추천` : `${scenario.actions.length} recommended`}</Pill>
+        <div style={{ flexShrink: 0, paddingTop: 6 }}>
+          <Pill tone="warm">{lang === 'ko' ? `${scenario.actions.length}개 추천` : `${scenario.actions.length} recommended`}</Pill>
+        </div>
       </div>
 
       {/* status flow legend */}

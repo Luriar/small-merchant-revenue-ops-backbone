@@ -37,6 +37,12 @@
   --rc-serif: 'Source Serif 4', 'Iowan Old Style', Georgia, serif;
   --rc-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --rc-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Shared layout primitives — keep page widths and control heights aligned. */
+  --rc-page-content-max: 1180px;
+  --rc-page-pad-x: 32px;
+  --rc-page-pad-x-narrow: 16px;
+  --rc-control-h: 32px;
 }
 
 .rc-root[data-theme="dark"] {
@@ -479,7 +485,14 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  max-width: 1180px;
+  max-width: var(--rc-page-content-max);
+  margin: 0 auto;
+}
+
+.rc-revenue-upload-head > div p {
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
 .rc-revenue-upload-head strong {
@@ -497,10 +510,10 @@
 
 .rc-revenue-upload-grid {
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 12px;
-  max-width: 1180px;
-  margin-top: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  max-width: var(--rc-page-content-max);
+  margin: 14px auto 0;
 }
 
 .rc-revenue-upload-card {
@@ -551,8 +564,8 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  max-width: 1180px;
-  margin-top: 10px;
+  max-width: var(--rc-page-content-max);
+  margin: 10px auto 0;
   padding: 9px 11px;
   border: 1px solid var(--rc-good-soft-bd);
   border-radius: 7px;
@@ -750,4 +763,434 @@
   display: block;
   flex: 0 0 auto;
   box-shadow: 0 0 0 1px rgba(255, 149, 92, 0.22);
+}
+
+/* ─── shared page layout helpers ─────────────────────────────────────────── */
+
+.rc-page {
+  width: 100%;
+  max-width: var(--rc-page-content-max);
+  margin: 0 auto;
+  padding: 32px var(--rc-page-pad-x) 44px;
+  box-sizing: border-box;
+}
+
+.rc-page-narrow {
+  max-width: 980px;
+}
+
+.rc-page-2col {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.rc-page-2col-asym {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .rc-page {
+    padding: 24px var(--rc-page-pad-x-narrow) 36px;
+  }
+  .rc-page-2col,
+  .rc-page-2col-asym {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* prose paragraphs — use natural wrap, do not force breaks */
+.rc-prose {
+  white-space: normal;
+  word-break: keep-all;
+  line-break: strict;
+  overflow-wrap: break-word;
+}
+
+/* ─── chrome bar auth chip ───────────────────────────────────────────────── */
+
+/* Top control group height matches the language/theme controls.
+   The auth chip uses the same height and a wider email column so emails are
+   never visually clipped at common widths. */
+.rc-chrome-control-group {
+  display: inline-flex;
+  align-items: center;
+  height: var(--rc-control-h);
+  box-sizing: border-box;
+  padding: 2px;
+  border: 1px solid var(--rc-rule);
+  border-radius: 8px;
+  background: var(--rc-surface-0);
+  flex-shrink: 0;
+}
+
+.rc-chrome-auth-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--rc-control-h);
+  box-sizing: border-box;
+  padding: 0 10px 0 8px;
+  border: 1px solid var(--rc-rule);
+  border-radius: 999px;
+  background: var(--rc-surface-0);
+  color: var(--rc-fg-muted);
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.rc-chrome-auth-chip-email {
+  color: var(--rc-fg);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+@media (max-width: 760px) {
+  .rc-chrome-auth-chip-email {
+    max-width: 140px;
+  }
+}
+
+.rc-chrome-auth-chip-logout {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--rc-rule);
+  border-radius: 6px;
+  background: var(--rc-surface-1);
+  color: var(--rc-fg-dim);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-left: 2px;
+}
+
+.rc-chrome-auth-chip-login {
+  display: inline-flex;
+  align-items: center;
+  height: var(--rc-control-h);
+  padding: 0 12px;
+  border: 1px solid var(--rc-accent-soft-bd);
+  border-radius: 999px;
+  background: var(--rc-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.rc-chrome-auth-chip-login:hover {
+  filter: brightness(1.05);
+}
+
+/* ─── auth popover ────────────────────────────────────────────────────────── */
+
+.rc-auth-popover-anchor {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.rc-auth-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(380px, calc(100vw - 24px));
+  background: var(--rc-surface-1);
+  border: 1px solid var(--rc-rule-strong);
+  border-radius: 12px;
+  box-shadow: var(--rc-shadow-lg);
+  padding: 18px 18px 16px;
+  z-index: 60;
+  color: var(--rc-fg);
+}
+
+.rc-auth-popover-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.rc-auth-popover-title {
+  font-family: var(--rc-serif);
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--rc-fg-strong);
+  margin: 0;
+}
+
+.rc-auth-popover-subtitle {
+  font-size: 11.5px;
+  color: var(--rc-fg-muted);
+  line-height: 1.5;
+  margin: 0 0 10px;
+  white-space: normal;
+  word-break: keep-all;
+}
+
+.rc-auth-popover-tabs {
+  display: inline-flex;
+  border: 1px solid var(--rc-rule);
+  border-radius: 8px;
+  background: var(--rc-surface-0);
+  padding: 2px;
+  margin-bottom: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.rc-auth-popover-tab {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--rc-fg-muted);
+}
+
+.rc-auth-popover-tab.is-active {
+  background: var(--rc-surface-2);
+  color: var(--rc-fg-strong);
+}
+
+.rc-auth-popover-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rc-auth-popover-input {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--rc-rule-strong);
+  border-radius: 8px;
+  background: var(--rc-surface-0);
+  color: var(--rc-fg-strong);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 12px;
+  box-sizing: border-box;
+}
+
+.rc-auth-popover-input:focus {
+  outline: 2px solid var(--rc-accent-soft);
+  outline-offset: -1px;
+  border-color: var(--rc-accent);
+}
+
+.rc-auth-popover-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.rc-auth-popover-primary {
+  flex: 1;
+  height: 38px;
+  border: 1px solid var(--rc-accent-soft-bd);
+  background: var(--rc-accent);
+  color: #fff;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.rc-auth-popover-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.rc-auth-popover-link {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--rc-fg-muted);
+  padding: 4px 6px;
+  text-decoration: none;
+}
+
+.rc-auth-popover-link:hover {
+  color: var(--rc-accent-strong);
+  text-decoration: underline;
+}
+
+.rc-auth-popover-error {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--rc-bad-soft-bd);
+  border-radius: 7px;
+  background: var(--rc-bad-soft);
+  color: var(--rc-bad-strong);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: keep-all;
+}
+
+.rc-auth-popover-info {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--rc-good-soft-bd);
+  border-radius: 7px;
+  background: var(--rc-good-soft);
+  color: var(--rc-good-strong);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: keep-all;
+}
+
+.rc-auth-popover-foot {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--rc-rule);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--rc-fg-dim);
+}
+
+/* ─── revenue upload preview result ──────────────────────────────────────── */
+
+.rc-revenue-upload-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rc-upload-preview-card {
+  margin-top: 12px;
+  max-width: var(--rc-page-content-max);
+  padding: 14px 16px;
+  border: 1px solid var(--rc-info-soft-bd);
+  border-radius: 10px;
+  background: var(--rc-info-soft);
+  color: var(--rc-fg);
+}
+
+.rc-upload-preview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.rc-upload-preview-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--rc-fg-strong);
+  margin: 0;
+}
+
+.rc-upload-preview-meta {
+  font-size: 11px;
+  color: var(--rc-fg-muted);
+}
+
+.rc-upload-preview-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.rc-upload-preview-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--rc-surface-1);
+  border: 1px solid var(--rc-rule);
+  color: var(--rc-fg);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.rc-upload-preview-chip-good {
+  border-color: var(--rc-good-soft-bd);
+  background: var(--rc-good-soft);
+  color: var(--rc-good-strong);
+}
+
+.rc-upload-preview-chip-bad {
+  border-color: var(--rc-bad-soft-bd);
+  background: var(--rc-bad-soft);
+  color: var(--rc-bad-strong);
+}
+
+.rc-upload-preview-section {
+  margin-top: 8px;
+}
+
+.rc-upload-preview-section-label {
+  font-size: 10.5px;
+  color: var(--rc-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.rc-upload-preview-mapping {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
+  row-gap: 4px;
+  column-gap: 10px;
+  font-size: 12px;
+}
+
+.rc-upload-preview-mapping dt {
+  color: var(--rc-fg-muted);
+  font-weight: 600;
+  margin: 0;
+}
+
+.rc-upload-preview-mapping dd {
+  color: var(--rc-fg-strong);
+  margin: 0;
+  font-family: var(--rc-mono);
+}
+
+.rc-upload-preview-rejected {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--rc-bad-strong);
+  white-space: normal;
+  word-break: keep-all;
+}
+
+.rc-upload-preview-rejected-row {
+  border: 1px solid var(--rc-bad-soft-bd);
+  background: var(--rc-bad-soft);
+  border-radius: 6px;
+  padding: 5px 8px;
 }

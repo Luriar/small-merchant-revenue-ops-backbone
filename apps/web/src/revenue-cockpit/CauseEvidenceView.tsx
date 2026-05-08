@@ -161,13 +161,15 @@ export function CauseEvidenceView({ lang, scenario = SCENARIO }: CauseEvidenceVi
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10.5, color: 'var(--rc-fg-muted)', textTransform: 'uppercase', letterSpacing: '0.10em' }}>
           <Icon name={cause.icon} size={12}/> {tr(`strength_${cause.strength}`, lang)} · {tr('observedTogether', lang)}
         </div>
-        <h1 className="rc-serif" style={{ fontSize: 30, lineHeight: 1.15, fontWeight: 400, margin: '10px 0 6px', color: 'var(--rc-fg-strong)' }}>
+        <h1 className="rc-serif rc-prose" style={{ fontSize: 30, lineHeight: 1.18, fontWeight: 400, margin: '10px 0 10px', color: 'var(--rc-fg-strong)' }}>
           {cause.title[lang]}
         </h1>
-        <p className="rc-serif" style={{ fontSize: 17, lineHeight: 1.45, color: 'var(--rc-fg)', margin: '0 0 12px', fontStyle: 'italic', maxWidth: 720 }}>
-          "{cause.headline[lang]}"
+        <p className="rc-prose" style={{ fontSize: 14, color: 'var(--rc-fg-muted)', maxWidth: 720, lineHeight: 1.7, marginTop: 0 }}>
+          <span className="rc-serif" style={{ color: 'var(--rc-fg)', fontStyle: 'italic', marginRight: 6 }}>
+            {cause.headline[lang]}
+          </span>
+          {cause.body[lang]}
         </p>
-        <p style={{ fontSize: 13.5, color: 'var(--rc-fg-muted)', maxWidth: 720, lineHeight: 1.65, marginTop: 0 }}>{cause.body[lang]}</p>
 
         {/* baseline vs compare card */}
         <div className="rc-card" style={{ marginTop: 22, padding: '20px 22px', boxShadow: 'var(--rc-shadow-sm)' }}>

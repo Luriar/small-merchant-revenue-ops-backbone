@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import type { ActionStatus, RcLang, RcTheme } from './revenueCockpitTypes';
 
 // ─── icon atoms ───────────────────────────────────────────────────────────────
@@ -253,13 +254,13 @@ interface ChromeBarProps {
   setTheme: (t: RcTheme) => void;
   label: string;
   authEmail?: string | null;
-  onLogin?: () => void;
   onLogout?: () => void;
+  loginSlot?: ReactNode;
 }
-export function ChromeBar({ lang, setLang, theme, setTheme, label, authEmail, onLogin, onLogout }: ChromeBarProps) {
+export function ChromeBar({ lang, setLang, theme, setTheme, label, authEmail, onLogout, loginSlot }: ChromeBarProps) {
   const Btn = ({ active, onClick, title, children }: { active: boolean; onClick: () => void; title?: string; children: React.ReactNode }) => (
     <button onClick={onClick} title={title} style={{
-      all: 'unset', cursor: 'pointer', padding: '6px 8px', borderRadius: 6,
+      all: 'unset', cursor: 'pointer', padding: '0 8px', height: 26, borderRadius: 6,
       display: 'inline-flex', alignItems: 'center', gap: 4,
       color: active ? 'var(--rc-fg)' : 'var(--rc-fg-muted)',
       background: active ? 'var(--rc-surface-2)' : 'transparent',
@@ -278,60 +279,35 @@ export function ChromeBar({ lang, setLang, theme, setTheme, label, authEmail, on
       }}>
         {label}
       </span>
-      <div style={{ display: 'inline-flex', border: '1px solid var(--rc-rule)', borderRadius: 8, padding: 2, background: 'var(--rc-surface-0)', flexShrink: 0 }}>
+      <div className="rc-chrome-control-group">
         <Btn active={lang === 'ko'} onClick={() => setLang('ko')}>KO</Btn>
         <Btn active={lang === 'en'} onClick={() => setLang('en')}>EN</Btn>
       </div>
-      <div style={{ display: 'inline-flex', border: '1px solid var(--rc-rule)', borderRadius: 8, padding: 2, background: 'var(--rc-surface-0)', flexShrink: 0 }}>
+      <div className="rc-chrome-control-group">
         <Btn active={theme === 'light'}  onClick={() => setTheme('light')}  title="Light"><Icon name="sun" size={14}/></Btn>
         <Btn active={theme === 'dark'}   onClick={() => setTheme('dark')}   title="Dark"><Icon name="moon" size={14}/></Btn>
         <Btn active={theme === 'system'} onClick={() => setTheme('system')} title="System"><Icon name="auto" size={14}/></Btn>
       </div>
-      {(authEmail || onLogin) && (
-        <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
-          minHeight: 26, boxSizing: 'border-box',
-          padding: '2px 8px 2px 6px', borderRadius: 999,
-          border: '1px solid var(--rc-rule)', background: 'var(--rc-surface-0)',
-          fontSize: 11.5, lineHeight: 1,
-        }}>
-          {authEmail ? (
-            <>
-              <span style={{
-                width: 16, height: 16, borderRadius: '50%',
-                background: 'var(--rc-accent-soft)', color: 'var(--rc-accent-strong)',
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                flexShrink: 0,
-              }}>
-                <Icon name="globe" size={9}/>
-              </span>
-              <span style={{ color: 'var(--rc-fg-muted)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {authEmail}
-              </span>
-              {onLogout && (
-                <button onClick={onLogout} style={{
-                  all: 'unset', cursor: 'pointer', fontSize: 10.5, fontWeight: 500,
-                  color: 'var(--rc-fg-dim)', height: 18, padding: '0 6px', borderRadius: 4,
-                  border: '1px solid var(--rc-rule)', background: 'var(--rc-surface-1)',
-                  marginLeft: 2, display: 'inline-flex', alignItems: 'center', lineHeight: 1,
-                }}>
-                  {lang === 'ko' ? '로그아웃' : 'Logout'}
-                </button>
-              )}
-            </>
-          ) : onLogin ? (
-            <>
-              <Icon name="globe" size={12}/>
-              <button onClick={onLogin} style={{
-                all: 'unset', cursor: 'pointer', fontSize: 11, fontWeight: 600,
-                color: 'var(--rc-accent-strong)',
-              }}>
-                {lang === 'ko' ? '로그인' : 'Login'}
-              </button>
-            </>
-          ) : null}
+      {authEmail ? (
+        <div className="rc-chrome-auth-chip">
+          <span style={{
+            width: 18, height: 18, borderRadius: '50%',
+            background: 'var(--rc-accent-soft)', color: 'var(--rc-accent-strong)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+          }}>
+            <Icon name="globe" size={10}/>
+          </span>
+          <span className="rc-chrome-auth-chip-email" title={authEmail}>
+            {authEmail}
+          </span>
+          {onLogout && (
+            <button type="button" className="rc-chrome-auth-chip-logout" onClick={onLogout}>
+              {lang === 'ko' ? '로그아웃' : 'Logout'}
+            </button>
+          )}
         </div>
-      )}
+      ) : loginSlot ? loginSlot : null}
     </div>
   );
 }

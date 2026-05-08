@@ -72,9 +72,9 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
   ];
 
   return (
-    <div className="rc-reliability-page" style={{ padding: '34px 40px 46px' }}>
+    <div className="rc-reliability-page rc-page">
       {/* headline */}
-      <div className="rc-reliability-hero" style={{ maxWidth: 980 }}>
+      <div className="rc-reliability-hero">
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 10.5,
           color: 'var(--rc-fg-muted)', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
           <Icon name="shield" size={11}/> {lang === 'ko' ? '신뢰도' : 'Reliability'}
@@ -102,7 +102,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
       </div>
 
       {/* three trust cards */}
-      <div className="rc-reliability-card-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginTop: 16, maxWidth: 980 }}>
+      <div className="rc-reliability-card-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginTop: 16 }}>
         {trustCards.map((card, i) => (
           <div key={i} className="rc-card rc-reliability-trust-card" style={{ padding: '18px 18px 17px' }}>
             <div style={{
@@ -120,7 +120,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
       </div>
 
       {/* source detail table */}
-      <div style={{ marginTop: 28, maxWidth: 980 }}>
+      <div style={{ marginTop: 28 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <h2 className="rc-serif" style={{ fontSize: 18, fontWeight: 500, margin: 0, color: 'var(--rc-fg-strong)' }}>
             {lang === 'ko' ? '데이터 소스 상세' : 'Source details'}
@@ -173,7 +173,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
       </div>
 
       {/* run info */}
-      <div className="rc-card" style={{ marginTop: 16, padding: '12px 18px', display: 'flex', alignItems: 'center', gap: 12, maxWidth: 980 }}>
+      <div className="rc-card" style={{ marginTop: 16, padding: '12px 18px', display: 'flex', alignItems: 'center', gap: 12 }}>
         <span style={{
           width: 28, height: 28, borderRadius: '50%',
           background: 'var(--rc-good-soft)', color: 'var(--rc-good-strong)',
@@ -190,7 +190,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
       {/* limits */}
       <div style={{
         marginTop: 22, padding: '16px 20px', borderRadius: 12,
-        background: 'var(--rc-surface-2)', maxWidth: 980, border: '1px solid var(--rc-rule)',
+        background: 'var(--rc-surface-2)', border: '1px solid var(--rc-rule)',
       }}>
         <div style={{ fontSize: 10.5, color: 'var(--rc-fg-muted)', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 8 }}>
           {lang === 'ko' ? '한계점 — 꼭 알아두세요' : 'Limits — please keep in mind'}

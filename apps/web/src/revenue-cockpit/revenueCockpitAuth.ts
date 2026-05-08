@@ -8,6 +8,8 @@ const CLIENT_ID = viteEnv.VITE_REVENUE_COGNITO_CLIENT_ID || '6ckcj7igctutanc2s6c
 const HOSTED_UI = viteEnv.VITE_REVENUE_COGNITO_HOSTED_UI || 'https://revenue-ops-dev-827913617635.auth.ap-northeast-2.amazoncognito.com';
 const REDIRECT_URI = viteEnv.VITE_REVENUE_COGNITO_REDIRECT_URI || 'https://d1fquuc7vsf9cu.cloudfront.net/';
 const LOGOUT_URI = viteEnv.VITE_REVENUE_COGNITO_LOGOUT_URI || REDIRECT_URI;
+const REGION = viteEnv.VITE_REVENUE_COGNITO_REGION || 'ap-northeast-2';
+const IDP_ENDPOINT = `https://cognito-idp.${REGION}.amazonaws.com/`;
 
 const STORAGE_PREFIX = 'revenue_ops_cognito';
 const VERIFIER_KEY = `${STORAGE_PREFIX}_code_verifier`;
@@ -190,4 +192,145 @@ export function buildCognitoLogoutUrl(): string {
   });
 
   return `${HOSTED_UI.replace(/\/$/, '')}/logout?${params.toString()}`;
+}
+
+// ─── Direct Cognito IDP calls (in-app popover) ──────────────────────────────
+// The SPA app client is public (no client secret) and is configured with
+// ALLOW_USER_PASSWORD_AUTH, so the popover can call InitiateAuth directly.
+// All requests POST to the regional Cognito IDP endpoint with X-Amz-Target.
+
+export class CognitoAuthError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'CognitoAuthError';
+    this.code = code;
+  }
+}
+
+interface CognitoErrorResponse {
+  __type?: string;
+  message?: string;
+  Message?: string;
+}
+
+async function cognitoCall<T>(target: string, body: Record<string, unknown>): Promise<T> {
+  const response = await fetch(IDP_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-amz-json-1.1',
+      'X-Amz-Target': `AWSCognitoIdentityProviderService.${target}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await response.text();
+  let parsed: unknown = {};
+  if (text) {
+    try { parsed = JSON.parse(text); } catch { parsed = { message: text }; }
+  }
+
+  if (!response.ok) {
+    const err = parsed as CognitoErrorResponse;
+    const rawType = typeof err.__type === 'string' ? err.__type : '';
+    const code = rawType.split('#').pop() || rawType || `Http${response.status}`;
+    const message = err.message || err.Message || `Cognito ${target} failed (${response.status})`;
+    throw new CognitoAuthError(code, message);
+  }
+
+  return parsed as T;
+}
+
+interface InitiateAuthResponse {
+  AuthenticationResult?: {
+    AccessToken: string;
+    IdToken: string;
+    RefreshToken?: string;
+    ExpiresIn: number;
+    TokenType: string;
+  };
+  ChallengeName?: string;
+  ChallengeParameters?: Record<string, string>;
+  Session?: string;
+}
+
+function persistSessionFromAuthResult(authResult: NonNullable<InitiateAuthResponse['AuthenticationResult']>) {
+  const claims = decodeJwtPayload(authResult.IdToken);
+  const session: RevenueAuthSession = {
+    access_token: authResult.AccessToken,
+    id_token: authResult.IdToken,
+    refresh_token: authResult.RefreshToken,
+    token_type: authResult.TokenType || 'Bearer',
+    expires_in: authResult.ExpiresIn || 3600,
+    saved_at: Date.now(),
+    email: typeof claims.email === 'string' ? claims.email : undefined,
+  };
+  sessionStorage.setItem(TOKENS_KEY, JSON.stringify(session));
+  window.dispatchEvent(new CustomEvent('revenue-ops-auth-changed', {
+    detail: { email: session.email, saved_at: session.saved_at },
+  }));
+  return session;
+}
+
+export async function cognitoSignIn(email: string, password: string): Promise<RevenueAuthSession> {
+  const response = await cognitoCall<InitiateAuthResponse>('InitiateAuth', {
+    AuthFlow: 'USER_PASSWORD_AUTH',
+    ClientId: CLIENT_ID,
+    AuthParameters: { USERNAME: email, PASSWORD: password },
+  });
+
+  if (!response.AuthenticationResult) {
+    throw new CognitoAuthError(
+      response.ChallengeName || 'ChallengeRequired',
+      'Additional authentication step required. Please contact support.',
+    );
+  }
+
+  return persistSessionFromAuthResult(response.AuthenticationResult);
+}
+
+interface SignUpResponse {
+  UserConfirmed?: boolean;
+  UserSub?: string;
+  CodeDeliveryDetails?: { Destination?: string; DeliveryMedium?: string; AttributeName?: string };
+}
+
+export async function cognitoSignUp(email: string, password: string): Promise<SignUpResponse> {
+  return cognitoCall<SignUpResponse>('SignUp', {
+    ClientId: CLIENT_ID,
+    Username: email,
+    Password: password,
+    UserAttributes: [{ Name: 'email', Value: email }],
+  });
+}
+
+export async function cognitoConfirmSignUp(email: string, code: string): Promise<void> {
+  await cognitoCall('ConfirmSignUp', {
+    ClientId: CLIENT_ID,
+    Username: email,
+    ConfirmationCode: code,
+  });
+}
+
+export async function cognitoResendSignUpCode(email: string): Promise<void> {
+  await cognitoCall('ResendConfirmationCode', {
+    ClientId: CLIENT_ID,
+    Username: email,
+  });
+}
+
+export async function cognitoForgotPassword(email: string): Promise<void> {
+  await cognitoCall('ForgotPassword', {
+    ClientId: CLIENT_ID,
+    Username: email,
+  });
+}
+
+export async function cognitoConfirmForgotPassword(email: string, code: string, newPassword: string): Promise<void> {
+  await cognitoCall('ConfirmForgotPassword', {
+    ClientId: CLIENT_ID,
+    Username: email,
+    ConfirmationCode: code,
+    Password: newPassword,
+  });
 }

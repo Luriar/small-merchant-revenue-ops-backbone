@@ -65,6 +65,30 @@ export interface RevenueUploadEnvelope {
   }>;
 }
 
+export interface RevenueUploadRejectedRow {
+  row_number?: number;
+  reason_code?: string;
+  reason_message?: string;
+  raw?: Record<string, unknown>;
+}
+
+export interface RevenueUploadPreviewEnvelope {
+  parser_type?: string;
+  source_type?: string;
+  accepted_count?: number;
+  rejected_count?: number;
+  row_count?: number;
+  detected_columns?: string[];
+  proposed_mapping?: {
+    daily?: Record<string, string | null>;
+    item?: Record<string, string | null>;
+    [key: string]: unknown;
+  };
+  rejected_rows?: RevenueUploadRejectedRow[];
+  preview_rows?: Array<Record<string, unknown>>;
+  warnings?: string[];
+}
+
 export interface ContextBootstrapHint {
   recommended: boolean;
   mode: 'live' | 'seed' | 'auto' | string;
@@ -198,7 +222,10 @@ export async function apiFetchRevenueUploads(storeId: string) {
   return fetchJson(storeScopedPath(storeId, '/revenue/uploads'), {}, 'revenue uploads');
 }
 
-export async function apiPreviewRevenueUpload(storeId: string, payload: RevenueUploadPayload) {
+export async function apiPreviewRevenueUpload(
+  storeId: string,
+  payload: RevenueUploadPayload,
+): Promise<RevenueUploadPreviewEnvelope> {
   return fetchJson(
     storeScopedPath(storeId, '/revenue/uploads/preview'),
     {

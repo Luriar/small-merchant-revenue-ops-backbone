@@ -6,6 +6,7 @@ import {
   apiCollectStoreContext,
   apiCreateStore,
   apiCreateRevenueUpload,
+  apiPreviewRevenueUpload,
   apiFetchActions,
   apiFetchAnomalies,
   apiFetchBriefs,
@@ -18,12 +19,12 @@ import {
   type CreateRevenueStorePayload,
   type RevenueUploadEnvelope,
   type RevenueUploadPayload,
+  type RevenueUploadPreviewEnvelope,
   type RevenueStoreSummary,
 } from './revenueCockpitApi';
 import {
   getStoredCognitoToken,
   getStoredAuthSession,
-  startCognitoLogin,
   buildCognitoLogoutUrl,
   clearStoredAuthSession,
   markRevenueLogoutRedirect,
@@ -31,6 +32,7 @@ import {
 import type { RevenueAuthSession } from './revenueCockpitAuth';
 import { buildScenarioFromApi, wantsApiData } from './revenueCockpitData';
 import { Icon, ChromeBar } from './revenueCockpitShared';
+import { AuthPopover } from './AuthPopover';
 import { RevenueBriefView } from './RevenueBriefView';
 import { CauseEvidenceView } from './CauseEvidenceView';
 import { ActionPlannerView } from './ActionPlannerView';
@@ -494,13 +496,37 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
   const [csvFilename, setCsvFilename] = useState('');
   const [sourceType, setSourceType] = useState('generic_pos_csv');
   const [busy, setBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [preview, setPreview] = useState<RevenueUploadPreviewEnvelope | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [result, setResult] = useState<RevenueUploadEnvelope | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Preview is tied to the current csvText/sourceType. If either changes, the
+  // existing preview is no longer accurate and is cleared.
+  useEffect(() => {
+    setPreview(null);
+    setPreviewError(null);
+  }, [csvText, sourceType]);
 
   function finishUpload(envelope: RevenueUploadEnvelope) {
     setResult(envelope);
     setError(null);
     onUploaded();
+  }
+
+  function buildCsvPayload(): RevenueUploadPayload {
+    return {
+      source_type: sourceType,
+      parser_type: sourceType === 'generic_pos_csv' ? 'standard_daily_revenue_csv' : sourceType,
+      original_filename: csvFilename || `${sourceType}.csv`,
+      file_type: 'csv',
+      csv_text: csvText,
+      metadata: {
+        upload_mode: 'csv',
+        no_raw_delivery_login_credentials: true,
+      },
+    };
   }
 
   async function submit(payload: RevenueUploadPayload) {
@@ -515,6 +541,26 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
         : 'Could not upload revenue data. Check the date, amount, and transaction count.');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function previewCsv() {
+    if (!csvText.trim()) {
+      setPreviewError(lang === 'ko' ? '미리보기할 CSV 내용을 선택하거나 붙여넣어주세요.' : 'Choose or paste CSV content to preview.');
+      return;
+    }
+    setPreviewBusy(true);
+    setPreviewError(null);
+    try {
+      const envelope = await apiPreviewRevenueUpload(storeId, buildCsvPayload());
+      setPreview(envelope);
+    } catch {
+      setPreview(null);
+      setPreviewError(lang === 'ko'
+        ? 'CSV 미리보기를 불러오지 못했습니다. 헤더와 형식을 확인해주세요.'
+        : 'Could not load preview. Check headers and format.');
+    } finally {
+      setPreviewBusy(false);
     }
   }
 
@@ -551,17 +597,7 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
       return;
     }
 
-    void submit({
-      source_type: sourceType,
-      parser_type: sourceType === 'generic_pos_csv' ? 'standard_daily_revenue_csv' : sourceType,
-      original_filename: csvFilename || `${sourceType}.csv`,
-      file_type: 'csv',
-      csv_text: csvText,
-      metadata: {
-        upload_mode: 'csv',
-        no_raw_delivery_login_credentials: true,
-      },
-    });
+    void submit(buildCsvPayload());
   }
 
   function onFileSelected(file: File | null) {
@@ -638,20 +674,35 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
             placeholder="business_date,channel,gross_sales_amount,order_count"
             onChange={event => setCsvText(event.target.value)}
           />
-          <button type="button" className="rc-store-button rc-store-button-primary" onClick={submitCsv} disabled={busy}>
-            {lang === 'ko' ? 'CSV 등록' : 'Upload CSV'}
-          </button>
+          <div className="rc-revenue-upload-actions">
+            <button type="button" className="rc-store-button" onClick={previewCsv} disabled={previewBusy || busy}>
+              {previewBusy
+                ? (lang === 'ko' ? '미리보기 확인 중...' : 'Checking preview...')
+                : (lang === 'ko' ? 'CSV 미리보기' : 'Preview CSV')}
+            </button>
+            <button type="button" className="rc-store-button rc-store-button-primary" onClick={submitCsv} disabled={busy}>
+              {lang === 'ko' ? 'CSV 등록' : 'Upload CSV'}
+            </button>
+          </div>
         </div>
       </div>
+
+      {previewError && <div className="rc-upload-result rc-upload-error">{previewError}</div>}
+      {preview && <UploadPreviewCard lang={lang} preview={preview}/>}
 
       {error && <div className="rc-upload-result rc-upload-error">{error}</div>}
       {result?.upload && (
         <div className="rc-upload-result">
-          <strong>{lang === 'ko' ? '등록 완료' : 'Uploaded'}</strong>
+          <strong>{lang === 'ko' ? '새 매출 근거 등록 완료' : 'New revenue evidence registered'}</strong>
           <span>
             {lang === 'ko'
               ? `승인 ${result.upload.accepted_count ?? result.accepted_count ?? 0}행 · 반려 ${result.upload.rejected_count ?? result.rejected_count ?? 0}행`
               : `Accepted ${result.upload.accepted_count ?? result.accepted_count ?? 0} rows · Rejected ${result.upload.rejected_count ?? result.rejected_count ?? 0} rows`}
+          </span>
+          <span>
+            {lang === 'ko'
+              ? '새 매출 근거가 등록되었습니다. 브리프와 원인 후보가 갱신됩니다.'
+              : 'New revenue evidence was registered. The brief and cause candidates will refresh.'}
           </span>
           {(result.rejected_rows?.length ?? 0) > 0 && (
             <span>{lang === 'ko' ? '반려 행은 날짜/금액 형식을 확인해주세요.' : 'Rejected rows usually need date or amount format fixes.'}</span>
@@ -659,6 +710,111 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
         </div>
       )}
     </section>
+  );
+}
+
+function formatMappingValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+function UploadPreviewCard({ lang, preview }: { lang: RcLang; preview: RevenueUploadPreviewEnvelope }) {
+  const accepted = preview.accepted_count ?? 0;
+  const rejected = preview.rejected_count ?? 0;
+  const total = preview.row_count ?? accepted + rejected;
+  const detected = preview.detected_columns ?? [];
+  const dailyMapping = preview.proposed_mapping?.daily ?? null;
+  const itemMapping = preview.proposed_mapping?.item ?? null;
+  const mappingEntries = Object.entries(dailyMapping ?? itemMapping ?? {});
+  const rejectedRows = (preview.rejected_rows ?? []).slice(0, 3);
+
+  return (
+    <div className="rc-upload-preview-card" aria-label={lang === 'ko' ? '미리보기 결과' : 'Preview result'}>
+      <div className="rc-upload-preview-head">
+        <h3 className="rc-upload-preview-title">
+          {lang === 'ko' ? '미리보기 결과' : 'Preview result'}
+        </h3>
+        <span className="rc-upload-preview-meta">
+          {preview.parser_type
+            ? (lang === 'ko' ? `파서: ${preview.parser_type}` : `Parser: ${preview.parser_type}`)
+            : null}
+        </span>
+      </div>
+
+      <div className="rc-upload-preview-chips">
+        <span className="rc-upload-preview-chip rc-upload-preview-chip-good">
+          {lang === 'ko' ? `승인 ${accepted}행` : `Accepted ${accepted}`}
+        </span>
+        <span className={`rc-upload-preview-chip${rejected > 0 ? ' rc-upload-preview-chip-bad' : ''}`}>
+          {lang === 'ko' ? `반려 ${rejected}행` : `Rejected ${rejected}`}
+        </span>
+        <span className="rc-upload-preview-chip">
+          {lang === 'ko' ? `총 ${total}행` : `Total ${total}`}
+        </span>
+        {preview.parser_type && (
+          <span className="rc-upload-preview-chip">{preview.parser_type}</span>
+        )}
+      </div>
+
+      {detected.length > 0 && (
+        <div className="rc-upload-preview-section">
+          <div className="rc-upload-preview-section-label">
+            {lang === 'ko' ? '감지된 컬럼' : 'Detected columns'}
+          </div>
+          <div className="rc-upload-preview-chips">
+            {detected.map(col => (
+              <span key={col} className="rc-upload-preview-chip">{col}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {mappingEntries.length > 0 && (
+        <div className="rc-upload-preview-section">
+          <div className="rc-upload-preview-section-label">
+            {lang === 'ko'
+              ? (dailyMapping ? '제안된 매핑 · 일별' : '제안된 매핑 · 항목')
+              : (dailyMapping ? 'Proposed mapping · daily' : 'Proposed mapping · item')}
+          </div>
+          <dl className="rc-upload-preview-mapping">
+            {mappingEntries.map(([key, value]) => (
+              <FragmentRow key={key} k={key} v={formatMappingValue(value)}/>
+            ))}
+          </dl>
+        </div>
+      )}
+
+      {rejectedRows.length > 0 && (
+        <div className="rc-upload-preview-section">
+          <div className="rc-upload-preview-section-label">
+            {lang === 'ko' ? '반려된 행 (최대 3개 표시)' : 'Rejected rows (showing up to 3)'}
+          </div>
+          <div className="rc-upload-preview-rejected">
+            {rejectedRows.map((row, index) => (
+              <div key={index} className="rc-upload-preview-rejected-row">
+                <strong>
+                  {lang === 'ko'
+                    ? `행 ${row.row_number ?? index + 1} · ${row.reason_code ?? 'unknown'}`
+                    : `Row ${row.row_number ?? index + 1} · ${row.reason_code ?? 'unknown'}`}
+                </strong>
+                {row.reason_message && <div>{row.reason_message}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FragmentRow({ k, v }: { k: string; v: string }) {
+  return (
+    <>
+      <dt>{k}</dt>
+      <dd>{v}</dd>
+    </>
   );
 }
 
@@ -712,6 +868,7 @@ export function RevenueCockpitApp() {
   const [apiNotice, setApiNotice] = useState<'loading' | 'fallback' | 'auth-expired' | 'patch-saving' | 'patch-saved' | 'patch-local' | 'patch-failed' | null>(() => wantsApiData() ? 'loading' : null);
   const [authReloadTick, setAuthReloadTick] = useState(0);
   const [authSession, setAuthSession] = useState<RevenueAuthSession | null>(() => getStoredAuthSession());
+  const [authPopoverOpen, setAuthPopoverOpen] = useState(false);
   const [stores, setStores] = useState<RevenueStoreSummary[]>([]);
   const [selectedStoreId, setSelectedStoreIdState] = useState<string | null>(() => loadSelectedStoreId());
   const [storeLoading, setStoreLoading] = useState(false);
@@ -1139,10 +1296,6 @@ export function RevenueCockpitApp() {
     startContextCollection(selectedStoreId, { recommended: true, mode: 'live', reason: 'manual_refresh' }, 'manual_refresh');
   }
 
-  function handleLogin() {
-    void startCognitoLogin();
-  }
-
   function handleLogout() {
     markRevenueLogoutRedirect();
     clearStoredAuthSession();
@@ -1184,8 +1337,30 @@ export function RevenueCockpitApp() {
       <ChromeBar
         lang={lang} setLang={setLang} theme={theme} setTheme={setTheme} label={chromeLabel}
         authEmail={apiMode ? (authSession?.email ?? null) : null}
-        onLogin={apiMode && !authSession ? handleLogin : undefined}
         onLogout={apiMode && authSession ? handleLogout : undefined}
+        loginSlot={apiMode && !authSession ? (
+          <div className="rc-auth-popover-anchor">
+            <button
+              type="button"
+              className="rc-chrome-auth-chip-login"
+              onClick={() => setAuthPopoverOpen(value => !value)}
+              aria-haspopup="dialog"
+              aria-expanded={authPopoverOpen}
+            >
+              {lang === 'ko' ? '로그인' : 'Login'}
+            </button>
+            {authPopoverOpen && (
+              <AuthPopover
+                lang={lang}
+                onClose={() => setAuthPopoverOpen(false)}
+                onAuthenticated={() => {
+                  setAuthPopoverOpen(false);
+                  // Auth-changed event from cognitoSignIn updates state and triggers reload tick.
+                }}
+              />
+            )}
+          </div>
+        ) : null}
       />
       <RcHeader
         lang={lang}
