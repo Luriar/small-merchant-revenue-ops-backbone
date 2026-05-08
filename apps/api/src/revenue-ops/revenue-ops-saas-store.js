@@ -2068,6 +2068,41 @@ module.exports = {
 
 // Standalone composer that the Aurora path can call after it has loaded
 // daily facts + cause candidates + evidence + actions for a store.
+
+function normalizeBusinessDate(value) {
+  if (value === null || value === undefined) return "";
+
+  if (value instanceof Date) {
+    const time = value.getTime();
+    if (!Number.isFinite(time)) return "";
+    return value.toISOString().slice(0, 10);
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+
+    const isoDate = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoDate) return isoDate[1];
+
+    const parsed = Date.parse(trimmed);
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toISOString().slice(0, 10);
+    }
+
+    return "";
+  }
+
+  if (typeof value === "number") {
+    const parsed = new Date(value);
+    const time = parsed.getTime();
+    if (!Number.isFinite(time)) return "";
+    return parsed.toISOString().slice(0, 10);
+  }
+
+  return "";
+}
+
 function composeBriefFromUploadedFacts({
   storeId,
   store,
@@ -2078,10 +2113,17 @@ function composeBriefFromUploadedFacts({
   latestUpload = null,
   insufficientThresholdDays = 2,
 }) {
-  const sortedFacts = [...(facts || [])].sort((a, b) => String(a.business_date).localeCompare(String(b.business_date)));
+  const normalizedFacts = [...(facts || [])]
+    .map((row) => ({
+      ...row,
+      business_date: normalizeBusinessDate(row.business_date),
+    }))
+    .filter((row) => row.business_date);
+
+  const sortedFacts = normalizedFacts.sort((a, b) => a.business_date.localeCompare(b.business_date));
   if (sortedFacts.length === 0) return null;
-  const startDate = String(sortedFacts[0].business_date);
-  const endDate = String(sortedFacts[sortedFacts.length - 1].business_date);
+  const startDate = sortedFacts[0].business_date;
+  const endDate = sortedFacts[sortedFacts.length - 1].business_date;
   const periodLabel = `${startDate} ~ ${endDate}`;
   const totalNet = sortedFacts.reduce((sum, row) => sum + Number(row.net_sales_amount || 0), 0);
   const totalOrders = sortedFacts.reduce((sum, row) => sum + Number(row.order_count || 0), 0);
@@ -2115,7 +2157,7 @@ function composeBriefFromUploadedFacts({
   }));
 
   const dailySeries = sortedFacts.map((row) => ({
-    date: String(row.business_date),
+    date: row.business_date,
     net_sales: Number(row.net_sales_amount || 0),
     order_count: Number(row.order_count || 0),
   }));
