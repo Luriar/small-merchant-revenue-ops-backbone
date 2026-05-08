@@ -7,7 +7,7 @@ resource "aws_cognito_user_pool" "main" {
   username_attributes      = ["email"]
 
   admin_create_user_config {
-    allow_admin_create_user_only = true
+    allow_admin_create_user_only = !var.enable_self_signup
   }
 
   password_policy {
@@ -24,6 +24,10 @@ resource "aws_cognito_user_pool" "main" {
       name     = "verified_email"
       priority = 1
     }
+  }
+
+  verification_message_template {
+    default_email_option = "CONFIRM_WITH_CODE"
   }
 
   tags = merge(var.tags, {
@@ -45,6 +49,15 @@ resource "aws_cognito_user_pool_client" "web" {
   allowed_oauth_scopes                 = ["email", "openid", "profile"]
   callback_urls                        = var.callback_urls
   logout_urls                          = var.logout_urls
+
+  # SPA popover uses InitiateAuth (USER_PASSWORD_AUTH) directly against the
+  # regional Cognito IDP endpoint. SRP and refresh-token flows stay enabled so
+  # SDK upgrades and silent refresh remain possible without another patch.
+  explicit_auth_flows = compact([
+    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_REFRESH_TOKEN_AUTH",
+    var.enable_user_password_auth ? "ALLOW_USER_PASSWORD_AUTH" : "",
+  ])
 
   access_token_validity  = 60
   id_token_validity      = 60

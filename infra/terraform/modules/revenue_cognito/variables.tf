@@ -38,3 +38,15 @@ variable "tags" {
   default     = {}
   description = "Tags applied to resources."
 }
+
+variable "enable_self_signup" {
+  type        = bool
+  default     = true
+  description = "Allow self-service sign-up from the in-app auth popover (sets allow_admin_create_user_only to false)."
+}
+
+variable "enable_user_password_auth" {
+  type        = bool
+  default     = true
+  description = "Allow ALLOW_USER_PASSWORD_AUTH on the public web app client so the SPA popover can call InitiateAuth directly without SRP."
+}
