@@ -2139,11 +2139,33 @@ function composeBriefFromUploadedFacts({
   }
   const qualityCauses = (causeCandidates || [])
     .filter((row) => row.status !== "superseded")
-    .map((candidate) => ({
-      ...candidate,
-      evidence: filterEvidenceForQuality(evidenceByCause.get(candidate.cause_candidate_id) || candidate.evidence || []),
-    }))
+    .map((candidate) => {
+      const rawEvidence = evidenceByCause.get(candidate.cause_candidate_id) || candidate.evidence || [];
+      const sanitizedEvidence = rawEvidence.map((evidence) => ({
+        ...evidence,
+        summary: sanitizeCautionText(evidence.summary),
+      }));
+      const qualityEvidence = filterEvidenceForQuality(sanitizedEvidence);
+      const fallbackEvidence = qualityEvidence.length > 0
+        ? []
+        : sanitizedEvidence.slice(0, 1).map((evidence) => ({
+          ...evidence,
+          strength: evidence.strength || "weak",
+          metadata: {
+            ...(evidence.metadata && typeof evidence.metadata === "object" && !Array.isArray(evidence.metadata) ? evidence.metadata : {}),
+            weak_context_fallback: true,
+            metric_value_missing: evidence.metric_value === null || typeof evidence.metric_value === "undefined",
+          },
+        }));
+
+      return {
+        ...candidate,
+        evidence: qualityEvidence.length > 0 ? qualityEvidence : fallbackEvidence,
+        evidence_quality_fallback: qualityEvidence.length === 0 && fallbackEvidence.length > 0,
+      };
+    })
     .filter((candidate) => Array.isArray(candidate.evidence) && candidate.evidence.length > 0);
+
   const dedupedCauses = dedupeCauseCandidates(qualityCauses).map((candidate) => ({
     ...candidate,
     summary: sanitizeCautionText(candidate.summary),
