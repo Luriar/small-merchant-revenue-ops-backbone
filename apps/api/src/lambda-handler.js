@@ -59,7 +59,7 @@ async function dispatchRevenueRequest({ request, response, store, saasStore = re
   if (request.method === "OPTIONS" && (request.url.startsWith("/api/v1/revenue") || request.url.startsWith("/api/v1/stores") || request.url.startsWith("/api/v1/me"))) {
     response.writeHead(204, {
       "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
+      "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
       "access-control-allow-headers": "authorization,content-type",
     });
     return response.end();
