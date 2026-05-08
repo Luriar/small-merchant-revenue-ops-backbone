@@ -16,6 +16,8 @@ const {
   handleGetMe,
   handleListStores,
   handleCreateStore,
+  handleUpdateStore,
+  handleArchiveStore,
   handleGetStoreBriefs,
   handleGetStoreAnomalies,
   handleGetStoreActions,
@@ -75,6 +77,17 @@ async function dispatchRevenueRequest({ request, response, store, saasStore = re
 
   if (request.method === "POST" && /^\/api\/v1\/stores(?:\?.*)?$/.test(request.url)) {
     return handleCreateStore({ request, response, store: saasStore });
+  }
+
+  const storeRootMatch = request.url.match(/^\/api\/v1\/stores\/([^/?]+)(?:\?.*)?$/);
+  if (storeRootMatch) {
+    const storeId = decodeURIComponent(storeRootMatch[1]);
+    if (request.method === "PATCH") {
+      return handleUpdateStore({ request, response, store: saasStore, storeId });
+    }
+    if (request.method === "DELETE") {
+      return handleArchiveStore({ request, response, store: saasStore, storeId });
+    }
   }
 
   const storeScopedMatch = request.url.match(/^\/api\/v1\/stores\/([^/?]+)\/(.+?)(?:\?.*)?$/);
