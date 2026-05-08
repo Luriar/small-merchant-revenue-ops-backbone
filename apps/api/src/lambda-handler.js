@@ -46,7 +46,14 @@ async function handler(event) {
 
   try {
     await dispatchRevenueRequest({ request, response, store: revenueOpsStore, saasStore: revenueOpsSaasStore });
-  } catch {
+  } catch (error) {
+    console.error("[lambda-handler] unhandled error", {
+      message: error && error.message,
+      stack: error && error.stack,
+      name: error && error.name,
+      method: request && request.method,
+      url: request && request.url,
+    });
     response.writeHead(500, {
       "content-type": "application/json; charset=utf-8",
       "access-control-allow-origin": "*",
