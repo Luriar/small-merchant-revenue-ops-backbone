@@ -130,7 +130,7 @@ function causeFallbackTitle(candidateType: string): { ko: string; en: string } {
     return { ko: '상권 벤치마크 약세 가능성', en: 'Commercial benchmark downturn' };
   }
   if (type === 'foot_traffic_drop') {
-    return { ko: '유동인구 프록시 하락 가능성', en: 'Foot traffic proxy decline' };
+    return { ko: '유동인구 하락 가능성', en: 'Foot traffic decline' };
   }
   if (type === 'rainy_day_offline_drop') {
     return { ko: '비 오는 날 오프라인 주문 하락 가능성', en: 'Rainy-day offline order drop' };
