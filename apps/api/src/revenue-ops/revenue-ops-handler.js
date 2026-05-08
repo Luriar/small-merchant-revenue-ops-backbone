@@ -59,6 +59,14 @@ async function ensureStoreAccess({ response, store, appUser, storeId, minimumRol
 }
 
 async function handleStoreRouteError(response, error) {
+  if (!["invalid_body", "not_found", "unauthorized", "forbidden"].includes(error && error.code)) {
+    console.error("[revenue-ops-handler] store route error", {
+      code: error && error.code,
+      message: error && error.message,
+      stack: error && error.stack,
+      name: error && error.name,
+    });
+  }
   if (error instanceof RevenueOpsHttpError) {
     return writeError(response, error.statusCode, error.code, error.message);
   }

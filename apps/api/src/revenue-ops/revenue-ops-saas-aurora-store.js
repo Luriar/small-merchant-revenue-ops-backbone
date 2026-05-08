@@ -439,15 +439,9 @@ function createAuroraRevenueOpsSaasStore({
         [storeId, JSON.stringify(metadata)],
       );
 
-      await client.query(
-        `
-          UPDATE store_members
-          SET status = 'archived', updated_at = now()
-          WHERE store_id = $1 AND app_user_id = $2 AND status = 'active'
-        `,
-        [storeId, appUserId],
-      );
-
+      // Keep the membership row unchanged. The active store list is already
+      // hidden by stores.status = 'archived', and some schemas do not allow
+      // 'archived' as a store_members.status value.
       await createOutboxEventWithClient(client, {
         event_type: "store.archived",
         aggregate_type: "store",
