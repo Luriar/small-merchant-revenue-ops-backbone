@@ -97,12 +97,27 @@ function PlanChip({ a, lang, state, setState }: { a: RcAction; lang: RcLang; sta
 }
 
 function WeeklyPlan({ lang, actions, statuses, onSetStatus }: { lang: RcLang; actions: RcAction[]; statuses: ActionStatuses; onSetStatus: (id: string, s: ActionStatus) => void }) {
-  const days = lang === 'ko'
-    ? [{k:'mon',d:'월'},{k:'tue',d:'화'},{k:'wed',d:'수'},{k:'thu',d:'목'},{k:'fri',d:'금'}]
-    : [{k:'mon',d:'Mon'},{k:'tue',d:'Tue'},{k:'wed',d:'Wed'},{k:'thu',d:'Thu'},{k:'fri',d:'Fri'}];
+  const today = new Date();
+  const monday = new Date(today);
+  const mondayOffset = (today.getDay() + 6) % 7;
+  monday.setDate(today.getDate() - mondayOffset);
+
+  const weekdayKo = ['월', '화', '수', '목', '금'];
+  const weekdayEn = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+  const dayKeys = ['mon', 'tue', 'wed', 'thu', 'fri'];
+  const days = dayKeys.map((k, i) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + i);
+    return {
+      k,
+      d: lang === 'ko' ? weekdayKo[i] : weekdayEn[i],
+      date,
+    };
+  });
+
   const dayFor: Record<string, number> = { 'rain-coupon': 0, 'stamp-card': 2, 'delivery-push': 4, 'instagram': 1, 'winter-set': 3, 'staff-rebalance': 0 };
   const byDay = days.map((_, i) => actions.filter((a, index) => (dayFor[a.id] ?? index % days.length) === i));
-  const todayIdx = 0;
+  const todayIdx = days.findIndex((d) => d.date.toDateString() === today.toDateString());
 
   return (
     <div className="rc-card" style={{ overflow: 'visible', boxShadow: 'var(--rc-shadow-sm)' }}>
@@ -117,7 +132,7 @@ function WeeklyPlan({ lang, actions, statuses, onSetStatus }: { lang: RcLang; ac
           }}>
             <div>
               <div className="rc-mono" style={{ fontSize: 9.5, color: 'var(--rc-fg-dim)', letterSpacing: '0.10em', textTransform: 'uppercase' }}>
-                {lang === 'ko' ? `12·${9+i}` : `Dec ${9+i}`}
+                {lang === 'ko' ? `${d.date.getMonth() + 1}·${d.date.getDate()}` : d.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
               </div>
               <div className="rc-serif" style={{ fontSize: 14, fontWeight: 600, color: i === todayIdx ? 'var(--rc-accent-strong)' : 'var(--rc-fg-strong)' }}>
                 {d.d}{i === todayIdx && <span style={{ fontSize: 9.5, color: 'var(--rc-accent)', marginLeft: 6, letterSpacing: '0.06em' }}>{lang === 'ko' ? '오늘' : 'TODAY'}</span>}
@@ -599,13 +614,14 @@ function buildRevenueHeadline(lang: RcLang, scenario: Scenario, unavailable: boo
     : trend === 'down'
       ? 'var(--rc-bad-strong)'
       : 'var(--rc-fg-strong)';
+  const isUploadedHeadline = Array.isArray(scenario.uploadedDailySeries) && scenario.uploadedDailySeries.length >= 2;
   const pct = <span style={{ color: semanticColor, fontWeight: 700 }}>{delta}%</span>;
   if (lang === 'ko') {
-    if (trend === 'up') return <>{scenario.periodLabel || scenario.compare.ko} 추정매출이 직전 분기 대비 {pct} 늘었습니다.</>;
-    if (trend === 'down') return <>{scenario.periodLabel || scenario.compare.ko} 추정매출이 직전 분기 대비 {pct} 줄었습니다.</>;
-    return <>{scenario.periodLabel || scenario.compare.ko} 추정매출에 큰 변화가 없습니다.</>;
+    if (trend === 'up') return isUploadedHeadline ? <>최근 30일 등록 매출이 직전 30일 대비 {pct} 늘었습니다.</> : <>{scenario.compare.ko} 추정매출이 직전 분기 대비 {pct} 늘었습니다.</>;
+    if (trend === 'down') return isUploadedHeadline ? <>최근 30일 등록 매출이 직전 30일 대비 {pct} 줄었습니다.</> : <>{scenario.compare.ko} 추정매출이 직전 분기 대비 {pct} 줄었습니다.</>;
+    return isUploadedHeadline ? <>최근 30일 등록 매출에 큰 변화가 없습니다.</> : <>{scenario.compare.ko} 추정매출에 큰 변화가 없습니다.</>;
   }
-  if (trend === 'up') return <>Estimated revenue rose {pct} from the prior quarter.</>;
-  if (trend === 'down') return <>Estimated revenue fell {pct} from the prior quarter.</>;
-  return <>Estimated revenue stayed roughly flat.</>;
+  if (trend === 'up') return isUploadedHeadline ? <>Registered revenue rose {pct} in the latest 30 days versus the previous 30 days.</> : <>Estimated revenue rose {pct} from the prior quarter.</>;
+  if (trend === 'down') return isUploadedHeadline ? <>Registered revenue fell {pct} in the latest 30 days versus the previous 30 days.</> : <>Estimated revenue fell {pct} from the prior quarter.</>;
+  return isUploadedHeadline ? <>Registered revenue stayed roughly flat in the latest 30 days versus the previous 30 days.</> : <>Estimated revenue stayed roughly flat.</>;
 }

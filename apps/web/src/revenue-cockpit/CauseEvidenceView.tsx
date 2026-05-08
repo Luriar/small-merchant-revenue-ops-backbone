@@ -18,26 +18,26 @@ interface CompareBlock {
 const compareBlocks: Record<string, CompareBlock> = {
   demand: {
     primary: {
-      label: { ko: '평균 생활인구 (분기)', en: 'Mean foot traffic (quarter)' },
-      base:  { v: '155,200', sub: { ko: '24년 3분기', en: '2024 Q3' } },
-      comp:  { v: '142,100', sub: { ko: '24년 4분기', en: '2024 Q4' } },
+      label: { ko: '평균 생활인구 (공개 맥락)', en: 'Mean foot traffic (public context)' },
+      base:  { v: '155,200', sub: { ko: '공개 맥락 기준', en: 'Public context' } },
+      comp:  { v: '142,100', sub: { ko: '업로드 기간 참고', en: 'Uploaded period' } },
       delta: -8.4,
       unit:  { ko: '명/일', en: 'people/day' },
     },
     linked: [
       { label: { ko: '거래건수', en: 'Transactions' }, delta: -10.2, hint: { ko: '함께 감소', en: 'fell together' } },
-      { label: { ko: '추정매출', en: 'Revenue' },      delta: -12.0, hint: { ko: '함께 감소', en: 'fell together' } },
+      { label: { ko: '등록 매출', en: 'Revenue' },      delta: -12.0, hint: { ko: '함께 감소', en: 'fell together' } },
     ],
     sources: [
       { name: { ko: '서울 생활인구 (SKT)',  en: 'Seoul Floating Population (SKT)' }, plain: { ko: '시간대별 인구 추정', en: 'Hourly population estimate' } },
-      { name: { ko: '추정매출 시그널',      en: 'Revenue signal' },                  plain: { ko: '카드 결제 기반',     en: 'Card-payment based' } },
+      { name: { ko: '등록 매출 시그널',      en: 'Revenue signal' },                  plain: { ko: '카드 결제 기반',     en: 'Card-payment based' } },
     ],
   },
   weather: {
     primary: {
-      label: { ko: '강수일수 (분기)', en: 'Rainy days (quarter)' },
-      base:  { v: '14', sub: { ko: '24년 3분기', en: '2024 Q3' } },
-      comp:  { v: '18', sub: { ko: '24년 4분기', en: '2024 Q4' } },
+      label: { ko: '강수일수 (공개 맥락)', en: 'Rainy days (public context)' },
+      base:  { v: '14', sub: { ko: '공개 맥락 기준', en: 'Public context' } },
+      comp:  { v: '18', sub: { ko: '업로드 기간 참고', en: 'Uploaded period' } },
       delta: +28.0,
       unit:  { ko: '일', en: 'days' },
     },
@@ -52,8 +52,8 @@ const compareBlocks: Record<string, CompareBlock> = {
   competition: {
     primary: {
       label: { ko: '인근 카페 점포수', en: 'Nearby café count' },
-      base:  { v: '198', sub: { ko: '24년 3분기 평균', en: 'avg. Q3' } },
-      comp:  { v: '210', sub: { ko: '24년 4분기 평균', en: 'avg. Q4' } },
+      base:  { v: '198', sub: { ko: '공개 맥락 기준', en: 'Public context' } },
+      comp:  { v: '210', sub: { ko: '업로드 기간 참고', en: 'Uploaded period' } },
       delta: +6.1,
       unit:  { ko: '개소', en: 'venues' },
     },
@@ -67,9 +67,9 @@ const compareBlocks: Record<string, CompareBlock> = {
   },
   context: {
     primary: {
-      label: { ko: '공휴일 수 (분기)', en: 'Public holidays (quarter)' },
-      base:  { v: '7', sub: { ko: '24년 3분기', en: '2024 Q3' } },
-      comp:  { v: '6', sub: { ko: '24년 4분기', en: '2024 Q4' } },
+      label: { ko: '공휴일 수 (공개 맥락)', en: 'Public holidays (public context)' },
+      base:  { v: '7', sub: { ko: '공개 맥락 기준', en: 'Public context' } },
+      comp:  { v: '6', sub: { ko: '업로드 기간 참고', en: 'Uploaded period' } },
       delta: -14.3,
       unit:  { ko: '일', en: 'days' },
     },
@@ -92,7 +92,7 @@ function fallbackCompareBlock(cause: CauseCandidate, scenario: Scenario): Compar
       unit: { ko: '지수', en: 'index' },
     },
     linked: [
-      { label: { ko: '추정매출', en: 'Revenue' }, delta: scenario.revenueChange, hint: { ko: '함께 관측', en: 'observed together' } },
+      { label: { ko: '등록 매출', en: 'Revenue' }, delta: scenario.revenueChange, hint: { ko: '함께 관측', en: 'observed together' } },
       { label: { ko: '거래건수', en: 'Transactions' }, delta: scenario.txnChange, hint: { ko: '함께 관측', en: 'observed together' } },
     ],
     sources: cause.sources.map(source => ({
