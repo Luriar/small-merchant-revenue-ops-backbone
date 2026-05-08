@@ -262,6 +262,209 @@ function createAuroraRevenueOpsSaasStore({
     });
   }
 
+  async function updateStoreForUser(appUserId, storeId, payload = {}) {
+    const member = await requireStoreAccess(appUserId, storeId, "owner");
+    if (!member) {
+      const err = new Error("store not found");
+      err.code = "not_found";
+      throw err;
+    }
+
+    const existing = await one(
+      `
+        SELECT s.*, sm.role AS member_role, t.tenant_name, t.tenant_type
+        FROM stores s
+        JOIN store_members sm ON sm.store_id = s.store_id AND sm.app_user_id = $2 AND sm.status = 'active'
+        JOIN tenants t ON t.tenant_id = s.tenant_id
+        WHERE s.store_id = $1 AND s.status = 'active'
+        LIMIT 1
+      `,
+      [storeId, appUserId],
+    );
+
+    if (!existing) {
+      const err = new Error("store not found");
+      err.code = "not_found";
+      throw err;
+    }
+
+    const nextStoreName = Object.prototype.hasOwnProperty.call(payload, "store_name")
+      ? text(payload.store_name)
+      : existing.store_name;
+    if (!nextStoreName) {
+      const err = new Error("store_name is required");
+      err.code = "invalid_body";
+      throw err;
+    }
+
+    const nextCategory = Object.prototype.hasOwnProperty.call(payload, "business_category")
+      ? text(payload.business_category) || null
+      : existing.business_category;
+
+    const nextRegion = Object.prototype.hasOwnProperty.call(payload, "region")
+      ? text(payload.region) || null
+      : existing.region;
+
+    const existingMetadata = safeObject(existing.metadata);
+    const incomingMetadata = safeObject(payload.metadata);
+    const nextMetadata = {
+      ...existingMetadata,
+      ...incomingMetadata,
+    };
+
+    const hasAddressField =
+      Object.prototype.hasOwnProperty.call(payload, "address_text")
+      || Object.prototype.hasOwnProperty.call(payload, "address_source")
+      || Object.prototype.hasOwnProperty.call(payload, "address_selected");
+
+    let nextAddressText = existing.address_text;
+    if (hasAddressField) {
+      nextAddressText = text(payload.address_text) || null;
+      const addressSelected = payload.address_selected === true
+        || nextMetadata.address_selected === true
+        || text(payload.address_source) === "search"
+        || text(payload.address_source) === "postcode_search";
+
+      if (nextAddressText && !addressSelected) {
+        const err = new Error("address must be selected through search");
+        err.code = "invalid_body";
+        throw err;
+      }
+
+      if (text(payload.address_source)) nextMetadata.address_source = text(payload.address_source);
+      if (payload.address_selected === true) nextMetadata.address_selected = true;
+    }
+
+    return withTransaction(async (client) => {
+      const updated = await client.query(
+        `
+          UPDATE stores
+          SET
+            store_name = $2,
+            business_category = $3,
+            region = $4,
+            address_text = $5,
+            metadata = $6::jsonb,
+            updated_at = now()
+          WHERE store_id = $1
+            AND status = 'active'
+          RETURNING *
+        `,
+        [
+          storeId,
+          nextStoreName,
+          nextCategory,
+          nextRegion,
+          nextAddressText,
+          JSON.stringify(nextMetadata),
+        ],
+      );
+
+      if (!updated.rows[0]) {
+        const err = new Error("store not found");
+        err.code = "not_found";
+        throw err;
+      }
+
+      const store = updated.rows[0];
+
+      await seedStoreLocation(client, store);
+
+      await createOutboxEventWithClient(client, {
+        event_type: "store.updated",
+        aggregate_type: "store",
+        aggregate_id: store.store_id,
+        tenant_id: store.tenant_id,
+        store_id: store.store_id,
+        idempotency_key: `store.updated:${store.store_id}:${Date.now()}`,
+        payload: {
+          store_name: store.store_name,
+          business_category: store.business_category,
+          region: store.region,
+        },
+      });
+
+      return {
+        ...store,
+        member_role: existing.member_role,
+        tenant_name: existing.tenant_name,
+        tenant_type: existing.tenant_type,
+      };
+    });
+  }
+
+  async function archiveStoreForUser(appUserId, storeId) {
+    const member = await requireStoreAccess(appUserId, storeId, "owner");
+    if (!member) {
+      const err = new Error("store not found");
+      err.code = "not_found";
+      throw err;
+    }
+
+    return withTransaction(async (client) => {
+      const existing = await client.query(
+        `
+          SELECT s.*
+          FROM stores s
+          WHERE s.store_id = $1
+            AND s.status = 'active'
+          LIMIT 1
+        `,
+        [storeId],
+      );
+
+      const store = existing.rows[0];
+      if (!store) {
+        const err = new Error("store not found");
+        err.code = "not_found";
+        throw err;
+      }
+
+      const metadata = {
+        ...safeObject(store.metadata),
+        archived_at: new Date().toISOString(),
+        archived_by: appUserId,
+      };
+
+      const archived = await client.query(
+        `
+          UPDATE stores
+          SET
+            status = 'archived',
+            metadata = $2::jsonb,
+            updated_at = now()
+          WHERE store_id = $1
+          RETURNING store_id, tenant_id, store_name, status, metadata, updated_at
+        `,
+        [storeId, JSON.stringify(metadata)],
+      );
+
+      await client.query(
+        `
+          UPDATE store_members
+          SET status = 'archived', updated_at = now()
+          WHERE store_id = $1 AND app_user_id = $2 AND status = 'active'
+        `,
+        [storeId, appUserId],
+      );
+
+      await createOutboxEventWithClient(client, {
+        event_type: "store.archived",
+        aggregate_type: "store",
+        aggregate_id: storeId,
+        tenant_id: store.tenant_id,
+        store_id: storeId,
+        idempotency_key: `store.archived:${storeId}`,
+        payload: { store_name: store.store_name },
+      });
+
+      return {
+        ...archived.rows[0],
+        archived_at: metadata.archived_at,
+      };
+    });
+  }
+
   async function seedDemoStoreForUser(appUserId) {
     const stores = await seedDemoStoresForUser(appUserId);
     return stores[0] ?? null;
@@ -1837,6 +2040,8 @@ function createAuroraRevenueOpsSaasStore({
     requireStoreAccess,
     listStoresForUser,
     createStoreForUser,
+    updateStoreForUser,
+    archiveStoreForUser,
     getBriefsForStore,
     getAnomaliesForStore,
     getActionsForStore,
