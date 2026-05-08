@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './revenueCockpit.css';
 import { SCENARIO, tr, DEFAULT_STATUSES } from './revenueCockpitCopy';
 import {
   apiCollectStoreContext,
   apiCreateStore,
   apiArchiveStore,
+  apiUpdateStore,
   apiCreateRevenueUpload,
   apiPreviewRevenueUpload,
   apiFetchActions,
@@ -145,82 +145,150 @@ function resolveTheme(theme: RcTheme): 'light' | 'dark' {
   return theme;
 }
 
-// ─── header (brand + tab nav + optional store bar) ───────────────────────────
+// ─── header (brand + control bar + onboarding) ───────────────────────────────
 
-// Report-level navigation for the selected store. Rendered on its own row,
-// right-aligned, beneath the store toolbar — distinct from global product
-// nav.
-function RcReportNavRow({
-  lang,
-  screen,
-  onSetScreen,
-  periodLabel,
-}: {
+interface StoreManageMenuProps {
   lang: RcLang;
+  onOpenEdit: () => void;
+  onArchive: () => void;
+}
+
+function StoreManageMenu({ lang, onOpenEdit, onArchive }: StoreManageMenuProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+  return (
+    <div ref={ref} className="rc-store-manage-menu">
+      <button
+        type="button"
+        className="rc-store-button rc-store-manage-menu-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(value => !value)}
+      >
+        {lang === 'ko' ? '가게 관리' : 'Manage store'}
+        <Icon name="arrow-down" size={11}/>
+      </button>
+      {open && (
+        <div className="rc-store-manage-menu-pop" role="menu">
+          <button
+            type="button"
+            className="rc-store-manage-menu-item"
+            role="menuitem"
+            onClick={() => { setOpen(false); onOpenEdit(); }}
+          >
+            {lang === 'ko' ? '가게 정보 수정' : 'Edit store info'}
+          </button>
+          <button
+            type="button"
+            className="rc-store-manage-menu-item rc-store-manage-menu-item-danger"
+            role="menuitem"
+            onClick={() => { setOpen(false); onArchive(); }}
+          >
+            {lang === 'ko' ? '가게 제거' : 'Remove store'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface CockpitControlsBarProps {
+  lang: RcLang;
+  stores: RevenueStoreSummary[];
+  selectedStoreId: string | null;
+  storeListLoading: boolean;
+  notice: string | null;
   screen: RcScreen;
   onSetScreen: (s: RcScreen) => void;
-  periodLabel?: string | null;
-}) {
-  const items: Array<{ id: RcScreen; label: string }> = [
+  onSelectStore: (storeId: string) => void;
+  onOpenCreate: () => void;
+  onOpenRevenueUpload: () => void;
+  onOpenEdit: () => void;
+  onArchive: () => void;
+  canUpload: boolean;
+  canManage: boolean;
+}
+
+function CockpitControlsBar({
+  lang,
+  stores,
+  selectedStoreId,
+  storeListLoading,
+  notice,
+  screen,
+  onSetScreen,
+  onSelectStore,
+  onOpenCreate,
+  onOpenRevenueUpload,
+  onOpenEdit,
+  onArchive,
+  canUpload,
+  canManage,
+}: CockpitControlsBarProps) {
+  const tabs: Array<{ id: RcScreen; label: string }> = [
     { id: 'brief',       label: lang === 'ko' ? '매출 요약' : 'Revenue summary' },
     { id: 'evidence',    label: lang === 'ko' ? '원인 근거' : 'Cause evidence' },
     { id: 'actions',     label: lang === 'ko' ? '실행 계획' : 'Action plan' },
     { id: 'reliability', label: lang === 'ko' ? '데이터 상태' : 'Data status' },
   ];
   return (
-    <div className="rc-report-nav-row">
-      <div className="rc-report-nav-period">
-        {periodLabel ? periodLabel : (lang === 'ko' ? '선택된 매장 리포트' : 'Selected store report')}
-      </div>
-      <nav className="rc-report-nav">
-        {items.map(it => (
-          <button
-            key={it.id}
-            type="button"
-            className={`rc-report-nav-tab${screen === it.id ? ' is-active' : ''}`}
-            onClick={() => onSetScreen(it.id)}
-          >
-            {it.label}
+    <header className="rc-cockpit-controls" aria-label={lang === 'ko' ? '매출 OS 컨트롤' : 'Revenue OS controls'}>
+      <div className="rc-cockpit-controls-left">
+        <select
+          className="rc-store-select rc-cockpit-store-select"
+          value={selectedStoreId ?? ''}
+          disabled={storeListLoading || stores.length === 0}
+          onChange={event => onSelectStore(event.target.value)}
+          aria-label={lang === 'ko' ? '가게 선택' : 'Store'}
+        >
+          {stores.length === 0 && (
+            <option value="">{lang === 'ko' ? '가게 미등록' : 'No store yet'}</option>
+          )}
+          {stores.map(store => (
+            <option key={store.store_id} value={store.store_id}>
+              {formatStoreOption(store, lang)}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="rc-store-button" onClick={onOpenCreate}>
+          {lang === 'ko' ? '새 가게 등록' : 'Add store'}
+        </button>
+        {canUpload && (
+          <button type="button" className="rc-store-button rc-store-button-primary" onClick={onOpenRevenueUpload}>
+            {lang === 'ko' ? '매출 데이터 등록하기' : 'Add revenue data'}
           </button>
-        ))}
-      </nav>
-    </div>
-  );
-}
-
-interface StoreBarShellProps {
-  storeBar?: ReactNode;
-}
-function StoreBarShell({ storeBar }: StoreBarShellProps) {
-  if (!storeBar) return null;
-  return (
-    <header className="rc-header">
-      <div className="rc-header-store-bar">
-        {storeBar}
+        )}
+        {canManage && (
+          <StoreManageMenu lang={lang} onOpenEdit={onOpenEdit} onArchive={onArchive}/>
+        )}
+      </div>
+      <div className="rc-cockpit-controls-right">
+        {notice && (
+          <span className="rc-store-notice rc-cockpit-status" role="status">{notice}</span>
+        )}
+        <nav className="rc-report-nav" aria-label={lang === 'ko' ? '리포트 탭' : 'Report tabs'}>
+          {tabs.map(it => (
+            <button
+              key={it.id}
+              type="button"
+              className={`rc-report-nav-tab${screen === it.id ? ' is-active' : ''}`}
+              onClick={() => onSetScreen(it.id)}
+            >
+              {it.label}
+            </button>
+          ))}
+        </nav>
       </div>
     </header>
   );
-}
-
-interface StoreSwitcherProps {
-  lang: RcLang;
-  stores: RevenueStoreSummary[];
-  selectedStoreId: string | null;
-  loading: boolean;
-  notice: string | null;
-  showCreate: boolean;
-  createError: string | null;
-  form: StoreCreateForm;
-  onSelectStore: (storeId: string) => void;
-  onOpenCreate: () => void;
-  onCancelCreate: () => void;
-  onChangeForm: (patch: Partial<StoreCreateForm>) => void;
-  onCreateStore: () => void;
-  onOpenAddressSearch: () => void;
-  onOpenRevenueUpload: () => void;
-  onArchiveStore?: () => void;
-  canArchive?: boolean;
-  compact?: boolean;
 }
 
 interface BootstrapCollector {
@@ -362,133 +430,131 @@ function OnboardingBootstrapPanel({
   );
 }
 
-function StoreSwitcher({
+interface StoreFormPanelProps {
+  lang: RcLang;
+  mode: 'create' | 'edit';
+  loading: boolean;
+  error: string | null;
+  form: StoreCreateForm;
+  onChangeForm: (patch: Partial<StoreCreateForm>) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+  onOpenAddressSearch: () => void;
+}
+
+function StoreFormPanel({
   lang,
-  stores,
-  selectedStoreId,
+  mode,
   loading,
-  notice,
-  showCreate,
-  createError,
+  error,
   form,
-  onSelectStore,
-  onOpenCreate,
-  onCancelCreate,
   onChangeForm,
-  onCreateStore,
+  onCancel,
+  onSubmit,
   onOpenAddressSearch,
-  onOpenRevenueUpload,
-  onArchiveStore,
-  canArchive = false,
-  compact = false,
-}: StoreSwitcherProps) {
+}: StoreFormPanelProps) {
+  const heading = mode === 'create'
+    ? (lang === 'ko' ? '새 가게 등록' : 'Add store')
+    : (lang === 'ko' ? '가게 정보 수정' : 'Edit store info');
+  const submitLabel = mode === 'create'
+    ? (lang === 'ko' ? '등록' : 'Create')
+    : (lang === 'ko' ? '저장' : 'Save');
   return (
-    <section className={compact ? 'rc-store-switcher rc-store-switcher-compact' : 'rc-store-switcher'} aria-label={lang === 'ko' ? '가게 선택' : 'Store'}>
-      <div className="rc-store-switcher-row">
-        <label className="rc-store-label" htmlFor="rc-store-select">{lang === 'ko' ? '가게 선택' : 'Store'}</label>
+    <section
+      className="rc-store-create-panel rc-store-form-panel"
+      role="dialog"
+      aria-label={heading}
+    >
+      <div className="rc-store-create-head">
+        <strong>{heading}</strong>
+        <button type="button" className="rc-store-create-close" onClick={onCancel}>
+          {lang === 'ko' ? '취소' : 'Cancel'}
+        </button>
+      </div>
+      <div className="rc-store-create">
+        <input
+          className="rc-store-input"
+          value={form.store_name}
+          placeholder={lang === 'ko' ? '가게 이름 *' : 'Store name *'}
+          onChange={event => onChangeForm({ store_name: event.target.value })}
+          required
+        />
+        <input
+          className="rc-store-input"
+          value={form.tenant_name ?? ''}
+          placeholder={lang === 'ko' ? '건물명 / 호수 (선택)' : 'Building / Suite (optional)'}
+          onChange={event => onChangeForm({ tenant_name: event.target.value })}
+        />
         <select
-          id="rc-store-select"
           className="rc-store-select"
-          value={selectedStoreId ?? ''}
-          disabled={loading || stores.length === 0}
-          onChange={event => onSelectStore(event.target.value)}
+          value={form.business_category ?? ''}
+          onChange={event => onChangeForm({ business_category: event.target.value })}
+          required
         >
-          {stores.length === 0 && (
-            <option value="">{lang === 'ko' ? '가게 미등록' : 'No store yet'}</option>
-          )}
-          {stores.map(store => (
-            <option key={store.store_id} value={store.store_id}>
-              {formatStoreOption(store, lang)}
+          <option value="">{lang === 'ko' ? '업종 선택 (서울 상권코드) *' : 'Select category (Seoul code) *'}</option>
+          {SEOUL_SERVICE_CATEGORIES.map(category => (
+            <option key={category.code} value={category.code}>
+              {category.code} · {category[lang]}
             </option>
           ))}
         </select>
-        <button type="button" className="rc-store-button" onClick={onOpenCreate}>
-          {lang === 'ko' ? '새 가게 등록' : 'Add store'}
+        <input
+          className="rc-store-input"
+          value={form.region ?? ''}
+          placeholder={lang === 'ko' ? '지역 (주소 검색으로 자동)' : 'Region (auto from search)'}
+          readOnly
+          tabIndex={-1}
+          aria-readonly
+        />
+        <input
+          className="rc-store-input rc-store-input-wide"
+          value={form.address_text ?? ''}
+          placeholder={lang === 'ko' ? '주소 검색으로 주소를 선택해 주세요 *' : 'Select address via search *'}
+          readOnly
+          tabIndex={-1}
+          aria-readonly
+          onClick={onOpenAddressSearch}
+        />
+        <button type="button" className="rc-store-button" onClick={onOpenAddressSearch}>
+          {lang === 'ko' ? '주소 검색' : 'Search address'}
         </button>
-        {selectedStoreId && (
-          <button type="button" className="rc-store-button rc-store-button-primary" onClick={onOpenRevenueUpload}>
-            {lang === 'ko' ? '매출 데이터 등록하기' : 'Add revenue data'}
-          </button>
-        )}
-        {canArchive && onArchiveStore && (
-          <button type="button" className="rc-store-button" onClick={onArchiveStore} title={lang === 'ko' ? '선택된 매장 보관' : 'Archive selected store'}>
-            {lang === 'ko' ? '보관' : 'Archive'}
-          </button>
-        )}
-        {notice && <span className="rc-store-notice">{notice}</span>}
+        <input
+          className="rc-store-input"
+          value={form.detail_address ?? ''}
+          placeholder={lang === 'ko' ? '상세 주소 (선택)' : 'Detail address (optional)'}
+          onChange={event => onChangeForm({ detail_address: event.target.value })}
+        />
+        <button type="button" className="rc-store-button rc-store-button-primary" onClick={onSubmit} disabled={loading}>
+          {submitLabel}
+        </button>
       </div>
-      {showCreate && (
-        <div className="rc-store-create-panel" role="dialog" aria-label={lang === 'ko' ? '새 가게 등록' : 'Add store'}>
-          <div className="rc-store-create-head">
-            <strong>{lang === 'ko' ? '새 가게 등록' : 'Add store'}</strong>
-            <button type="button" className="rc-store-create-close" onClick={onCancelCreate}>
-              {lang === 'ko' ? '취소' : 'Cancel'}
-            </button>
-          </div>
-          <div className="rc-store-create">
-            <input
-              className="rc-store-input"
-              value={form.store_name}
-              placeholder={lang === 'ko' ? '가게 이름 *' : 'Store name *'}
-              onChange={event => onChangeForm({ store_name: event.target.value })}
-              required
-            />
-            <input
-              className="rc-store-input"
-              value={form.tenant_name ?? ''}
-              placeholder={lang === 'ko' ? '건물명 / 호수 (선택)' : 'Building / Suite (optional)'}
-              onChange={event => onChangeForm({ tenant_name: event.target.value })}
-            />
-            <select
-              className="rc-store-select"
-              value={form.business_category ?? ''}
-              onChange={event => onChangeForm({ business_category: event.target.value })}
-              required
-            >
-              <option value="">{lang === 'ko' ? '업종 선택 (서울 상권코드) *' : 'Select category (Seoul code) *'}</option>
-              {SEOUL_SERVICE_CATEGORIES.map(category => (
-                <option key={category.code} value={category.code}>
-                  {category.code} · {category[lang]}
-                </option>
-              ))}
-            </select>
-            <input
-              className="rc-store-input"
-              value={form.region ?? ''}
-              placeholder={lang === 'ko' ? '지역 (주소 검색으로 자동)' : 'Region (auto from search)'}
-              readOnly
-              tabIndex={-1}
-              aria-readonly
-            />
-            <input
-              className="rc-store-input rc-store-input-wide"
-              value={form.address_text ?? ''}
-              placeholder={lang === 'ko' ? '주소 검색으로 주소를 선택해 주세요 *' : 'Select address via search *'}
-              readOnly
-              tabIndex={-1}
-              aria-readonly
-              onClick={onOpenAddressSearch}
-            />
-            <button type="button" className="rc-store-button" onClick={onOpenAddressSearch}>
-              {lang === 'ko' ? '주소 검색' : 'Search address'}
-            </button>
-            <input
-              className="rc-store-input"
-              value={form.detail_address ?? ''}
-              placeholder={lang === 'ko' ? '상세 주소 (선택)' : 'Detail address (optional)'}
-              onChange={event => onChangeForm({ detail_address: event.target.value })}
-            />
-            <button type="button" className="rc-store-button rc-store-button-primary" onClick={onCreateStore} disabled={loading}>
-              {lang === 'ko' ? '등록' : 'Create'}
-            </button>
-          </div>
-          {createError && (
-            <div className="rc-store-create-error rc-prose">
-              {createError}
-            </div>
-          )}
+      {error && (
+        <div className="rc-store-create-error rc-prose">
+          {error}
         </div>
       )}
+    </section>
+  );
+}
+
+function CockpitLoadingSkeleton({ lang }: { lang: RcLang }) {
+  return (
+    <section
+      className="rc-cockpit-skeleton"
+      role="status"
+      aria-live="polite"
+      aria-label={lang === 'ko' ? '가게 정보를 불러오는 중' : 'Loading store info'}
+    >
+      <div className="rc-cockpit-skeleton-block rc-cockpit-skeleton-block-head"/>
+      <div className="rc-cockpit-skeleton-grid">
+        <div className="rc-cockpit-skeleton-block"/>
+        <div className="rc-cockpit-skeleton-block"/>
+        <div className="rc-cockpit-skeleton-block"/>
+        <div className="rc-cockpit-skeleton-block"/>
+      </div>
+      <span className="rc-cockpit-skeleton-text">
+        {lang === 'ko' ? '가게 정보를 불러오는 중입니다…' : 'Loading store info…'}
+      </span>
     </section>
   );
 }
@@ -956,10 +1022,24 @@ export function RevenueCockpitApp() {
   const [storeNotice, setStoreNotice] = useState<string | null>(null);
   const [showCreateStore, setShowCreateStore] = useState(false);
   const [createStoreError, setCreateStoreError] = useState<string | null>(null);
+  const [showEditStore, setShowEditStore] = useState(false);
+  const [editStoreError, setEditStoreError] = useState<string | null>(null);
+  // Address-search target: which form (create vs. edit) should receive a picked address.
+  const [addressTarget, setAddressTarget] = useState<'create' | 'edit'>('create');
   const [showRevenueUpload, setShowRevenueUpload] = useState(false);
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
   const [latestPipelineMeta, setLatestPipelineMeta] = useState<Record<string, unknown> | null>(null);
+  // Initial-load gate. While true, the screen body shows a loading skeleton instead of
+  // demo fallback / 가게 미등록 — so refresh does not flicker through those states.
+  const [storesFirstLoadComplete, setStoresFirstLoadComplete] = useState(() => !wantsApiData());
   const [storeForm, setStoreForm] = useState<StoreCreateForm>({
+    store_name: '',
+    tenant_name: '',
+    business_category: '',
+    region: '',
+    address_text: '',
+  });
+  const [storeEditForm, setStoreEditForm] = useState<StoreCreateForm>({
     store_name: '',
     tenant_name: '',
     business_category: '',
@@ -1069,6 +1149,7 @@ export function RevenueCockpitApp() {
       setSelectedStoreId(null);
       setStoreNotice(lang === 'ko' ? '로그인이 만료되었습니다. 다시 로그인해주세요.' : 'Login expired. Please sign in again.');
       setApiNotice('auth-expired');
+      setStoresFirstLoadComplete(true);
       return;
     }
 
@@ -1082,6 +1163,8 @@ export function RevenueCockpitApp() {
         setStores(nextStores);
         const saved = loadSelectedStoreId();
         const nextSelected = chooseInitialStore(nextStores, saved);
+        // Only clear persisted id when there are no real stores. While a saved id was
+        // chosen, keep it persisted so subsequent refreshes restore the same store.
         setSelectedStoreId(nextSelected);
         setLatestPipelineMeta(null);
         setStoreNotice(nextStores.length === 0
@@ -1102,7 +1185,10 @@ export function RevenueCockpitApp() {
         if (authExpired) setApiNotice('auth-expired');
       })
       .finally(() => {
-        if (!cancelled) setStoreLoading(false);
+        if (!cancelled) {
+          setStoreLoading(false);
+          setStoresFirstLoadComplete(true);
+        }
       });
 
     return () => { cancelled = true; };
@@ -1194,7 +1280,8 @@ export function RevenueCockpitApp() {
         new window.daum.Postcode({
           oncomplete: data => {
             const selectedAddress = data.roadAddress || data.address || data.jibunAddress || '';
-            setStoreForm(prev => ({
+            const setter = addressTarget === 'edit' ? setStoreEditForm : setStoreForm;
+            setter(prev => ({
               ...prev,
               address_text: selectedAddress || prev.address_text,
               region: regionFromPostcode(data) || prev.region,
@@ -1324,25 +1411,27 @@ export function RevenueCockpitApp() {
     if (!selectedStoreId) return;
     const target = stores.find((store) => store.store_id === selectedStoreId);
     if (!target) return;
-    const label = target.store_name || (lang === 'ko' ? '선택된 매장' : 'this store');
+    // The backend archive (DELETE /stores/:id) hides the store from the default list
+    // but retains existing revenue/context records — this is not a hard delete.
     const confirmed = window.confirm(
       lang === 'ko'
-        ? `${label}을(를) 보관 처리하시겠습니까? 보관된 매장은 기본 목록에서 숨겨집니다. 매출/맥락 기록은 그대로 보존됩니다.`
-        : `Archive ${label}? It will be hidden from the default list. Revenue and context history is preserved.`,
+        ? '이 가게를 목록에서 제거할까요? 기존 매출 데이터와 분석 기록은 보관됩니다.'
+        : 'Remove this store from the list? Revenue data and analysis history are kept.',
     );
     if (!confirmed) return;
     setStoreLoading(true);
+    setShowEditStore(false);
     apiArchiveStore(selectedStoreId)
       .then(() => {
-        setStores((prev) => prev.filter((store) => store.store_id !== selectedStoreId));
         const remaining = stores.filter((store) => store.store_id !== selectedStoreId);
-        const next = remaining[0]?.store_id ?? null;
+        setStores(remaining);
+        const next = chooseInitialStore(remaining, null);
         setSelectedStoreId(next);
         setLatestPipelineMeta(null);
-        setStoreNotice(lang === 'ko' ? '매장이 보관되었습니다.' : 'Store archived.');
+        setStoreNotice(lang === 'ko' ? '가게를 목록에서 제거했습니다.' : 'Store removed from the list.');
       })
       .catch(() => {
-        setStoreNotice(lang === 'ko' ? '보관 처리에 실패했습니다.' : 'Could not archive the store.');
+        setStoreNotice(lang === 'ko' ? '가게 제거에 실패했습니다.' : 'Could not remove the store.');
       })
       .finally(() => setStoreLoading(false));
   }
@@ -1351,6 +1440,122 @@ export function RevenueCockpitApp() {
     setShowCreateStore(false);
     setCreateStoreError(null);
     setStoreForm({ store_name: '', tenant_name: '', business_category: '', region: '', address_text: '' });
+  }
+
+  function buildEditFormFromStore(store: RevenueStoreSummary): StoreCreateForm {
+    const meta = (store.metadata ?? {}) as Record<string, unknown>;
+    const detailAddress = typeof meta.detail_address === 'string' ? meta.detail_address : '';
+    const addressSource = typeof meta.address_source === 'string' ? meta.address_source : 'postcode_search';
+    const postalCode = typeof meta.postal_code === 'string' ? meta.postal_code : '';
+    const roadAddress = typeof meta.road_address === 'string' ? meta.road_address : '';
+    const jibunAddress = typeof meta.jibun_address === 'string' ? meta.jibun_address : '';
+    return {
+      store_name: store.store_name ?? '',
+      tenant_name: store.tenant_name ?? '',
+      business_category: store.business_category ?? '',
+      region: store.region ?? '',
+      address_text: store.address_text ?? '',
+      address_source: addressSource,
+      detail_address: detailAddress,
+      postal_code: postalCode,
+      road_address: roadAddress,
+      jibun_address: jibunAddress,
+      metadata: { ...meta, address_selected: true },
+    };
+  }
+
+  function handleOpenEditStore() {
+    if (!selectedStoreId) return;
+    const target = stores.find(store => store.store_id === selectedStoreId);
+    if (!target) return;
+    setStoreEditForm(buildEditFormFromStore(target));
+    setEditStoreError(null);
+    setShowEditStore(true);
+    setShowCreateStore(false);
+    setShowRevenueUpload(false);
+  }
+
+  function handleCancelEditStore() {
+    setShowEditStore(false);
+    setEditStoreError(null);
+  }
+
+  function handleSubmitEditStore() {
+    if (!selectedStoreId) return;
+    setEditStoreError(null);
+    if (!storeEditForm.store_name.trim()) {
+      setEditStoreError(lang === 'ko' ? '가게 이름을 입력해 주세요.' : 'Enter a store name.');
+      return;
+    }
+    if (!storeEditForm.business_category?.trim()) {
+      setEditStoreError(lang === 'ko' ? '업종을 선택해 주세요.' : 'Please select a category.');
+      return;
+    }
+    const baseAddress = storeEditForm.address_text?.trim() || '';
+    const detailAddress = storeEditForm.detail_address?.trim() || '';
+    const addressTextNext = [baseAddress, detailAddress].filter(Boolean).join(' ') || undefined;
+    const addressSelected = storeEditForm.address_source === 'postcode_search'
+      || (storeEditForm.metadata as Record<string, unknown> | undefined)?.address_selected === true;
+    if (!baseAddress || !addressSelected) {
+      setEditStoreError(lang === 'ko'
+        ? '주소 검색으로 주소를 선택해 주세요.'
+        : 'Please select an address via address search.');
+      return;
+    }
+    const categoryCode = storeEditForm.business_category?.trim();
+    const seoulCategory = findSeoulServiceCategory(categoryCode);
+    const baseMeta = { ...(storeEditForm.metadata ?? {}) } as Record<string, unknown>;
+    if (storeEditForm.postal_code) baseMeta.postal_code = storeEditForm.postal_code;
+    if (storeEditForm.road_address) baseMeta.road_address = storeEditForm.road_address;
+    if (storeEditForm.jibun_address) baseMeta.jibun_address = storeEditForm.jibun_address;
+    if (detailAddress) baseMeta.detail_address = detailAddress;
+    else delete baseMeta.detail_address;
+    baseMeta.address_source = storeEditForm.address_source || 'postcode_search';
+    baseMeta.address_selected = true;
+    if (seoulCategory) {
+      baseMeta.business_category_label = seoulCategory.ko;
+      baseMeta.business_category_label_en = seoulCategory.en;
+      baseMeta.business_category_source = 'seoul_open_data';
+      baseMeta.commercial_sales_endpoint = SEOUL_COMMERCIAL_SALES_ENDPOINT;
+    }
+
+    setStoreLoading(true);
+    setStoreNotice(lang === 'ko' ? '가게 정보를 저장하는 중입니다.' : 'Saving store info.');
+    apiUpdateStore(selectedStoreId, {
+      store_name: storeEditForm.store_name.trim(),
+      tenant_name: storeEditForm.tenant_name?.trim() || undefined,
+      business_category: categoryCode,
+      region: storeEditForm.region?.trim() || undefined,
+      address_text: addressTextNext,
+      address_source: storeEditForm.address_source || 'postcode_search',
+      address_selected: true,
+      metadata: baseMeta,
+    })
+      .then(envelope => {
+        const updated = envelope.store;
+        if (!updated) throw new Error('missing store');
+        setStores(prev => prev.map(store => store.store_id === updated.store_id ? updated : store));
+        setShowEditStore(false);
+        setEditStoreError(null);
+        setStoreNotice(lang === 'ko' ? '가게 정보가 저장되었습니다.' : 'Store info saved.');
+      })
+      .catch(error => {
+        const status = error instanceof RevenueApiError ? error.status : 0;
+        if (status === 400 || status === 422) {
+          setEditStoreError(lang === 'ko'
+            ? '입력값을 다시 확인해 주세요. 주소는 주소 검색으로 선택해야 합니다.'
+            : 'Please double-check the inputs. Address must be selected via search.');
+        } else if (status === 401 || status === 403) {
+          setEditStoreError(lang === 'ko'
+            ? '권한이 없거나 세션이 만료되었습니다. 다시 로그인해 주세요.'
+            : 'Permission denied or session expired. Please sign in again.');
+        } else {
+          setEditStoreError(lang === 'ko'
+            ? '가게 정보 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.'
+            : 'Could not save store info. Please retry shortly.');
+        }
+      })
+      .finally(() => setStoreLoading(false));
   }
 
   function handleCreateStore() {
@@ -1506,6 +1711,14 @@ export function RevenueCockpitApp() {
               : null;
 
   const isLoggedIn = Boolean(apiMode && getStoredCognitoToken());
+  // While the initial store list (and the first cockpit data fetch) is still
+  // resolving for an authenticated user, skip rendering demo/no-store screens
+  // so refresh does not flicker through them. apiNotice starts as 'loading'
+  // for apiMode and becomes null after the cockpit data fetch settles.
+  const showInitialSkeleton = isLoggedIn && (
+    !storesFirstLoadComplete
+    || apiNotice === 'loading'
+  );
 
   return (
     <div className="rc-root" data-theme={effectiveTheme}>
@@ -1548,60 +1761,76 @@ export function RevenueCockpitApp() {
           </div>
         ) : null}
       />
-      <StoreBarShell
-        storeBar={isLoggedIn ? (
-          <StoreSwitcher
-            lang={lang}
-            stores={stores}
-            selectedStoreId={selectedStoreId}
-            loading={storeLoading}
-            notice={storeNotice}
-            showCreate={showCreateStore}
-            createError={createStoreError}
-            form={storeForm}
-            onSelectStore={storeId => {
-              setSelectedStoreId(storeId);
-              setLatestPipelineMeta(null);
-              setShowRevenueUpload(false);
-            }}
-            onOpenCreate={() => {
-              setShowCreateStore(true);
-              setCreateStoreError(null);
-            }}
-            onCancelCreate={handleCancelCreateStore}
-            onChangeForm={patch => setStoreForm(prev => ({ ...prev, ...patch }))}
-            onCreateStore={handleCreateStore}
-            onOpenAddressSearch={handleOpenAddressSearch}
-            onOpenRevenueUpload={() => setShowRevenueUpload(value => !value)}
-            onArchiveStore={handleArchiveSelectedStore}
-            canArchive={Boolean(selectedStoreId && selectedStore && !selectedStoreIsDemo)}
-            compact
-          />
-        ) : null}
-      />
-      <RcReportNavRow
-        lang={lang}
-        screen={screen}
-        onSetScreen={setScreen}
-        periodLabel={selectedStore
-          ? (latestRevenueUpload?.created_at
-              ? (lang === 'ko' ? '최근 업로드 기준' : 'Latest upload')
-              : (lang === 'ko' ? '선택된 매장 리포트' : 'Selected store report'))
-          : (lang === 'ko' ? '예시 데이터 기준 리포트' : 'Demo data report')}
-      />
-      {showDemoBadge && (
+      {isLoggedIn && (
+        <CockpitControlsBar
+          lang={lang}
+          stores={stores}
+          selectedStoreId={selectedStoreId}
+          storeListLoading={storeLoading}
+          notice={storeNotice}
+          screen={screen}
+          onSetScreen={setScreen}
+          onSelectStore={storeId => {
+            setSelectedStoreId(storeId);
+            setLatestPipelineMeta(null);
+            setShowRevenueUpload(false);
+            setShowEditStore(false);
+          }}
+          onOpenCreate={() => {
+            setShowCreateStore(true);
+            setShowEditStore(false);
+            setCreateStoreError(null);
+            setAddressTarget('create');
+          }}
+          onOpenRevenueUpload={() => setShowRevenueUpload(value => !value)}
+          onOpenEdit={() => {
+            setAddressTarget('edit');
+            handleOpenEditStore();
+          }}
+          onArchive={handleArchiveSelectedStore}
+          canUpload={Boolean(selectedStoreId)}
+          canManage={Boolean(selectedStoreId && selectedStore && !selectedStoreIsDemo)}
+        />
+      )}
+      {isLoggedIn && showCreateStore && (
+        <StoreFormPanel
+          lang={lang}
+          mode="create"
+          loading={storeLoading}
+          error={createStoreError}
+          form={storeForm}
+          onChangeForm={patch => setStoreForm(prev => ({ ...prev, ...patch }))}
+          onCancel={handleCancelCreateStore}
+          onSubmit={handleCreateStore}
+          onOpenAddressSearch={() => { setAddressTarget('create'); handleOpenAddressSearch(); }}
+        />
+      )}
+      {isLoggedIn && showEditStore && selectedStoreId && (
+        <StoreFormPanel
+          lang={lang}
+          mode="edit"
+          loading={storeLoading}
+          error={editStoreError}
+          form={storeEditForm}
+          onChangeForm={patch => setStoreEditForm(prev => ({ ...prev, ...patch }))}
+          onCancel={handleCancelEditStore}
+          onSubmit={handleSubmitEditStore}
+          onOpenAddressSearch={() => { setAddressTarget('edit'); handleOpenAddressSearch(); }}
+        />
+      )}
+      {showDemoBadge && !showInitialSkeleton && (
         <div className="rc-demo-strip">
           <span>{lang === 'ko' ? '예시 데이터' : 'Demo data'}</span>
           <span>{lang === 'ko' ? '합성 데이터이며 실제 가맹점 매출이 아닙니다.' : 'Synthetic data, not real merchant revenue.'}</span>
         </div>
       )}
-      {noticeCopy && (
+      {noticeCopy && !showInitialSkeleton && (
         <div className="rc-api-notice">
           <Icon name="shield" size={12}/>
           <span>{noticeCopy}</span>
         </div>
       )}
-      {apiMode && bootstrapStatus && selectedStoreId === bootstrapStatus.storeId && (
+      {apiMode && bootstrapStatus && selectedStoreId === bootstrapStatus.storeId && !showInitialSkeleton && (
         <OnboardingBootstrapPanel
           lang={lang}
           status={bootstrapStatus}
@@ -1619,14 +1848,16 @@ export function RevenueCockpitApp() {
         />
       )}
       <div className="rc-screen">
-        {noRevenueMode && screen !== 'reliability' ? (
+        {showInitialSkeleton ? (
+          <CockpitLoadingSkeleton lang={lang}/>
+        ) : noRevenueMode && screen !== 'reliability' ? (
           <NoRevenueEmptyState
             lang={lang}
             selectedStore={selectedStore}
             onOpenUpload={() => setShowRevenueUpload(true)}
             onLoadDemoRevenue={handleLoadDemoRevenue}
           />
-        ) : screen === 'brief' && (
+        ) : screen === 'brief' ? (
           <RevenueBriefView
             lang={lang}
             scenario={scenario}
@@ -1634,9 +1865,9 @@ export function RevenueCockpitApp() {
             statuses={statuses}
             onSetStatus={setStatus}
           />
-        )}
-        {screen === 'evidence' && <CauseEvidenceView lang={lang} scenario={scenario}/>}
-        {screen === 'actions' && (
+        ) : null}
+        {!showInitialSkeleton && screen === 'evidence' && <CauseEvidenceView lang={lang} scenario={scenario}/>}
+        {!showInitialSkeleton && screen === 'actions' && (
           <ActionPlannerView
             lang={lang}
             scenario={scenario}
@@ -1644,7 +1875,7 @@ export function RevenueCockpitApp() {
             onSetStatus={setStatus}
           />
         )}
-        {screen === 'reliability' && <DataReliabilityView lang={lang} scenario={scenario}/>}
+        {!showInitialSkeleton && screen === 'reliability' && <DataReliabilityView lang={lang} scenario={scenario}/>}
       </div>
     </div>
   );
