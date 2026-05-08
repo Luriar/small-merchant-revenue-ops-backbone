@@ -159,7 +159,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
           </div>
           {rel.sources.map(src => {
             const tone = statusTone(src.status, src.reason);
-            const hint = statusHint(src.status, lang);
+            const hint = statusHint(src, lang);
             return (
               <div key={src.id} style={{
                 display: 'grid', gridTemplateColumns: '1.5fr 1.2fr 0.95fr 0.7fr 0.7fr',
@@ -261,21 +261,32 @@ function statusTone(status: string, reason: string | null | undefined): 'good' |
   return 'warm';
 }
 
-function statusHint(status: string, lang: RcLang): string {
+function statusHint(source: Scenario['reliability']['sources'][number], lang: RcLang): string {
+  const { id, status, reason } = source;
+
   if (status === 'partial') {
     return lang === 'ko'
       ? '최근 공개 데이터 기준으로 보조 비교에 사용됩니다.'
       : 'Used as a supporting comparison from the latest public dataset.';
   }
+
   if (status === 'failed') {
     return lang === 'ko'
       ? '최근 수집에서 확인이 필요한 응답이 있었습니다.'
       : 'The latest collection had responses that need review.';
   }
+
   if (status === 'skipped') {
+    if (id === 'naver_search_trend' && reason === 'no_result') {
+      return lang === 'ko'
+        ? '현재 검색어 기준으로 관심도 결과가 없습니다. 등록되지 않았거나 검색량이 낮은 매장명은 결과가 없을 수 있습니다.'
+        : 'No search-interest result is available for the current keyword. Unregistered or low-volume store names may not return results.';
+    }
+
     return lang === 'ko'
       ? '연동 자격이 연결되면 자동으로 갱신됩니다.'
       : 'Updates automatically once credentials are connected.';
   }
+
   return '';
 }

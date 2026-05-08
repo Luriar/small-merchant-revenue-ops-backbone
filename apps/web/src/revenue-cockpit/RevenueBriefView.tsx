@@ -274,7 +274,31 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
       : scenario;
 
   const uploadedSeries = effectiveScenario.uploadedDailySeries;
-  const isUploadedMode = Array.isArray(uploadedSeries) && uploadedSeries.length >= 2;
+  const uploadedPoints = Array.isArray(uploadedSeries) ? [...uploadedSeries].sort((a, b) => a.date.localeCompare(b.date)) : [];
+  const isUploadedMode = uploadedPoints.length >= 2;
+
+  const uploadedTransactionTotal = uploadedPoints.reduce((sum, point) => sum + Number(point.order_count || 0), 0);
+  const uploadedNetSalesTotal = uploadedPoints.reduce((sum, point) => sum + Number(point.net_sales || 0), 0);
+  const uploadedTicketAverage = uploadedTransactionTotal > 0 ? Math.round(uploadedNetSalesTotal / uploadedTransactionTotal) : 0;
+  const uploadedTransactionLabel = uploadedTransactionTotal >= 1000
+    ? (uploadedTransactionTotal / 1000).toFixed(1) + 'k'
+    : uploadedTransactionTotal.toLocaleString();
+  const uploadedTicketLabel = '₩' + uploadedTicketAverage.toLocaleString();
+
+  const uploadedRecent = uploadedPoints.slice(-30);
+  const uploadedPrevious = uploadedPoints.slice(-60, -30);
+  const uploadedRecentOrders = uploadedRecent.reduce((sum, point) => sum + Number(point.order_count || 0), 0);
+  const uploadedPreviousOrders = uploadedPrevious.reduce((sum, point) => sum + Number(point.order_count || 0), 0);
+  const uploadedTransactionChange = uploadedPreviousOrders > 0
+    ? ((uploadedRecentOrders - uploadedPreviousOrders) / uploadedPreviousOrders) * 100
+    : 0;
+  const uploadedRecentSales = uploadedRecent.reduce((sum, point) => sum + Number(point.net_sales || 0), 0);
+  const uploadedPreviousSales = uploadedPrevious.reduce((sum, point) => sum + Number(point.net_sales || 0), 0);
+  const uploadedRecentTicket = uploadedRecentOrders > 0 ? uploadedRecentSales / uploadedRecentOrders : 0;
+  const uploadedPreviousTicket = uploadedPreviousOrders > 0 ? uploadedPreviousSales / uploadedPreviousOrders : 0;
+  const uploadedTicketChange = uploadedPreviousTicket > 0
+    ? ((uploadedRecentTicket - uploadedPreviousTicket) / uploadedPreviousTicket) * 100
+    : 0;
   const [chartWindow, setChartWindow] = useState<TrendWindow>(isUploadedMode ? 'daily' : '8Q');
   // When the chart mode flips between projection and uploaded modes, re-pin
   // chartWindow to a value that exists in the active mode.
@@ -291,13 +315,13 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
   const thisWeekActions = effectiveScenario.actions.filter(a => a.timeframe === 'this-week');
   const revenueDeltaUnavailable = Math.abs(effectiveScenario.revenueChange) < 0.05;
   const secondaryMetrics = [
-    { lab: lang === 'ko' ? '거래건수'  : 'Transactions', v: '11.9k',  d: effectiveScenario.txnChange,        spark: trend === 'up'
+    { lab: lang === 'ko' ? '거래건수'  : 'Transactions', v: isUploadedMode ? uploadedTransactionLabel : '11.9k',  d: isUploadedMode ? uploadedTransactionChange : effectiveScenario.txnChange,        spark: trend === 'up'
       ? [{v:96},{v:97},{v:98},{v:99},{v:100},{v:102},{v:104},{v:108}]
       : [{v:100},{v:101},{v:99},{v:102},{v:104},{v:103},{v:100},{v:90}] },
-    { lab: lang === 'ko' ? '객단가'    : 'Avg. ticket',  v: '₩6,450', d: effectiveScenario.ticketChange,     spark: trend === 'up'
+    { lab: lang === 'ko' ? '객단가'    : 'Avg. ticket',  v: isUploadedMode ? uploadedTicketLabel : '₩6,450', d: isUploadedMode ? uploadedTicketChange : effectiveScenario.ticketChange,     spark: trend === 'up'
       ? [{v:100},{v:100},{v:100},{v:101},{v:101},{v:102},{v:103},{v:104}]
       : [{v:100},{v:99},{v:101},{v:102},{v:101},{v:100},{v:100},{v:98}] },
-    { lab: lang === 'ko' ? '생활인구'  : 'Foot traffic', v: '142k',   d: effectiveScenario.populationChange, spark: trend === 'up'
+    { lab: lang === 'ko' ? '생활인구'  : 'Foot traffic', v: '142k',   sourceHint: lang === 'ko' ? '서울 열린데이터 기준 · 공개 상권 맥락' : 'Seoul Open Data · public context', d: effectiveScenario.populationChange, spark: trend === 'up'
       ? [{v:96},{v:97},{v:98},{v:99},{v:99},{v:100},{v:100},{v:106}]
       : [{v:104},{v:103},{v:102},{v:101},{v:101},{v:100},{v:100},{v:91.6}] },
   ];
