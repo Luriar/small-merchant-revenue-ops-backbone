@@ -168,13 +168,12 @@ function StoreManageMenu({ lang, onOpenEdit, onArchive }: StoreManageMenuProps) 
     <div ref={ref} className="rc-store-manage-menu">
       <button
         type="button"
-        className="rc-store-button rc-store-manage-menu-trigger"
+        className="rc-store-button"
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(value => !value)}
       >
         {lang === 'ko' ? '가게 관리' : 'Manage store'}
-        <Icon name="arrow-down" size={11}/>
       </button>
       {open && (
         <div className="rc-store-manage-menu-pop" role="menu">
@@ -206,6 +205,8 @@ interface CockpitControlsBarProps {
   selectedStoreId: string | null;
   storeListLoading: boolean;
   notice: string | null;
+  storeManagementError: string | null;
+  onDismissStoreManagementError: () => void;
   screen: RcScreen;
   onSetScreen: (s: RcScreen) => void;
   onSelectStore: (storeId: string) => void;
@@ -223,6 +224,8 @@ function CockpitControlsBar({
   selectedStoreId,
   storeListLoading,
   notice,
+  storeManagementError,
+  onDismissStoreManagementError,
   screen,
   onSetScreen,
   onSelectStore,
@@ -258,6 +261,9 @@ function CockpitControlsBar({
             </option>
           ))}
         </select>
+        {canManage && (
+          <StoreManageMenu lang={lang} onOpenEdit={onOpenEdit} onArchive={onArchive}/>
+        )}
         <button type="button" className="rc-store-button" onClick={onOpenCreate}>
           {lang === 'ko' ? '새 가게 등록' : 'Add store'}
         </button>
@@ -266,8 +272,18 @@ function CockpitControlsBar({
             {lang === 'ko' ? '매출 데이터 등록하기' : 'Add revenue data'}
           </button>
         )}
-        {canManage && (
-          <StoreManageMenu lang={lang} onOpenEdit={onOpenEdit} onArchive={onArchive}/>
+        {storeManagementError && (
+          <span className="rc-store-manage-error" role="alert">
+            <span>{storeManagementError}</span>
+            <button
+              type="button"
+              className="rc-store-manage-error-dismiss"
+              aria-label={lang === 'ko' ? '오류 메시지 닫기' : 'Dismiss error'}
+              onClick={onDismissStoreManagementError}
+            >
+              ×
+            </button>
+          </span>
         )}
       </div>
       <div className="rc-cockpit-controls-right">
@@ -813,7 +829,21 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
               <option value="baemin_orders_csv">Baemin orders CSV</option>
               <option value="coupangeats_orders_csv">CoupangEats orders CSV</option>
             </select>
-            <input className="rc-file-input rc-csv-file-input" type="file" accept=".csv,text/csv" onChange={event => onFileSelected(event.target.files?.[0] ?? null)}/>
+            <label className="rc-csv-file-picker" htmlFor="rc-csv-file-input">
+              <span className="rc-store-button rc-csv-file-button">
+                {lang === 'ko' ? '파일 선택' : 'Choose file'}
+              </span>
+              <span className="rc-csv-file-name">
+                {csvFilename || (lang === 'ko' ? '선택된 파일 없음' : 'No file chosen')}
+              </span>
+              <input
+                id="rc-csv-file-input"
+                className="rc-visually-hidden"
+                type="file"
+                accept=".csv,text/csv"
+                onChange={event => onFileSelected(event.target.files?.[0] ?? null)}
+              />
+            </label>
           </div>
           <textarea
             className="rc-revenue-csv"
@@ -1020,6 +1050,10 @@ export function RevenueCockpitApp() {
   const [selectedStoreId, setSelectedStoreIdState] = useState<string | null>(() => loadSelectedStoreId());
   const [storeLoading, setStoreLoading] = useState(false);
   const [storeNotice, setStoreNotice] = useState<string | null>(null);
+  // Scoped error for store-management actions (e.g. archive failures). Rendered next
+  // to the 가게 관리 control rather than in the global status slot near the tabs.
+  const [storeManagementError, setStoreManagementError] = useState<string | null>(null);
+  const storeManagementErrorTimer = useRef<number | null>(null);
   const [showCreateStore, setShowCreateStore] = useState(false);
   const [createStoreError, setCreateStoreError] = useState<string | null>(null);
   const [showEditStore, setShowEditStore] = useState(false);
@@ -1064,6 +1098,14 @@ export function RevenueCockpitApp() {
     return () => {
       window.removeEventListener('revenue-ops-auth-changed', handleAuthChanged);
     };
+  }, []);
+
+  // Clear the store-management error auto-dismiss timer on unmount.
+  useEffect(() => () => {
+    if (storeManagementErrorTimer.current !== null) {
+      window.clearTimeout(storeManagementErrorTimer.current);
+      storeManagementErrorTimer.current = null;
+    }
   }, []);
 
   const setLang = (l: RcLang) => { setLangState(l); savePref('rc-lang', l); };
@@ -1407,6 +1449,18 @@ export function RevenueCockpitApp() {
     return () => { cancelled = true; };
   }, [apiMode, authReloadTick, selectedStoreId]);
 
+  function clearStoreManagementErrorTimer() {
+    if (storeManagementErrorTimer.current !== null) {
+      window.clearTimeout(storeManagementErrorTimer.current);
+      storeManagementErrorTimer.current = null;
+    }
+  }
+
+  function dismissStoreManagementError() {
+    clearStoreManagementErrorTimer();
+    setStoreManagementError(null);
+  }
+
   function handleArchiveSelectedStore() {
     if (!selectedStoreId) return;
     const target = stores.find((store) => store.store_id === selectedStoreId);
@@ -1421,6 +1475,7 @@ export function RevenueCockpitApp() {
     if (!confirmed) return;
     setStoreLoading(true);
     setShowEditStore(false);
+    dismissStoreManagementError();
     apiArchiveStore(selectedStoreId)
       .then(() => {
         const remaining = stores.filter((store) => store.store_id !== selectedStoreId);
@@ -1431,7 +1486,12 @@ export function RevenueCockpitApp() {
         setStoreNotice(lang === 'ko' ? '가게를 목록에서 제거했습니다.' : 'Store removed from the list.');
       })
       .catch(() => {
-        setStoreNotice(lang === 'ko' ? '가게 제거에 실패했습니다.' : 'Could not remove the store.');
+        setStoreManagementError(lang === 'ko' ? '가게 제거에 실패했습니다.' : 'Could not remove the store.');
+        clearStoreManagementErrorTimer();
+        storeManagementErrorTimer.current = window.setTimeout(() => {
+          setStoreManagementError(null);
+          storeManagementErrorTimer.current = null;
+        }, 6000);
       })
       .finally(() => setStoreLoading(false));
   }
@@ -1768,6 +1828,8 @@ export function RevenueCockpitApp() {
           selectedStoreId={selectedStoreId}
           storeListLoading={storeLoading}
           notice={storeNotice}
+          storeManagementError={storeManagementError}
+          onDismissStoreManagementError={dismissStoreManagementError}
           screen={screen}
           onSetScreen={setScreen}
           onSelectStore={storeId => {
