@@ -1075,29 +1075,32 @@ async function collectNaverSearchTrend(store, credentials = {}, {
   env = process.env,
   latestRevenueDate = null,
   timeoutMs = DEFAULT_TIMEOUTS.naver_search_trend,
+  now = () => new Date(),
 } = {}) {
   const name = "naver_search_trend";
   const startedAt = Date.now();
   const clientId = credentials.naverSearchTrendClientId || credentials.naverClientId;
   const clientSecret = credentials.naverSearchTrendClientSecret || credentials.naverClientSecret;
   if (!clientId || !clientSecret) return withDuration(skipped(name, "Naver DataLab", "missing_key"), startedAt);
-  const keywords = buildNaverSearchTrendKeywords(store);
-  if (keywords.length === 0) return withDuration(skipped(name, "Naver DataLab", "missing_query_context"), startedAt);
+  const rawKeywords = buildNaverSearchTrendKeywords(store);
+  if (rawKeywords.length === 0) return withDuration(skipped(name, "Naver DataLab", "missing_query_context"), startedAt);
   if (typeof fetchImpl !== "function") return withDuration(skipped(name, "Naver DataLab", "fetch_unavailable"), startedAt);
 
   const endpoint = credentials.naverDataLabSearchTrendEndpoint || "https://openapi.naver.com/v1/datalab/search";
-  const endDate = isoDate(latestRevenueDate || new Date());
-  const startDate = addDays(endDate, -30);
-  const body = {
-    startDate,
-    endDate,
-    timeUnit: env.NAVER_DATALAB_TIME_UNIT || "date",
-    keywordGroups: [{
-      groupName: "store_category_context",
-      keywords,
-    }],
+  const requestBody = buildNaverDataLabRequestBody(store, rawKeywords, {
+    latestRevenueDate,
+    timeUnit: env.NAVER_DATALAB_TIME_UNIT || null,
+    now,
+  });
+  if (!requestBody) return withDuration(skipped(name, "Naver DataLab", "missing_query_context"), startedAt);
+  const sourceRef = `naver_datalab_search:query_hash:${hashText(JSON.stringify(requestBody.keywordGroups))}:${requestBody.startDate}:${requestBody.endDate}`;
+  const debugSummary = {
+    start_date: requestBody.startDate,
+    end_date: requestBody.endDate,
+    time_unit: requestBody.timeUnit,
+    keyword_group_count: requestBody.keywordGroups.length,
+    keyword_counts: requestBody.keywordGroups.map((group) => group.keywords.length),
   };
-  const sourceRef = `naver_datalab_search:query_hash:${hashText(JSON.stringify(keywords))}:${startDate}:${endDate}`;
 
   try {
     const response = await fetchWithTimeout(endpoint, {
@@ -1108,11 +1111,31 @@ async function collectNaverSearchTrend(store, credentials = {}, {
         "X-Naver-Client-Id": clientId,
         "X-Naver-Client-Secret": clientSecret,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestBody),
+      throwOnHttpError: false,
     }, timeoutMs, { collector_name: name, source_ref: sourceRef });
+    if (!response.ok) {
+      const errorBodyText = await safeReadBodyText(response);
+      const reason = `http_${response.status || "error"}`;
+      return withDuration(failed(name, "Naver DataLab", reason, {
+        raw_summary: {
+          ...debugSummary,
+          response_status: response.status || null,
+          response_body_excerpt: sanitizeNaverErrorExcerpt(errorBodyText, clientId, clientSecret),
+        },
+      }), startedAt);
+    }
     const result = await response.json();
     const data = normalizeArray(result?.results?.[0]?.data);
-    if (data.length === 0) return withDuration(skipped(name, "Naver DataLab", "no_result"), startedAt);
+    if (data.length === 0) {
+      // Naver returned 200 OK with no data points — low search volume, not
+      // a failure. Show the collector as completed with observation_count=0
+      // so the UI can render "수집 완료 / 관측값 없음".
+      return withDuration(completed(name, "Naver DataLab", {
+        observations: [],
+        raw_summary: { ...debugSummary, result_count: result?.results?.length || 0, data_points: 0 },
+      }), startedAt);
+    }
     const latest = data[data.length - 1] || {};
     const previous = data[data.length - 2] || {};
     const latestRatio = numberOrNull(latest.ratio);
@@ -1131,23 +1154,113 @@ async function collectNaverSearchTrend(store, credentials = {}, {
         metric_value: latestRatio,
         metric_unit: "relative_ratio",
         label: "검색 관심도 지표가 매출 변동 구간과 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.",
-        observation_date: latest.period || endDate,
+        observation_date: latest.period || requestBody.endDate,
         region: store.region,
         metadata: {
-          keyword_group_hash: hashText(JSON.stringify(keywords)),
-          keyword_count: keywords.length,
-          start_date: startDate,
-          end_date: endDate,
+          keyword_group_hash: hashText(JSON.stringify(requestBody.keywordGroups)),
+          keyword_count: requestBody.keywordGroups.reduce((sum, group) => sum + group.keywords.length, 0),
+          start_date: requestBody.startDate,
+          end_date: requestBody.endDate,
           ratio_change: ratioChange,
           relative_search_trend_not_absolute_demand: true,
           not_proven_causality: true,
         },
       }],
-      raw_summary: { result_count: result?.results?.length || 0, data_points: data.length },
+      raw_summary: { ...debugSummary, result_count: result?.results?.length || 0, data_points: data.length },
     }), startedAt);
   } catch (error) {
-    return withDuration(failed(name, "Naver DataLab", sanitizeErrorReason(error)), startedAt);
+    return withDuration(failed(name, "Naver DataLab", sanitizeErrorReason(error), {
+      raw_summary: debugSummary,
+    }), startedAt);
   }
+}
+
+// Build a Naver DataLab POST body that conforms to the API spec:
+//   - startDate / endDate are yyyy-mm-dd, endDate clamped to today (real
+//     wall clock) so we never request a future range (DataLab returns 400).
+//   - timeUnit defaults to "date" for ≤90-day windows, else "week".
+//   - keywordGroups: at most 5 groups, each with a non-empty groupName and
+//     a non-empty keywords[] (deduped, blanks stripped, capped at 5).
+//   - device / gender / ages are intentionally omitted unless explicitly
+//     configured (avoids invalid filter combinations).
+function buildNaverDataLabRequestBody(store, rawKeywords, { latestRevenueDate = null, timeUnit = null, now = () => new Date() } = {}) {
+  const todayIso = isoDate(now());
+  const requestedEnd = latestRevenueDate ? isoDate(latestRevenueDate) : todayIso;
+  // Clamp endDate to today (real clock) — Naver rejects future endDates.
+  const endDate = requestedEnd > todayIso ? todayIso : requestedEnd;
+  let startDate = addDays(endDate, -30);
+  if (startDate > endDate) {
+    // Defensive — shouldn't happen, but guarantee startDate ≤ endDate.
+    startDate = endDate;
+  }
+  const cleaned = sanitizeNaverKeywordGroup(rawKeywords);
+  if (cleaned.length === 0) return null;
+  const groups = chunkKeywordsIntoGroups(cleaned, store);
+  if (groups.length === 0) return null;
+  const dayCount = Math.max(0, Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86400000));
+  const resolvedTimeUnit = timeUnit && /^(date|week|month)$/i.test(timeUnit)
+    ? timeUnit.toLowerCase()
+    : (dayCount <= 90 ? "date" : "week");
+  return {
+    startDate,
+    endDate,
+    timeUnit: resolvedTimeUnit,
+    keywordGroups: groups,
+  };
+}
+
+function sanitizeNaverKeywordGroup(rawKeywords) {
+  // Strip blanks, dedupe (case-insensitive), cap at Naver's per-group limit
+  // of 20 keywords. The upstream builder may produce more than 20 keywords
+  // when several menu/region variants are added, which Naver rejects with
+  // http_400 — the cap below is the production-spec limit.
+  const seen = new Set();
+  const result = [];
+  for (const keyword of Array.isArray(rawKeywords) ? rawKeywords : []) {
+    const trimmed = typeof keyword === "string" ? keyword.trim() : "";
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+    if (result.length >= 20) break;
+  }
+  return result;
+}
+
+function chunkKeywordsIntoGroups(keywords, _store) {
+  // Single keyword group — DataLab accepts up to 5 groups but our keyword
+  // set is already curated by buildNaverSearchTrendKeywords. Splitting
+  // would multiply identical keywords across groups and inflate the
+  // request without adding signal. Always emits a fixed groupName so the
+  // server can index the response stably.
+  if (!Array.isArray(keywords) || keywords.length === 0) return [];
+  return [{
+    groupName: "store_category_context",
+    keywords,
+  }];
+}
+
+async function safeReadBodyText(response) {
+  try {
+    if (response && typeof response.text === "function") {
+      return await response.text();
+    }
+  } catch {
+    // ignore — body may already be consumed or unavailable
+  }
+  return "";
+}
+
+function sanitizeNaverErrorExcerpt(text, clientId, clientSecret) {
+  if (typeof text !== "string" || text.length === 0) return "";
+  let safe = text.length > 240 ? `${text.slice(0, 240)}…` : text;
+  for (const secret of [clientId, clientSecret]) {
+    if (typeof secret === "string" && secret.length > 0) {
+      safe = safe.split(secret).join("***");
+    }
+  }
+  return safe;
 }
 
 // Local event / festival collector (V1.2). When SEOUL_OPEN_DATA_KEY and a
@@ -1424,7 +1537,7 @@ function skipped(name, sourceName, reason) {
   };
 }
 
-function failed(name, sourceName, reason) {
+function failed(name, sourceName, reason, extra = {}) {
   return {
     name,
     status: "failed",
@@ -1437,6 +1550,7 @@ function failed(name, sourceName, reason) {
     benchmarks: [],
     nearby_store_snapshots: [],
     commercial_area_mappings: [],
+    ...extra,
   };
 }
 
@@ -1530,7 +1644,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 5000, context = {
     }, timeout);
   });
   try {
-    const { fetchImpl: _unused, ...fetchOptions } = options;
+    const { fetchImpl: _unused, throwOnHttpError = true, ...fetchOptions } = options;
     const response = await Promise.race([
       fetchImpl(url, {
         ...fetchOptions,
@@ -1538,7 +1652,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 5000, context = {
       }),
       timeoutPromise,
     ]);
-    if (!response?.ok) {
+    if (!response?.ok && throwOnHttpError) {
       const error = new Error(`http_${response?.status || "error"}`);
       error.reason = `http_${response?.status || "error"}`;
       error.status = response?.status;

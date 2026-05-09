@@ -97,6 +97,7 @@ const PUBLIC_CONTEXT_COLLECTOR_IDS = new Set([
   'naver_local_competitor_search',
   'naver_search_trend',
   'korean_holiday_calendar',
+  'local_event_context',
 ]);
 
 const CONNECTOR_FOUNDATION_COLLECTOR_IDS = new Set([
@@ -142,30 +143,34 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
       ? (lang === 'ko' ? '매출 데이터는 있지만 일부 외부 맥락이 부족해 해석이 제한적입니다.' : 'Sales data exists, but some external context is missing, so interpretation is limited.')
       : (lang === 'ko' ? '매출 데이터가 부족해 안정적인 비교가 어렵습니다.' : 'There is not enough sales data for stable comparison.');
   const partial = summary.actualFailures > 0 || summary.publicOk < summary.publicTotal;
-  const connectorWaitingCopy = summary.connectorWaiting === 0
-    ? (lang === 'ko' ? '외부 연동 대기 없음' : 'No connectors waiting')
-    : (lang === 'ko' ? `외부 연동 ${summary.connectorWaiting}개 미연동` : `${summary.connectorWaiting} connectors not connected`);
-  const latestRunCopy = lang === 'ko'
-    ? `공개 맥락 ${summary.publicOk}/${summary.publicTotal} 수집됨 · ${connectorWaitingCopy} · 확인 필요 ${summary.actualFailures}건`
-    : `Public context ${summary.publicOk}/${summary.publicTotal} collected · ${connectorWaitingCopy} · ${summary.actualFailures} need review`;
+  const partnerWaiting = summary.connectorWaiting;
+  const partnerWaitingCopy = partnerWaiting === 0
+    ? (lang === 'ko' ? '파트너 연동 대기 없음' : 'No partner connectors waiting')
+    : (lang === 'ko' ? `파트너 연동 ${partnerWaiting}개 대기` : `${partnerWaiting} partner connectors waiting`);
+  // "공개 맥락 N개 수집됨" — show the number of completed collectors only, so
+  // we never say "8/8 수집됨" when one of them failed (e.g., naver_search_trend
+  // http_400). Failures get a separate "확인 필요 N건" pill.
+  const collectedCopy = lang === 'ko'
+    ? `공개 맥락 ${summary.publicOk}개 수집됨`
+    : `Public context ${summary.publicOk} collected`;
+  const reviewCopy = lang === 'ko'
+    ? `확인 필요 ${summary.actualFailures}건`
+    : `${summary.actualFailures} need review`;
+  const latestRunCopy = `${collectedCopy} · ${partnerWaitingCopy} · ${reviewCopy}`;
 
   type TrustCardTone = 'good' | 'warm' | 'neutral' | 'bad';
   const trustCards: Array<{ icon: string; tone: TrustCardTone; title: string; body: string }> = [
     {
       icon: partial ? 'shield' : 'check', tone: partial ? 'warm' : 'good',
-      title: lang === 'ko'
-        ? `공개 맥락 ${summary.publicOk}/${summary.publicTotal} 수집됨`
-        : `Public context ${summary.publicOk}/${summary.publicTotal} collected`,
+      title: collectedCopy,
       body:  summary.publicOk === summary.publicTotal
-        ? (lang === 'ko' ? '날씨 · 상권 · 유동인구 · 검색 · 공휴일 맥락이 모두 수집되었습니다.' : 'Weather, trade-area, foot-traffic, search, and holiday context are all collected.')
-        : (lang === 'ko' ? '일부 공개 맥락은 참고 지표로 표시됩니다. 확인이 필요한 실패와는 분리해 표시합니다.' : 'Some public context is shown as a reference signal. It is separated from failures that need review.'),
+        ? (lang === 'ko' ? '날씨 · 상권 · 유동인구 · 검색 · 공휴일 · 지역 이벤트 맥락이 모두 수집되었습니다.' : 'Weather, trade-area, foot-traffic, search, holiday, and local-event context are all collected.')
+        : (lang === 'ko' ? '일부 공개 맥락은 참고 지표 또는 확인 필요로 표시됩니다.' : 'Some public context is shown as reference signal or needs review.'),
     },
     {
-      icon: 'spark2', tone: summary.connectorWaiting === 0 ? 'good' : 'neutral',
-      title: summary.connectorWaiting === 0
-        ? (lang === 'ko' ? '외부 연동 대기 없음' : 'No connectors waiting')
-        : (lang === 'ko' ? `외부 연동 ${summary.connectorWaiting}개 미연동` : `${summary.connectorWaiting} connectors not connected`),
-      body:  summary.connectorWaiting === 0
+      icon: 'spark2', tone: partnerWaiting === 0 ? 'good' : 'neutral',
+      title: partnerWaitingCopy,
+      body:  partnerWaiting === 0
         ? (lang === 'ko' ? '연결된 외부 연동 자격 정보가 갱신을 기다리는 항목이 없습니다.' : 'No connector credentials are waiting for refresh.')
         : (lang === 'ko' ? 'Toss Place · 배달앱 연동은 자격 정보가 연결되면 자동으로 갱신됩니다.' : 'Toss Place and delivery provider connectors update automatically once credentials are configured.'),
     },
@@ -196,15 +201,13 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
         </p>
         <div className="rc-reliability-summary-pills" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 16 }}>
           <Pill tone="good" size="sm">
-            {lang === 'ko' ? '공개 맥락 ' + summary.publicOk + '/' + summary.publicTotal + ' 수집됨' : 'Public context ' + summary.publicOk + '/' + summary.publicTotal + ' collected'}
+            {collectedCopy}
           </Pill>
-          <Pill tone={summary.connectorWaiting > 0 ? 'quiet' : 'good'} size="sm">
-            {summary.connectorWaiting === 0
-              ? (lang === 'ko' ? '외부 연동 대기 없음' : 'No connectors waiting')
-              : (lang === 'ko' ? `외부 연동 ${summary.connectorWaiting}개 미연동` : `${summary.connectorWaiting} connectors not connected`)}
+          <Pill tone={partnerWaiting > 0 ? 'quiet' : 'good'} size="sm">
+            {partnerWaitingCopy}
           </Pill>
           <Pill tone={summary.actualFailures > 0 ? 'bad' : 'good'} size="sm">
-            {lang === 'ko' ? '확인 필요 ' + summary.actualFailures + '건' : summary.actualFailures + ' need review'}
+            {reviewCopy}
           </Pill>
         </div>
 
@@ -339,7 +342,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
                 <span className="rc-mono" style={{ color: 'var(--rc-fg-muted)', fontSize: 11.5 }}>{typeof src.durationMs === 'number' ? `${src.durationMs}ms` : '-'}</span>
                 <span style={{ textAlign: 'right' }}>
                   <Pill tone={tone === 'bad' ? 'bad' : tone === 'good' ? 'good' : tone === 'warm' ? 'warm' : 'quiet'} size="sm">
-                    {formatSourceStatus(src.status, src.reason, lang)}
+                    {formatSourceStatus(src.status, src.reason, src.observationCount, lang)}
                   </Pill>
                 </span>
               </div>
@@ -439,16 +442,21 @@ function CoverageStat({ label, value }: { label: string; value: string }) {
 // Map raw collector statuses to product-friendly copy. Internal status names
 // stay unchanged in code (ok/partial/failed/skipped); only user-facing labels
 // change. "부분"/"실패" no longer leak into the UI as bare words.
-function formatSourceStatus(status: string, reason: string | null | undefined, lang: RcLang): string {
-  if (status === 'ok')      return lang === 'ko' ? '수집됨' : 'Collected';
-  if (status === 'failed')  return lang === 'ko' ? '확인 필요' : 'Action needed';
+function formatSourceStatus(status: string, reason: string | null | undefined, observationCount: number | undefined, lang: RcLang): string {
+  if (status === 'ok') {
+    if ((observationCount ?? 0) === 0) {
+      return lang === 'ko' ? '수집 완료' : 'Collected';
+    }
+    return lang === 'ko' ? '수집됨' : 'Collected';
+  }
+  if (status === 'failed')  return lang === 'ko' ? '확인 필요' : 'Needs attention';
   if (status === 'skipped') {
     const reasonText = reason ?? '';
     if (reasonText.includes('no_weather_items')) {
       return lang === 'ko' ? '관측 없음' : 'No observation';
     }
-    if (reasonText.includes('secret') || reasonText.includes('credential')) {
-      return lang === 'ko' ? '미연동' : 'Not connected';
+    if (reasonText === 'missing_key' || reasonText === 'endpoint_not_configured' || reasonText.includes('secret') || reasonText.includes('credential')) {
+      return lang === 'ko' ? '미연결' : 'Not connected';
     }
     if (reasonText.includes('permission')) {
       return lang === 'ko' ? '권한 필요' : 'Permission needed';
@@ -470,7 +478,31 @@ function statusTone(status: string, reason: string | null | undefined): 'good' |
 }
 
 function statusHint(source: Scenario['reliability']['sources'][number], lang: RcLang): string {
-  const { id, status, reason } = source;
+  const { id, status, reason, observationCount } = source;
+
+  if (status === 'ok') {
+    if (id === 'local_event_context') {
+      if ((observationCount ?? 0) === 0) {
+        return lang === 'ko'
+          ? '현재 기간에 매칭된 지역 이벤트는 없습니다.'
+          : 'No matching local events were observed for the current period.';
+      }
+      return lang === 'ko'
+        ? `매칭 이벤트 ${observationCount}건`
+        : `${observationCount} matched events`;
+    }
+    if (id === 'korean_holiday_calendar' && (observationCount ?? 0) > 0) {
+      return lang === 'ko'
+        ? `공휴일/특일 ${observationCount}건 수집됨`
+        : `${observationCount} holidays/special days collected`;
+    }
+    if (id === 'naver_search_trend' && (observationCount ?? 0) === 0) {
+      return lang === 'ko'
+        ? '검색량이 낮아 관측값이 없습니다.'
+        : 'Low search volume — no observation returned.';
+    }
+    return '';
+  }
 
   if (status === 'partial') {
     return lang === 'ko'
@@ -479,16 +511,31 @@ function statusHint(source: Scenario['reliability']['sources'][number], lang: Rc
   }
 
   if (status === 'failed') {
+    if (id === 'naver_search_trend' && reason === 'http_400') {
+      return lang === 'ko'
+        ? '요청 조건 또는 기간 설정을 확인해야 합니다. (http_400)'
+        : 'Request parameters or date range need attention. (http_400)';
+    }
     return lang === 'ko'
       ? '최근 수집에서 확인이 필요한 응답이 있었습니다.'
       : 'The latest collection had responses that need review.';
   }
 
   if (status === 'skipped') {
+    if (reason === 'missing_key') {
+      return lang === 'ko'
+        ? 'API 키가 연결되면 자동으로 갱신됩니다.'
+        : 'Updates automatically once the API key is configured.';
+    }
+    if (reason === 'endpoint_not_configured') {
+      return lang === 'ko'
+        ? '엔드포인트가 설정되면 자동으로 갱신됩니다.'
+        : 'Updates automatically once the endpoint is configured.';
+    }
     if (id === 'naver_search_trend' && reason === 'no_result') {
       return lang === 'ko'
-        ? '현재 검색어 기준으로 관심도 결과가 없습니다. 등록되지 않았거나 검색량이 낮은 매장명은 결과가 없을 수 있습니다.'
-        : 'No search-interest result is available for the current keyword. Unregistered or low-volume store names may not return results.';
+        ? '현재 검색어 기준으로 관심도 결과가 없습니다.'
+        : 'No search-interest result is available for the current keyword.';
     }
 
     return lang === 'ko'

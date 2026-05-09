@@ -52,6 +52,7 @@ export interface DataSource {
   coverage: number;
   durationMs?: number | null;
   reason?: string | null;
+  observationCount?: number;
 }
 
 export interface ReliabilityInfo {

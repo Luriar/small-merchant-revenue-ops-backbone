@@ -587,6 +587,91 @@ test("local_event_context fetches and matches Seoul Open Data events when config
   assert.equal(JSON.stringify(result).includes("seoul-secret"), false);
 });
 
+test("Naver DataLab request body is well-formed and clamps endDate to today (no future dates)", async () => {
+  const store = { store_id: "store-1", region: "서울 성동구 성수동", business_category: "카페", store_name: "성수 카페" };
+  const credentials = { naverSearchTrendClientId: "trend-id", naverSearchTrendClientSecret: "trend-secret" };
+  let captured = null;
+  const trend = await collectNaverSearchTrend(store, credentials, {
+    latestRevenueDate: "2099-01-01", // far-future demo date — must be clamped
+    now: () => new Date("2024-06-15T00:00:00.000Z"),
+    fetchImpl: async (_url, options) => {
+      captured = JSON.parse(options.body);
+      return { ok: true, status: 200, json: async () => ({ results: [{ data: [{ period: "2024-06-14", ratio: 12 }, { period: "2024-06-15", ratio: 14 }] }] }) };
+    },
+  });
+  assert.equal(trend.status, "completed");
+  assert.equal(captured.endDate, "2024-06-15");
+  assert.equal(captured.startDate, "2024-05-16");
+  assert.ok(captured.startDate <= captured.endDate);
+  assert.ok(["date", "week", "month"].includes(captured.timeUnit));
+  assert.equal(captured.timeUnit, "date"); // 30-day window
+  assert.equal(Array.isArray(captured.keywordGroups), true);
+  assert.ok(captured.keywordGroups.length >= 1 && captured.keywordGroups.length <= 5);
+  for (const group of captured.keywordGroups) {
+    assert.ok(typeof group.groupName === "string" && group.groupName.length > 0);
+    assert.ok(Array.isArray(group.keywords) && group.keywords.length > 0 && group.keywords.length <= 20);
+    assert.equal(group.keywords.every((k) => typeof k === "string" && k.trim().length > 0), true);
+  }
+  assert.equal("device" in captured, false);
+  assert.equal("gender" in captured, false);
+  assert.equal("ages" in captured, false);
+});
+
+test("Naver DataLab strips blank keywords and dedupes before sending", async () => {
+  const store = {
+    store_id: "store-1",
+    region: "서울 성동구 성수동",
+    business_category: "카페",
+    metadata: { representative_menu_keywords: ["  ", "소금빵", "소금빵", ""] },
+  };
+  const credentials = { naverSearchTrendClientId: "trend-id", naverSearchTrendClientSecret: "trend-secret" };
+  let captured = null;
+  await collectNaverSearchTrend(store, credentials, {
+    latestRevenueDate: "2024-06-15",
+    now: () => new Date("2024-06-20T00:00:00.000Z"),
+    fetchImpl: async (_url, options) => {
+      captured = JSON.parse(options.body);
+      return { ok: true, status: 200, json: async () => ({ results: [{ data: [] }] }) };
+    },
+  });
+  const allKeywords = captured.keywordGroups.flatMap((group) => group.keywords);
+  assert.equal(allKeywords.includes(""), false);
+  assert.equal(allKeywords.includes("  "), false);
+  assert.equal(allKeywords.filter((k) => k === "소금빵").length, 1);
+});
+
+test("Naver DataLab 200 with empty data is completed (not failed) so low-volume reads as 수집 완료", async () => {
+  const store = { store_id: "store-1", region: "서울 성동구 성수동", business_category: "카페" };
+  const credentials = { naverSearchTrendClientId: "trend-id", naverSearchTrendClientSecret: "trend-secret" };
+  const result = await collectNaverSearchTrend(store, credentials, {
+    latestRevenueDate: "2024-06-15",
+    now: () => new Date("2024-06-20T00:00:00.000Z"),
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ results: [{ data: [] }] }) }),
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(result.observation_count, 0);
+  assert.equal(result.raw_summary?.data_points, 0);
+});
+
+test("Naver DataLab http_400 captures safe debug summary without leaking credentials", async () => {
+  const store = { store_id: "store-1", region: "서울 성동구 성수동", business_category: "카페" };
+  const credentials = { naverSearchTrendClientId: "trend-id", naverSearchTrendClientSecret: "trend-secret" };
+  const errorBody = "{\"errorMessage\":\"Bad request\",\"errorCode\":\"BAD_REQUEST\",\"trend-secret\":\"leaked-here\"}";
+  const result = await collectNaverSearchTrend(store, credentials, {
+    latestRevenueDate: "2024-06-15",
+    now: () => new Date("2024-06-20T00:00:00.000Z"),
+    fetchImpl: async () => ({ ok: false, status: 400, json: async () => ({}), text: async () => errorBody }),
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.reason, "http_400");
+  assert.equal(result.raw_summary?.response_status, 400);
+  assert.equal(typeof result.raw_summary?.start_date, "string");
+  assert.equal(typeof result.raw_summary?.end_date, "string");
+  assert.equal(result.raw_summary?.time_unit, "date");
+  assert.equal(JSON.stringify(result).includes("trend-secret"), false);
+  assert.equal(JSON.stringify(result).includes("trend-id"), false);
+});
+
 test("auto live collection falls back safely when all live collectors skip", async () => {
   const result = await collectStorePublicContext({
     store: { store_id: "store-1", region: "Seoul Seongsu", business_category: "cafe" },

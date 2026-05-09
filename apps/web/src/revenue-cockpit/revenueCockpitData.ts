@@ -235,6 +235,7 @@ function buildReliability(brief: ApiRecord | undefined, context: ApiRecord | und
         coverage: status === 'ok' ? 100 : status === 'failed' ? 20 : 0,
         durationMs: num(collector.duration_ms, 0),
         reason: str(collector.reason, '') || null,
+        observationCount: num(collector.observation_count, 0),
       };
     });
     const failureCount = num(pipelineMeta?.failed_collector_count, sources.filter(source => source.status === 'failed').length);
