@@ -90,6 +90,61 @@ test("composeBriefFromUploadedFacts promotes real collector observations into ca
   assert.equal(evidence.metadata.last_collected_at, "2026-05-08T00:00:00.000Z");
 });
 
+test("composeBriefFromUploadedFacts promotes collectors when latestCollectorRun.metadata is a JSON string", () => {
+  const brief = composeBriefFromUploadedFacts({
+    storeId: "store-jsonstring",
+    store: { store_name: "성수 카페" },
+    facts: [
+      { business_date: "2026-02-08", net_sales_amount: 1000000, order_count: 100 },
+      { business_date: "2026-05-08", net_sales_amount: 1100000, order_count: 110 },
+    ],
+    causeCandidates: [],
+    causeEvidence: [],
+    actions: [],
+    latestCollectorRun: {
+      metadata: JSON.stringify({
+        collectors: [
+          { name: "kma_weather", status: "completed", observation_count: 3, source_name: "기상청 ASOS", collected_at: "2026-05-08T00:00:00.000Z" },
+          { name: "korean_holiday_calendar", status: "completed", observation_count: 4, source_name: "Korean Astronomy Holiday API", collected_at: "2026-05-08T00:00:00.000Z" },
+        ],
+      }),
+    },
+  });
+  const types = brief.top_cause_candidates.map((c) => c.candidate_type);
+  assert.ok(types.includes("kma_weather_context"));
+  assert.ok(types.includes("calendar_context"));
+});
+
+test("composeBriefFromUploadedFacts promotes collectors when array is under run.summary.collectors", () => {
+  const brief = composeBriefFromUploadedFacts({
+    storeId: "store-summary-collectors",
+    store: { store_name: "성수 카페" },
+    facts: [
+      { business_date: "2026-02-08", net_sales_amount: 1000000, order_count: 100 },
+      { business_date: "2026-05-08", net_sales_amount: 1100000, order_count: 110 },
+    ],
+    causeCandidates: [],
+    causeEvidence: [],
+    actions: [],
+    latestCollectorRun: {
+      summary: {
+        collectors: [
+          { name: "naver_search_trend", status: "completed", observation_count: 1, source_name: "Naver DataLab", collected_at: "2026-05-08T00:00:00.000Z" },
+          { name: "local_event_context", status: "completed", observation_count: 0, source_name: "Seoul Open Data local event" },
+          { name: "kma_weather", status: "failed", observation_count: 0 },
+        ],
+      },
+    },
+  });
+  const types = brief.top_cause_candidates.map((c) => c.candidate_type);
+  // Naver completed with observation_count=1 → search_demand_context promoted.
+  assert.ok(types.includes("search_demand_context"));
+  // local_event_context completed with observation_count=0 → not promoted.
+  assert.equal(types.includes("local_event_context"), false);
+  // kma_weather failed → not promoted.
+  assert.equal(types.includes("kma_weather_context"), false);
+});
+
 test("composeBriefFromUploadedFacts suppresses seed_rule weather candidate when KMA weather collector promoted real evidence", () => {
   const brief = composeBriefFromUploadedFacts({
     storeId: "store-supersede",

@@ -2115,11 +2115,53 @@ module.exports = {
 // observed_period, last_collected_at) is attached so the Cause Evidence
 // UI can render the correct source chip without hardcoding.
 
-function extractCollectorSummariesFromRun(run) {
+// Robustly extract the per-collector summaries from a stored collector_run
+// row. Aurora's jsonb usually returns objects, but pg can also return JSON
+// strings, and different code paths attach the collector array under
+// different keys (metadata.collectors, summary.collectors, result_summary,
+// raw_summary, payload, or directly on the run). Try each shape in order.
+function normalizeCollectorSummariesFromRun(run) {
   if (!run || typeof run !== "object") return [];
-  const metadata = run.metadata && typeof run.metadata === "object" ? run.metadata : {};
-  const collectors = Array.isArray(metadata.collectors) ? metadata.collectors : [];
-  return collectors.filter((c) => c && typeof c === "object");
+  const candidates = [
+    parseMaybeJson(run.metadata),
+    parseMaybeJson(run.summary),
+    parseMaybeJson(run.result_summary),
+    parseMaybeJson(run.result),
+    parseMaybeJson(run.payload),
+    parseMaybeJson(run.raw_summary),
+    run, // direct fields like run.collectors
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    if (Array.isArray(candidate.collectors)) {
+      return candidate.collectors.filter((c) => c && typeof c === "object");
+    }
+    // Nested under summary / result_summary inside metadata, etc.
+    const nested = parseMaybeJson(candidate.summary) || parseMaybeJson(candidate.result_summary);
+    if (nested && Array.isArray(nested.collectors)) {
+      return nested.collectors.filter((c) => c && typeof c === "object");
+    }
+  }
+  return [];
+}
+
+function parseMaybeJson(value) {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// Back-compat alias kept for any internal caller.
+function extractCollectorSummariesFromRun(run) {
+  return normalizeCollectorSummariesFromRun(run);
 }
 
 function buildCollectorSourcedCauseCandidates(collectors, { startDate, endDate } = {}) {

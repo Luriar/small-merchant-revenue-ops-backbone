@@ -1280,7 +1280,7 @@ function createAuroraRevenueOpsSaasStore({
       ),
       query(
         `SELECT *
-         FROM context_collector_runs
+         FROM collector_runs
          WHERE target_store_id = $1
          ORDER BY COALESCE(completed_at, created_at) DESC
          LIMIT 1`,
