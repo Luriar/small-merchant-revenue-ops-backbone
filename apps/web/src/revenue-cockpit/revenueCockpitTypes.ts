@@ -98,6 +98,24 @@ export interface Scenario {
   uploadedRevenueSummary?: UploadedRevenueSummary;
   insufficientData?: boolean;
   periodLabel?: string;
+  localEvents?: LocalEventSeed[];
+}
+
+export interface LocalEventSeed {
+  event_name: string;
+  event_date: string;
+  event_area?: string | null;
+  event_type?: string | null;
+}
+
+export interface ContextCollectorCard {
+  id: string;
+  label: BiLingual;
+  status: 'ok' | 'partial' | 'failed' | 'skipped' | 'not_connected' | 'planned';
+  source_name: string;
+  last_collected_at: string | null;
+  contributes_to: BiLingual;
+  explanation: string;
 }
 
 export type ActionStatuses = Record<string, ActionStatus>;

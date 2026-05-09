@@ -1,6 +1,14 @@
 import { SCENARIO, tr } from './revenueCockpitCopy';
 import { Icon, Pill } from './revenueCockpitShared';
-import type { RcLang, Scenario, UploadedDailyRevenuePoint } from './revenueCockpitTypes';
+import {
+  buildCalendarContext,
+  buildLocalEventContext,
+  calendarCollectorCard,
+  localEventCollectorCard,
+  statusLabel as collectorStatusLabel,
+  statusTone as collectorStatusTone,
+} from './revenueContextCollectors';
+import type { RcLang, Scenario, UploadedDailyRevenuePoint, ContextCollectorCard } from './revenueCockpitTypes';
 
 interface DataReliabilityViewProps { lang: RcLang; scenario?: Scenario }
 
@@ -58,10 +66,16 @@ function summarizeSalesCoverage(scenario: Scenario): SalesCoverageStats {
 function resolveAnalysisReadiness(
   coverage: SalesCoverageStats,
   rel: Scenario['reliability'],
+  contextCards: ContextCollectorCard[],
 ): AnalysisReadiness {
   const publicScope = rel.sources.filter((s) => !CONNECTOR_FOUNDATION_COLLECTOR_IDS.has(s.id));
-  const anyHealthyContext = publicScope.some((s) => s.status === 'ok');
-  if (coverage.daysCount >= 60 && anyHealthyContext) return 'sufficient';
+  // Healthy context = at least one external collector reporting "ok" OR
+  // the deterministic calendar collector (always healthy when sales data
+  // exists). not_connected/planned cards do NOT count toward readiness.
+  const anyExternalHealthy = publicScope.some((s) => s.status === 'ok');
+  const calendarHealthy = contextCards.some((c) => c.id === 'calendar_context' && c.status === 'ok');
+  const hasHealthyContext = anyExternalHealthy || calendarHealthy;
+  if (coverage.daysCount >= 60 && hasHealthyContext) return 'sufficient';
   if (coverage.daysCount >= 30) return 'limited';
   return 'insufficient';
 }
@@ -109,7 +123,13 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
   const rel = scenario.reliability;
   const summary = summarizeReliability(rel);
   const coverage = summarizeSalesCoverage(scenario);
-  const readiness = resolveAnalysisReadiness(coverage, rel);
+  const calendarContext = buildCalendarContext(scenario.uploadedDailySeries);
+  const localEventContext = buildLocalEventContext(scenario);
+  const derivedCollectorCards: ContextCollectorCard[] = [
+    calendarCollectorCard(calendarContext, lang),
+    localEventCollectorCard(localEventContext, lang),
+  ];
+  const readiness = resolveAnalysisReadiness(coverage, rel, derivedCollectorCards);
   const readinessTone = readiness === 'sufficient' ? 'good' : readiness === 'limited' ? 'warm' : 'bad';
   const readinessLabel = readiness === 'sufficient'
     ? (lang === 'ko' ? '충분' : 'Sufficient')
@@ -258,6 +278,24 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
         })}
       </div>
 
+      {/* derived V1.2 collector cards — calendar (deterministic) and
+          local-event (honest not-connected when no source is wired). */}
+      <div style={{ marginTop: 22 }}>
+        <h2 className="rc-serif" style={{ fontSize: 18, fontWeight: 500, margin: 0, color: 'var(--rc-fg-strong)' }}>
+          {lang === 'ko' ? '맥락 수집기' : 'Context collectors'}
+        </h2>
+        <p className="rc-prose" style={{ fontSize: 12, color: 'var(--rc-fg-muted)', margin: '4px 0 12px' }}>
+          {lang === 'ko'
+            ? '외부 수집·계산된 맥락 소스의 현재 상태입니다. 미연결 항목은 정직하게 표시합니다.'
+            : 'Current status of external and computed context sources. Not-connected items are shown transparently.'}
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+          {derivedCollectorCards.map((card) => (
+            <CollectorCard key={card.id} card={card} lang={lang}/>
+          ))}
+        </div>
+      </div>
+
       {/* source detail table */}
       <div style={{ marginTop: 28 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -348,6 +386,35 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
           <li>{lang === 'ko' ? '매출과 인구는 모두 공공데이터 기반 추정치입니다.' : 'Revenue and population are public-data estimates.'}</li>
           <li>{lang === 'ko' ? '원인 후보는 함께 관측된 신호이며, 인과관계가 확정된 것이 아닙니다. 추가 확인이 필요합니다.' : 'Cause candidates reflect signals observed together, not proven causes — needs further confirmation.'}</li>
         </ul>
+      </div>
+    </div>
+  );
+}
+
+function CollectorCard({ card, lang }: { card: ContextCollectorCard; lang: RcLang }) {
+  const tone = collectorStatusTone(card.status);
+  const pillTone = tone === 'good' ? 'good' : tone === 'bad' ? 'bad' : tone === 'warm' ? 'warm' : 'quiet';
+  return (
+    <div className="rc-card" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--rc-fg-strong)' }}>
+          {card.label[lang]}
+        </div>
+        <Pill tone={pillTone} size="sm">{collectorStatusLabel(card.status, lang)}</Pill>
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--rc-fg-muted)' }}>
+        {card.source_name || (lang === 'ko' ? '소스 미지정' : 'Source unspecified')}
+        {card.last_collected_at && (
+          <span className="rc-mono" style={{ marginLeft: 8, color: 'var(--rc-fg-dim)' }}>
+            {(lang === 'ko' ? '최근 수집 ' : 'Last ') + card.last_collected_at}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--rc-fg)', lineHeight: 1.5 }}>
+        {card.explanation}
+      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--rc-fg-dim)' }}>
+        {(lang === 'ko' ? '기여 영역 · ' : 'Contributes to · ') + card.contributes_to[lang]}
       </div>
     </div>
   );

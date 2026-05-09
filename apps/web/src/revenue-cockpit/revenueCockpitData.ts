@@ -317,12 +317,30 @@ export function buildUploadedRevenueSummary(
   return { netSalesTotal, orderCountTotal, avgTicket, avgDailyNetSales, daysInPeriod };
 }
 
+function readDataModeParam(): string | null {
+  if (typeof window === 'undefined') return null;
+  // Query params before # take priority; hash query stays supported for the
+  // legacy /#revenue-cockpit?data=api links.
+  const search = new URLSearchParams(window.location.search);
+  if (search.has('data')) return search.get('data');
+  if (search.get('demo') === '1') return 'demo';
+  const [, hashQuery = ''] = window.location.hash.split('?');
+  const hashParams = new URLSearchParams(hashQuery);
+  if (hashParams.has('data')) return hashParams.get('data');
+  if (hashParams.get('demo') === '1') return 'demo';
+  return null;
+}
+
+export function wantsDemoData(): boolean {
+  return readDataModeParam() === 'demo';
+}
+
 export function wantsApiData(): boolean {
   if (typeof window === 'undefined') return false;
-  const search = new URLSearchParams(window.location.search);
-  if (search.get('data') === 'api') return true;
-  const [, hashQuery = ''] = window.location.hash.split('?');
-  return new URLSearchParams(hashQuery).get('data') === 'api';
+  // Production root (/, /#revenue-cockpit) defaults to API/live so the
+  // public entry URL works without ?data=api. Demo mode is opt-in via
+  // ?data=demo or ?demo=1 (also supported in the hash query for legacy URLs).
+  return !wantsDemoData();
 }
 
 export function buildScenarioFromApi(payload: RevenueApiPayload): { scenario: Scenario; defaultStatuses: ActionStatuses } {

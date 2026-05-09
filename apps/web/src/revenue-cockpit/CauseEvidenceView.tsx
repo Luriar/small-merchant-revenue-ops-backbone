@@ -3,6 +3,42 @@ import { SCENARIO, tr, fmtPct } from './revenueCockpitCopy';
 import { Icon, Pill, StrengthDots } from './revenueCockpitShared';
 import type { RcLang, CauseCandidate, Scenario } from './revenueCockpitTypes';
 
+// Per-cause source/observed-period footer. The bottom disclaimer still
+// carries the single causality caveat for the screen, so this footer is
+// purely a metadata strip — what data was observed, when, and from where.
+function deriveCauseSourceLine(cause: CauseCandidate, scenario: Scenario, lang: RcLang): string | null {
+  const series = scenario.uploadedDailySeries ?? [];
+  const period = series.length > 0
+    ? `${series[0].date} ~ ${series[series.length - 1].date}`
+    : null;
+  const id = cause.id;
+  if (id === 'weather') {
+    const kma = scenario.reliability.sources.find((s) => s.id === 'kma_weather');
+    const status = kma?.status === 'ok'
+      ? (lang === 'ko' ? '정상' : 'Healthy')
+      : kma?.status === 'failed'
+        ? (lang === 'ko' ? '확인 필요' : 'Action needed')
+        : kma?.status === 'skipped'
+          ? (lang === 'ko' ? '미연결' : 'Not connected')
+          : (lang === 'ko' ? '참고 지표' : 'Reference signal');
+    return lang === 'ko' ? `기상청 ASOS · 서울 · ${status}` : `KMA ASOS · Seoul · ${status}`;
+  }
+  if (id === 'competition') {
+    return lang === 'ko' ? '서울 열린데이터 상권 점포수' : 'Seoul Open Data · nearby store count';
+  }
+  if (id === 'demand') {
+    return lang === 'ko' ? '서울 열린데이터 유동인구 프록시' : 'Seoul Open Data · foot traffic proxy';
+  }
+  if (id === 'context') {
+    return lang === 'ko' ? '공휴일/요일/시즌 · 계산된 캘린더 맥락' : 'Holiday / weekday / season · computed calendar context';
+  }
+  // Fallback: show uploaded sales window as the observed period.
+  if (period) {
+    return lang === 'ko' ? `업로드 매출 데이터 · ${period}` : `Uploaded sales data · ${period}`;
+  }
+  return null;
+}
+
 interface CompareBlock {
   primary: {
     label: { ko: string; en: string };
@@ -236,6 +272,22 @@ export function CauseEvidenceView({ lang, scenario = SCENARIO }: CauseEvidenceVi
           {cause.title[lang]}
         </h1>
         <EvidenceProse headline={cause.headline[lang]} body={cause.body[lang]}/>
+
+        {(() => {
+          const sourceLine = deriveCauseSourceLine(cause, scenario, lang);
+          return sourceLine ? (
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontSize: 11, color: 'var(--rc-fg-muted)',
+              marginTop: 6, padding: '4px 10px',
+              border: '1px solid var(--rc-rule)', borderRadius: 999,
+              background: 'var(--rc-surface-1)',
+            }}>
+              <Icon name="doc" size={11}/>
+              <span>{sourceLine}</span>
+            </div>
+          ) : null;
+        })()}
 
         {/* baseline vs compare card */}
         <div className="rc-card" style={{ marginTop: 22, padding: '20px 22px', boxShadow: 'var(--rc-shadow-sm)' }}>
