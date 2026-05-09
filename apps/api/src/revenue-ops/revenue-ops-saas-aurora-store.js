@@ -1484,6 +1484,11 @@ function createAuroraRevenueOpsSaasStore({
       let acceptedCount = 0;
       let rejectedCount = 0;
       const rejectedRows = [];
+      // Additive opt-in: when payload.metadata.overwrite_mode === 'by_date_channel',
+      // each accepted daily row supersedes prior daily facts for the same
+      // (store, business_date, channel) from older uploads. Default behavior
+      // (no flag) is unchanged.
+      const overwriteMode = text(safeObject(payload.metadata).overwrite_mode);
       for (const row of rows) {
         await client.query(
           "INSERT INTO revenue_upload_raw_rows (upload_id, row_number, row_payload) VALUES ($1, $2, $3::jsonb)",
@@ -1508,6 +1513,16 @@ function createAuroraRevenueOpsSaasStore({
         acceptedCount += 1;
         if (row.kind === "daily") {
           const value = normalized.value;
+          if (overwriteMode === "by_date_channel") {
+            await client.query(
+              `
+                DELETE FROM revenue_daily_facts
+                WHERE store_id = $1 AND business_date = $2 AND channel = $3
+                  AND source_upload_id <> $4
+              `,
+              [storeId, value.business_date, value.channel, upload.upload_id],
+            );
+          }
           await client.query(
             `
               INSERT INTO revenue_daily_facts (

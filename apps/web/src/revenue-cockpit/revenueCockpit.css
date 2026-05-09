@@ -978,6 +978,135 @@
   outline-offset: 2px;
 }
 
+/* Standard daily sales CSV guide — collapsible, plain-language explainer for
+   non-technical store owners. Only rendered for the generic_pos_csv source. */
+.rc-csv-guide {
+  margin: 4px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--rc-rule);
+  border-radius: 9px;
+  background: var(--rc-surface-1);
+}
+
+.rc-csv-guide > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--rc-fg-strong);
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rc-csv-guide > summary::before {
+  content: "▸";
+  font-size: 11px;
+  color: var(--rc-fg-muted);
+  transition: transform 120ms ease;
+}
+
+.rc-csv-guide[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.rc-csv-guide-intro {
+  margin: 8px 0 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--rc-fg-muted);
+  word-break: keep-all;
+}
+
+.rc-csv-guide-table {
+  margin: 0 0 8px;
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+
+.rc-csv-guide-table th {
+  text-align: left;
+  font-family: var(--rc-mono);
+  font-weight: 600;
+  color: var(--rc-accent-strong);
+  padding: 4px 10px 4px 0;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.rc-csv-guide-table td {
+  padding: 4px 0;
+  color: var(--rc-fg);
+  word-break: keep-all;
+}
+
+.rc-csv-guide-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 6px;
+  align-items: center;
+}
+
+.rc-csv-guide-toast {
+  font-size: 11.5px;
+  color: var(--rc-good-strong);
+  border: 1px solid var(--rc-good-soft-bd);
+  background: var(--rc-good-soft);
+  border-radius: 999px;
+  padding: 3px 10px;
+  line-height: 1.3;
+}
+
+.rc-csv-guide-tip {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--rc-fg-muted);
+  word-break: keep-all;
+}
+
+/* Overwrite checkbox label inside the CSV upload card. */
+.rc-csv-overwrite {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 9px;
+  font-size: 12px;
+  color: var(--rc-fg);
+  cursor: pointer;
+  user-select: none;
+}
+
+.rc-csv-overwrite input {
+  cursor: pointer;
+}
+
+/* Helper / hint line shown beneath primary actions (e.g. "기존 데이터가 있으면 덮어씁니다."). */
+.rc-upload-helper {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--rc-fg-muted);
+  line-height: 1.5;
+  word-break: keep-all;
+}
+
+/* Right column under the upload grid: stacks the manual-input card and the
+   export card so the export sits in the otherwise-empty space below the
+   shorter manual-input form, alongside the taller CSV upload card on the left. */
+.rc-revenue-upload-right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* Export card sits inside the right column; no longer a full-width band below. */
+.rc-revenue-export-card {
+  margin-top: 0;
+}
+
 @media (max-width: 760px) {
   .rc-csv-source-row {
     gap: 8px;

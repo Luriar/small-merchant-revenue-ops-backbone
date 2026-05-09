@@ -1194,6 +1194,13 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     };
     state.uploads.push(upload);
 
+    // Additive opt-in: when payload.metadata.overwrite_mode === 'by_date_channel',
+    // accepted daily rows replace any prior daily facts for the same
+    // (store_id, business_date, channel) from older uploads. Default behavior
+    // (no flag) is unchanged — existing rows remain alongside new ones.
+    const overwriteMode = text(upload.metadata?.overwrite_mode);
+    const supersedeKeys = new Set();
+
     for (const row of rows) {
       state.rawRows.push({
         raw_row_id: state.rawRows.length + 1,
@@ -1230,6 +1237,9 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
           created_at: timestamp,
           updated_at: timestamp,
         });
+        if (overwriteMode === "by_date_channel") {
+          supersedeKeys.add(`${normalized.value.business_date}::${normalized.value.channel}`);
+        }
       } else {
         state.itemFacts.push({
           ...normalized.value,
@@ -1239,6 +1249,19 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
           updated_at: timestamp,
         });
       }
+    }
+
+    if (overwriteMode === "by_date_channel" && supersedeKeys.size > 0) {
+      // Drop prior daily facts for the same (store, date, channel) that came from
+      // a different upload. Rows from this upload itself are preserved.
+      const survivors = state.dailyFacts.filter((row) => {
+        if (row.store_id !== storeId) return true;
+        if (row.source_upload_id === upload.upload_id) return true;
+        const key = `${row.business_date}::${row.channel}`;
+        return !supersedeKeys.has(key);
+      });
+      state.dailyFacts.length = 0;
+      state.dailyFacts.push(...survivors);
     }
 
     for (const rejectedRow of prepared.rejectedRows) {

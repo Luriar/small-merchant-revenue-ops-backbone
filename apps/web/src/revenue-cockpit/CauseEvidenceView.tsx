@@ -110,6 +110,37 @@ function sanitizeProse(value: string): string {
   // Collapse repeated identical sentences (separated by space/period).
   // Pattern: "<sentence>. <sentence>." → "<sentence>." (case-insensitive).
   out = out.replace(/(.{8,}?[.!?])\s*\1+/gi, '$1');
+  out = stripTrailingCausalityCaution(out);
+  return out;
+}
+
+// Strip trailing causality-caution boilerplate ("추가 확인이 필요합니다.",
+// "인과(관계)가 확정된 것은 아닙니다.", "needs further confirmation.", etc.)
+// from the end of cause-detail prose. The dedicated disclaimer copy in the
+// left caution box and the bottom notice still appears — only the redundant
+// trailing sentence near the title is removed.
+function stripTrailingCausalityCaution(text: string): string {
+  let out = text.trim();
+  const patterns: RegExp[] = [
+    /(?:[\s,.;])*인과(?:관계)?가\s*확정된\s*것은?\s*아니(?:며|니다)[^.]*\.?\s*$/u,
+    /(?:[\s,.;])*추가\s*확인이\s*필요합니다\.?\s*$/u,
+    /(?:[\s,.;])*needs\s+further\s+confirmation\.?\s*$/iu,
+    /(?:[\s,.;])*this\s+does\s+not\s+prove\s+causation\.?\s*$/iu,
+  ];
+  // Apply repeatedly so chained caution sentences are all removed.
+  for (let i = 0; i < 3; i += 1) {
+    let changed = false;
+    for (const pattern of patterns) {
+      const next = out.replace(pattern, '');
+      if (next !== out) {
+        out = next.trim();
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  // Re-add a terminal period if we stripped one and the survivor doesn't have one.
+  if (out && !/[.!?。]$/u.test(out)) out = `${out}.`;
   return out;
 }
 

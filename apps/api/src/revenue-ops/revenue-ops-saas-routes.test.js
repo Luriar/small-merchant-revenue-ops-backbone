@@ -291,6 +291,140 @@ test("revenue upload accepts valid rows and records rejected rows safely", async
   assert.equal(reprocess.value.job_run.status, "skipped");
 });
 
+test("revenue upload with overwrite_mode=by_date_channel supersedes prior daily facts for same (date, channel)", async () => {
+  const server = createTestServer();
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "overwrite-owner",
+    input: {
+      store_name: "덮어쓰기 매장",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const storeId = created.value.store.store_id;
+
+  const first = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "overwrite-owner",
+    input: {
+      source_type: "manual_template",
+      original_filename: "first.json",
+      daily_rows: [
+        {
+          business_date: "2026-05-08",
+          channel: "offline_pos",
+          gross_sales_amount: 1250000,
+          net_sales_amount: 1180000,
+          order_count: 82,
+        },
+      ],
+    },
+  });
+  assert.equal(first.statusCode, 201);
+  assert.equal(first.value.upload.accepted_count, 1);
+
+  const second = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "overwrite-owner",
+    input: {
+      source_type: "manual_template",
+      original_filename: "second.json",
+      daily_rows: [
+        {
+          business_date: "2026-05-08",
+          channel: "offline_pos",
+          gross_sales_amount: 2500000,
+          net_sales_amount: 2360000,
+          order_count: 164,
+        },
+      ],
+      metadata: { overwrite_mode: "by_date_channel" },
+    },
+  });
+  assert.equal(second.statusCode, 201);
+  assert.equal(second.value.upload.accepted_count, 1);
+
+  const briefs = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`,
+    authSub: "overwrite-owner",
+  });
+  assert.equal(briefs.statusCode, 200);
+  const dailySeries = briefs.value.briefs[0].daily_series;
+  // Exactly one row for 2026-05-08 — the prior fact was superseded.
+  const may8 = dailySeries.filter((row) => row.date === "2026-05-08");
+  assert.equal(may8.length, 1);
+  assert.equal(may8[0].net_sales, 2360000);
+  assert.equal(may8[0].order_count, 164);
+});
+
+test("revenue upload without overwrite_mode keeps prior daily facts (default append, backwards compatible)", async () => {
+  const server = createTestServer();
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "append-owner",
+    input: {
+      store_name: "추가 적재 매장",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  const storeId = created.value.store.store_id;
+
+  await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "append-owner",
+    input: {
+      source_type: "manual_template",
+      original_filename: "first.json",
+      daily_rows: [
+        { business_date: "2026-05-08", channel: "offline_pos", gross_sales_amount: 1000000, net_sales_amount: 950000, order_count: 70 },
+      ],
+    },
+  });
+  await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "append-owner",
+    input: {
+      source_type: "manual_template",
+      original_filename: "second.json",
+      daily_rows: [
+        { business_date: "2026-05-08", channel: "offline_pos", gross_sales_amount: 2000000, net_sales_amount: 1900000, order_count: 140 },
+      ],
+    },
+  });
+
+  const briefs = await requestJson({
+    server,
+    method: "GET",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`,
+    authSub: "append-owner",
+  });
+  assert.equal(briefs.statusCode, 200);
+  const may8 = briefs.value.briefs[0].daily_series.filter((row) => row.date === "2026-05-08");
+  // Two facts present — the original append-and-create-duplicates behavior is unchanged.
+  assert.equal(may8.length, 2);
+});
+
 test("delivery CSV upload parser creates normalized delivery daily rows without raw login automation", async () => {
   const server = createTestServer();
   const stores = await requestJson({ server, method: "GET", routePath: "/api/v1/stores", authSub: "delivery-upload-owner" });

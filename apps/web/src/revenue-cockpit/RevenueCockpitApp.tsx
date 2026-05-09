@@ -44,7 +44,7 @@ import { RevenueBriefView } from './RevenueBriefView';
 import { CauseEvidenceView } from './CauseEvidenceView';
 import { ActionPlannerView } from './ActionPlannerView';
 import { DataReliabilityView } from './DataReliabilityView';
-import type { RcLang, RcTheme, RcScreen, ActionStatuses, ActionStatus, Scenario } from './revenueCockpitTypes';
+import type { RcLang, RcTheme, RcScreen, ActionStatuses, ActionStatus, Scenario, UploadedDailyRevenuePoint } from './revenueCockpitTypes';
 
 // ─── persistence helpers ──────────────────────────────────────────────────────
 
@@ -149,11 +149,12 @@ function resolveTheme(theme: RcTheme): 'light' | 'dark' {
 
 interface StoreManageMenuProps {
   lang: RcLang;
+  onOpenCreate?: () => void;
   onOpenEdit: () => void;
   onArchive: () => void;
 }
 
-function StoreManageMenu({ lang, onOpenEdit, onArchive }: StoreManageMenuProps) {
+function StoreManageMenu({ lang, onOpenCreate, onOpenEdit, onArchive }: StoreManageMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -177,6 +178,16 @@ function StoreManageMenu({ lang, onOpenEdit, onArchive }: StoreManageMenuProps) 
       </button>
       {open && (
         <div className="rc-store-manage-menu-pop" role="menu">
+          {onOpenCreate && (
+            <button
+              type="button"
+              className="rc-store-manage-menu-item"
+              role="menuitem"
+              onClick={() => { setOpen(false); onOpenCreate(); }}
+            >
+              {lang === 'ko' ? '새 가게 등록' : 'Add store'}
+            </button>
+          )}
           <button
             type="button"
             className="rc-store-manage-menu-item"
@@ -216,6 +227,10 @@ interface CockpitControlsBarProps {
   onArchive: () => void;
   canUpload: boolean;
   canManage: boolean;
+  /** When true, header collapses to [select] [가게 관리] [매출 데이터 관리] for a real
+   * authenticated store; "새 가게 등록" moves into the manage menu. When false (demo
+   * or no real store yet), the existing demo-friendly buttons are shown standalone. */
+  productionStoreContext: boolean;
 }
 
 function CockpitControlsBar({
@@ -235,6 +250,7 @@ function CockpitControlsBar({
   onArchive,
   canUpload,
   canManage,
+  productionStoreContext,
 }: CockpitControlsBarProps) {
   const tabs: Array<{ id: RcScreen; label: string }> = [
     { id: 'brief',       label: lang === 'ko' ? '매출 요약' : 'Revenue summary' },
@@ -261,13 +277,25 @@ function CockpitControlsBar({
             </option>
           ))}
         </select>
-        {canManage && (
-          <StoreManageMenu lang={lang} onOpenEdit={onOpenEdit} onArchive={onArchive}/>
+        {productionStoreContext && canManage && (
+          <StoreManageMenu
+            lang={lang}
+            onOpenCreate={onOpenCreate}
+            onOpenEdit={onOpenEdit}
+            onArchive={onArchive}
+          />
         )}
-        <button type="button" className="rc-store-button" onClick={onOpenCreate}>
-          {lang === 'ko' ? '새 가게 등록' : 'Add store'}
-        </button>
-        {canUpload && (
+        {!productionStoreContext && (
+          <button type="button" className="rc-store-button" onClick={onOpenCreate}>
+            {lang === 'ko' ? '새 가게 등록' : 'Add store'}
+          </button>
+        )}
+        {productionStoreContext && canUpload && (
+          <button type="button" className="rc-store-button rc-store-button-primary" onClick={onOpenRevenueUpload}>
+            {lang === 'ko' ? '매출 데이터 관리' : 'Manage sales data'}
+          </button>
+        )}
+        {!productionStoreContext && canUpload && (
           <button type="button" className="rc-store-button rc-store-button-primary" onClick={onOpenRevenueUpload}>
             {lang === 'ko' ? '매출 데이터 등록하기' : 'Add revenue data'}
           </button>
@@ -644,9 +672,64 @@ interface RevenueUploadPanelProps {
   storeId: string;
   onClose: () => void;
   onUploaded: () => void;
+  /** Real-store-in-API-mode flag. Controls panel title/description/copy, the
+   * per-row overwrite affordance, and the export card visibility. */
+  productionStoreContext: boolean;
+  /** Used to derive the export filename slug. */
+  storeName?: string | null;
+  /** Daily revenue series available on the frontend (from scenario.uploadedDailySeries),
+   * used as the source for the export feature. */
+  exportSeries?: UploadedDailyRevenuePoint[] | null;
 }
 
-function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploadPanelProps) {
+const SAMPLE_DAILY_CSV = [
+  'business_date,channel,gross_sales_amount,order_count',
+  '2026-05-08,offline,1250000,82',
+  '2026-05-08,baemin,430000,24',
+  '2026-05-09,offline,1180000,76',
+].join('\n');
+
+function slugifyStoreName(name: string | null | undefined, fallback: string): string {
+  const base = (name ?? '').toLowerCase().replace(/[^a-z0-9가-힣]+/g, '-').replace(/^-|-$/g, '');
+  return base || fallback;
+}
+
+function todayYyyymmdd(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}${m}${d}`;
+}
+
+function csvEscape(value: string | number | null | undefined): string {
+  if (value === null || typeof value === 'undefined') return '';
+  const s = String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadCsvBlob(filename: string, csvText: string) {
+  const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Defer revoke so the browser keeps the URL alive long enough to download.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function RevenueUploadPanel({
+  lang,
+  storeId,
+  onClose,
+  onUploaded,
+  productionStoreContext,
+  storeName,
+  exportSeries,
+}: RevenueUploadPanelProps) {
   const today = new Date().toISOString().slice(0, 10);
   const [businessDate, setBusinessDate] = useState(today);
   const [grossSales, setGrossSales] = useState('');
@@ -656,12 +739,16 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
   const [csvText, setCsvText] = useState('');
   const [csvFilename, setCsvFilename] = useState('');
   const [sourceType, setSourceType] = useState('generic_pos_csv');
+  const [csvOverwrite, setCsvOverwrite] = useState(false);
   const [busy, setBusy] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [preview, setPreview] = useState<RevenueUploadPreviewEnvelope | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [result, setResult] = useState<RevenueUploadEnvelope | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sampleToast, setSampleToast] = useState<string | null>(null);
+  const sampleToastTimer = useRef<number | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
 
   // Preview is tied to the current csvText/sourceType. If either changes, the
   // existing preview is no longer accurate and is cleared.
@@ -670,6 +757,69 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
     setPreviewError(null);
   }, [csvText, sourceType]);
 
+  useEffect(() => () => {
+    if (sampleToastTimer.current !== null) {
+      window.clearTimeout(sampleToastTimer.current);
+      sampleToastTimer.current = null;
+    }
+  }, []);
+
+  const isStandardCsv = sourceType === 'generic_pos_csv';
+  const showOverwriteOption = productionStoreContext && isStandardCsv;
+  const showCsvGuide = isStandardCsv;
+
+  function flashSampleToast(message: string) {
+    setSampleToast(message);
+    if (sampleToastTimer.current !== null) window.clearTimeout(sampleToastTimer.current);
+    sampleToastTimer.current = window.setTimeout(() => {
+      setSampleToast(null);
+      sampleToastTimer.current = null;
+    }, 3000);
+  }
+
+  function copySampleCsv() {
+    const text = SAMPLE_DAILY_CSV;
+    const okMessage = lang === 'ko' ? '예시 CSV를 복사했습니다.' : 'Sample CSV copied.';
+    const failMessage = lang === 'ko' ? '클립보드에 복사하지 못했습니다.' : 'Could not copy to clipboard.';
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(() => flashSampleToast(okMessage))
+        .catch(() => flashSampleToast(failMessage));
+    } else {
+      flashSampleToast(failMessage);
+    }
+  }
+
+  function downloadSampleCsv() {
+    downloadCsvBlob('revenue-os-sample-daily-sales.csv', SAMPLE_DAILY_CSV);
+    flashSampleToast(lang === 'ko' ? '예시 CSV를 다운로드했습니다.' : 'Sample CSV downloaded.');
+  }
+
+  function exportSalesData() {
+    const rows = exportSeries ?? [];
+    if (rows.length === 0) {
+      setExportNotice(lang === 'ko' ? '내보낼 매출 데이터가 없습니다.' : 'No sales data to export.');
+      return;
+    }
+    setExportNotice(null);
+    const header = ['business_date', 'net_sales_amount', 'order_count', 'average_order_value'];
+    const lines = [header.join(',')];
+    for (const row of rows) {
+      const orders = Number(row.order_count ?? 0);
+      const aov = orders > 0 ? Math.round(Number(row.net_sales) / orders) : '';
+      lines.push([
+        csvEscape(row.date),
+        csvEscape(Number(row.net_sales) || 0),
+        csvEscape(orders > 0 ? orders : ''),
+        csvEscape(aov),
+      ].join(','));
+    }
+    const slug = slugifyStoreName(storeName ?? null, storeId);
+    const filename = `revenue-os-${slug}-sales-data-${todayYyyymmdd()}.csv`;
+    downloadCsvBlob(filename, lines.join('\n'));
+    setExportNotice(lang === 'ko' ? `${filename} 다운로드를 시작했습니다.` : `Started download: ${filename}.`);
+  }
+
   function finishUpload(envelope: RevenueUploadEnvelope) {
     setResult(envelope);
     setError(null);
@@ -677,16 +827,20 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
   }
 
   function buildCsvPayload(): RevenueUploadPayload {
+    const metadata: Record<string, unknown> = {
+      upload_mode: 'csv',
+      no_raw_delivery_login_credentials: true,
+    };
+    if (showOverwriteOption && csvOverwrite) {
+      metadata.overwrite_mode = 'by_date_channel';
+    }
     return {
       source_type: sourceType,
       parser_type: sourceType === 'generic_pos_csv' ? 'standard_daily_revenue_csv' : sourceType,
       original_filename: csvFilename || `${sourceType}.csv`,
       file_type: 'csv',
       csv_text: csvText,
-      metadata: {
-        upload_mode: 'csv',
-        no_raw_delivery_login_credentials: true,
-      },
+      metadata,
     };
   }
 
@@ -735,6 +889,15 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
       return;
     }
 
+    const manualMetadata: Record<string, unknown> = {
+      input_mode: 'manual_daily',
+      average_ticket: averageTicket ? Number(averageTicket) : null,
+    };
+    // In production mode, direct daily input means "save my number for this date" —
+    // so we always supersede any prior fact for the same (date, channel).
+    if (productionStoreContext) {
+      manualMetadata.overwrite_mode = 'by_date_channel';
+    }
     void submit({
       source_type: 'manual_template',
       original_filename: 'manual_daily_input.json',
@@ -745,10 +908,7 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
         order_count: Math.round(transactions),
         channel: channel || 'offline_pos',
       }],
-      metadata: {
-        input_mode: 'manual_daily',
-        average_ticket: averageTicket ? Number(averageTicket) : null,
-      },
+      metadata: manualMetadata,
     });
   }
 
@@ -774,22 +934,39 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
     reader.readAsText(file);
   }
 
+  const panelKicker = productionStoreContext
+    ? (lang === 'ko' ? '매출 데이터 관리' : 'Manage sales data')
+    : (lang === 'ko' ? '매출 데이터 등록' : 'Revenue data upload');
+  const panelTitle = productionStoreContext
+    ? (lang === 'ko' ? '매출 데이터 관리' : 'Manage sales data')
+    : (lang === 'ko' ? '매출 데이터 등록' : 'Add revenue data');
+  const panelDescription = productionStoreContext
+    ? (lang === 'ko'
+        ? 'POS에서 내려받은 CSV를 업로드하거나, 일별 매출을 직접 입력·수정할 수 있습니다.'
+        : 'Upload POS CSV files, or directly enter and update daily sales.')
+    : (lang === 'ko'
+        ? 'POS에서 내려받은 CSV를 업로드하거나, 테스트용 일별 매출을 직접 입력할 수 있습니다.'
+        : 'Upload a POS CSV or enter a test daily sales row manually.');
   return (
-    <section className="rc-revenue-upload-panel" aria-label={lang === 'ko' ? '매출 데이터 등록' : 'Revenue data upload'}>
+    <section className="rc-revenue-upload-panel" aria-label={panelTitle}>
       <div className="rc-revenue-upload-head">
         <div>
-          <div className="rc-bootstrap-kicker">{lang === 'ko' ? '매출 데이터 등록' : 'Revenue data upload'}</div>
-          <strong>{lang === 'ko' ? '매출 데이터 등록' : 'Add revenue data'}</strong>
-          <p>
-            {lang === 'ko'
-              ? 'POS에서 내려받은 CSV를 업로드하거나, 테스트용 일별 매출을 직접 입력할 수 있습니다.'
-              : 'Upload a POS CSV or enter a test daily sales row manually.'}
-          </p>
-          <p>
-            {lang === 'ko'
-              ? '매출 데이터가 등록되면 원인 후보와 실행 액션이 갱신됩니다.'
-              : 'Cause candidates and action suggestions refresh after revenue data is registered.'}
-          </p>
+          <div className="rc-bootstrap-kicker">{panelKicker}</div>
+          <strong>{panelTitle}</strong>
+          <p>{panelDescription}</p>
+          {productionStoreContext ? (
+            <p>
+              {lang === 'ko'
+                ? '같은 날짜와 채널의 데이터는 덮어쓸 수 있습니다.'
+                : 'Rows with the same date and channel can be overwritten.'}
+            </p>
+          ) : (
+            <p>
+              {lang === 'ko'
+                ? '매출 데이터가 등록되면 원인 후보와 실행 액션이 갱신됩니다.'
+                : 'Cause candidates and action suggestions refresh after revenue data is registered.'}
+            </p>
+          )}
         </div>
         <button type="button" className="rc-store-button" onClick={onClose}>
           {lang === 'ko' ? '닫기' : 'Close'}
@@ -797,26 +974,7 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
       </div>
 
       <div className="rc-revenue-upload-grid">
-        <div className="rc-card rc-revenue-upload-card">
-          <h2>{lang === 'ko' ? '일별 매출 직접 입력' : 'Manual daily input'}</h2>
-          <div className="rc-revenue-upload-fields">
-            <input className="rc-store-input" type="date" value={businessDate} onChange={event => setBusinessDate(event.target.value)}/>
-            <input className="rc-store-input" inputMode="numeric" value={grossSales} placeholder={lang === 'ko' ? '총매출' : 'Gross sales'} onChange={event => setGrossSales(event.target.value)}/>
-            <input className="rc-store-input" inputMode="numeric" value={transactionCount} placeholder={lang === 'ko' ? '거래건수' : 'Transactions'} onChange={event => setTransactionCount(event.target.value)}/>
-            <input className="rc-store-input" inputMode="numeric" value={averageTicket} placeholder={lang === 'ko' ? '객단가 선택' : 'Avg. ticket optional'} onChange={event => setAverageTicket(event.target.value)}/>
-            <select className="rc-store-select" value={channel} onChange={event => setChannel(event.target.value)}>
-              <option value="offline_pos">{lang === 'ko' ? '오프라인' : 'Offline'}</option>
-              <option value="delivery_baemin">Baemin</option>
-              <option value="delivery_coupangeats">CoupangEats</option>
-              <option value="online">Online</option>
-            </select>
-          </div>
-          <button type="button" className="rc-store-button rc-store-button-primary" onClick={submitManual} disabled={busy}>
-            {lang === 'ko' ? '일별 매출 등록' : 'Add daily row'}
-          </button>
-        </div>
-
-        <div className="rc-card rc-revenue-upload-card">
+        <div className="rc-card rc-revenue-upload-card rc-revenue-upload-card-csv">
           <h2>{lang === 'ko' ? 'CSV 업로드' : 'CSV upload'}</h2>
           <p className="rc-upload-note">
             {lang === 'ko'
@@ -845,10 +1003,64 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
               />
             </label>
           </div>
+          {showCsvGuide && (
+            <details className="rc-csv-guide" open>
+              <summary>{lang === 'ko' ? '표준 일별 매출 CSV 작성 방법' : 'How to prepare the standard daily sales CSV'}</summary>
+              <p className="rc-csv-guide-intro">
+                {lang === 'ko'
+                  ? '엑셀이나 구글시트에서 아래 형식으로 작성한 뒤 CSV로 저장해 업로드할 수 있습니다. 첫 줄은 반드시 항목명으로 두고, 금액에는 쉼표나 원 표시를 넣지 마세요.'
+                  : 'You can prepare this in Excel or Google Sheets and save it as CSV. Keep the first row as the header, and enter amounts as plain numbers without commas or currency symbols.'}
+              </p>
+              <table className="rc-csv-guide-table">
+                <tbody>
+                  <tr>
+                    <th>business_date</th>
+                    <td>{lang === 'ko' ? '영업일자. 예: 2026-05-08' : 'Business date. Example: 2026-05-08'}</td>
+                  </tr>
+                  <tr>
+                    <th>channel</th>
+                    <td>{lang === 'ko' ? '판매 채널. 예: offline, baemin, coupangeats, naver' : 'Sales channel. Example: offline, baemin, coupangeats, naver'}</td>
+                  </tr>
+                  <tr>
+                    <th>gross_sales_amount</th>
+                    <td>{lang === 'ko' ? '총매출. 예: 1250000' : 'Gross sales amount. Example: 1250000'}</td>
+                  </tr>
+                  <tr>
+                    <th>order_count</th>
+                    <td>{lang === 'ko' ? '거래/주문 건수. 예: 82' : 'Number of orders/transactions. Example: 82'}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div className="rc-csv-guide-actions">
+                <button type="button" className="rc-store-button" onClick={copySampleCsv}>
+                  {lang === 'ko' ? '예시 CSV 복사' : 'Copy sample CSV'}
+                </button>
+                <button type="button" className="rc-store-button" onClick={downloadSampleCsv}>
+                  {lang === 'ko' ? '예시 CSV 다운로드' : 'Download sample CSV'}
+                </button>
+                {sampleToast && <span className="rc-csv-guide-toast" role="status">{sampleToast}</span>}
+              </div>
+              <p className="rc-csv-guide-tip">
+                {lang === 'ko'
+                  ? '날짜는 YYYY-MM-DD 형식으로 입력하세요. 금액은 1250000처럼 숫자만 입력하세요. 같은 날짜와 채널의 데이터는 덮어쓸 수 있습니다.'
+                  : 'Use YYYY-MM-DD for dates. Enter amounts as plain numbers like 1250000. Rows with the same date and channel can be overwritten.'}
+              </p>
+            </details>
+          )}
+          {showOverwriteOption && (
+            <label className="rc-csv-overwrite">
+              <input
+                type="checkbox"
+                checked={csvOverwrite}
+                onChange={event => setCsvOverwrite(event.target.checked)}
+              />
+              <span>{lang === 'ko' ? '같은 날짜/채널 데이터 덮어쓰기' : 'Overwrite same date/channel rows'}</span>
+            </label>
+          )}
           <textarea
             className="rc-revenue-csv"
             value={csvText}
-            placeholder="business_date,channel,gross_sales_amount,order_count"
+            placeholder={SAMPLE_DAILY_CSV}
             onChange={event => setCsvText(event.target.value)}
           />
           <div className="rc-revenue-upload-actions">
@@ -861,6 +1073,63 @@ function RevenueUploadPanel({ lang, storeId, onClose, onUploaded }: RevenueUploa
               {lang === 'ko' ? 'CSV 등록' : 'Upload CSV'}
             </button>
           </div>
+        </div>
+
+        <div className="rc-revenue-upload-right-col">
+          <div className="rc-card rc-revenue-upload-card">
+            <h2>{lang === 'ko' ? '일별 매출 직접 입력' : 'Manual daily input'}</h2>
+            <div className="rc-revenue-upload-fields">
+              <input className="rc-store-input" type="date" value={businessDate} onChange={event => setBusinessDate(event.target.value)}/>
+              <input className="rc-store-input" inputMode="numeric" value={grossSales} placeholder={lang === 'ko' ? '총매출' : 'Gross sales'} onChange={event => setGrossSales(event.target.value)}/>
+              <input className="rc-store-input" inputMode="numeric" value={transactionCount} placeholder={lang === 'ko' ? '거래건수' : 'Transactions'} onChange={event => setTransactionCount(event.target.value)}/>
+              <input className="rc-store-input" inputMode="numeric" value={averageTicket} placeholder={lang === 'ko' ? '객단가 선택' : 'Avg. ticket optional'} onChange={event => setAverageTicket(event.target.value)}/>
+              <select className="rc-store-select" value={channel} onChange={event => setChannel(event.target.value)}>
+                <option value="offline_pos">{lang === 'ko' ? '오프라인' : 'Offline'}</option>
+                <option value="delivery_baemin">Baemin</option>
+                <option value="delivery_coupangeats">CoupangEats</option>
+                <option value="online">Online</option>
+              </select>
+            </div>
+            <button type="button" className="rc-store-button rc-store-button-primary" onClick={submitManual} disabled={busy}>
+              {productionStoreContext
+                ? (lang === 'ko' ? '일별 매출 저장' : 'Save daily sales')
+                : (lang === 'ko' ? '일별 매출 등록' : 'Add daily row')}
+            </button>
+            {productionStoreContext && (
+              <p className="rc-upload-helper">
+                {lang === 'ko'
+                  ? '기존 데이터가 있으면 덮어씁니다.'
+                  : 'Existing data for the same date/source will be overwritten.'}
+              </p>
+            )}
+          </div>
+
+          {productionStoreContext && (
+            <div className="rc-card rc-revenue-export-card">
+              <h2>{lang === 'ko' ? '매출 데이터 내보내기' : 'Export sales data'}</h2>
+              <p className="rc-upload-note">
+                {lang === 'ko'
+                  ? '현재 선택된 매장의 매출 데이터를 CSV로 내려받습니다.'
+                  : 'Download the current store’s sales data as a CSV file.'}
+              </p>
+              <div className="rc-revenue-upload-actions">
+                <button
+                  type="button"
+                  className="rc-store-button"
+                  onClick={exportSalesData}
+                  disabled={!exportSeries || exportSeries.length === 0}
+                >
+                  {lang === 'ko' ? '매출 데이터 내보내기' : 'Export sales data'}
+                </button>
+                {(!exportSeries || exportSeries.length === 0) && (
+                  <span className="rc-upload-helper">
+                    {lang === 'ko' ? '내보낼 매출 데이터가 없습니다.' : 'No sales data to export.'}
+                  </span>
+                )}
+              </div>
+              {exportNotice && <p className="rc-upload-helper">{exportNotice}</p>}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1771,6 +2040,11 @@ export function RevenueCockpitApp() {
               : null;
 
   const isLoggedIn = Boolean(apiMode && getStoredCognitoToken());
+  // Production-store context: a real authenticated session viewing a real (non-demo)
+  // store. In this state the header collapses to [select] [가게 관리] [매출 데이터 관리]
+  // and "새 가게 등록" moves into the manage menu. Demo / not-yet-onboarded users keep
+  // the existing demo-friendly standalone buttons.
+  const productionStoreContext = isLoggedIn && Boolean(selectedStoreId) && !selectedStoreIsDemo;
   // While the initial store list (and the first cockpit data fetch) is still
   // resolving for an authenticated user, skip rendering demo/no-store screens
   // so refresh does not flicker through them. apiNotice starts as 'loading'
@@ -1852,6 +2126,7 @@ export function RevenueCockpitApp() {
           onArchive={handleArchiveSelectedStore}
           canUpload={Boolean(selectedStoreId)}
           canManage={Boolean(selectedStoreId && selectedStore && !selectedStoreIsDemo)}
+          productionStoreContext={productionStoreContext}
         />
       )}
       {isLoggedIn && showCreateStore && (
@@ -1907,6 +2182,9 @@ export function RevenueCockpitApp() {
           onUploaded={() => {
             void refreshCockpitDataForStore(selectedStoreId);
           }}
+          productionStoreContext={productionStoreContext}
+          storeName={selectedStore?.store_name ?? null}
+          exportSeries={scenario.uploadedDailySeries ?? null}
         />
       )}
       <div className="rc-screen">
