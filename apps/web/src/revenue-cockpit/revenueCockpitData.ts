@@ -281,6 +281,42 @@ function buildStatuses(actions: ApiRecord[]): ActionStatuses {
   return statuses;
 }
 
+// Resolve a revenue summary from the API brief, accepting both the canonical
+// fields (net_sales_total, order_count_total, avg_ticket) and common aliases
+// (gross_sales_total, average_ticket, average_order_value, aov). Falls back to
+// summing daily_series when the summary is missing or zero so the AOV card
+// never renders 0 when totals are clearly non-zero.
+export function buildUploadedRevenueSummary(
+  rawSummary: unknown,
+  dailySeries: Array<{ date: string; net_sales: number; order_count?: number }>,
+): import('./revenueCockpitTypes').UploadedRevenueSummary | null {
+  const summary = isRecord(rawSummary) ? rawSummary : {};
+  const seriesNetTotal = dailySeries.reduce((sum, point) => sum + (Number.isFinite(point.net_sales) ? point.net_sales : 0), 0);
+  const seriesOrderTotal = dailySeries.reduce((sum, point) => sum + Number(point.order_count || 0), 0);
+
+  const summaryNetTotal = num(summary.net_sales_total, num(summary.gross_sales_total, 0));
+  const netSalesTotal = summaryNetTotal > 0 ? summaryNetTotal : seriesNetTotal;
+  const summaryOrderTotal = num(summary.order_count_total, num(summary.transaction_count_total, 0));
+  const orderCountTotal = summaryOrderTotal > 0 ? summaryOrderTotal : seriesOrderTotal;
+
+  const explicitAvg = num(summary.avg_ticket,
+    num(summary.average_ticket,
+      num(summary.average_order_value,
+        num(summary.aov, 0))));
+  const computedAvg = orderCountTotal > 0 ? Math.round(netSalesTotal / orderCountTotal) : 0;
+  const avgTicket = explicitAvg > 0 ? Math.round(explicitAvg) : computedAvg;
+
+  const summaryDays = num(summary.days_in_period, 0);
+  const daysInPeriod = summaryDays > 0 ? summaryDays : new Set(dailySeries.map((p) => p.date)).size;
+  const summaryAvgDaily = num(summary.avg_daily_net_sales, 0);
+  const avgDailyNetSales = summaryAvgDaily > 0
+    ? Math.round(summaryAvgDaily)
+    : (daysInPeriod > 0 ? Math.round(netSalesTotal / daysInPeriod) : 0);
+
+  if (!netSalesTotal && !orderCountTotal && !avgTicket) return null;
+  return { netSalesTotal, orderCountTotal, avgTicket, avgDailyNetSales, daysInPeriod };
+}
+
 export function wantsApiData(): boolean {
   if (typeof window === 'undefined') return false;
   const search = new URLSearchParams(window.location.search);
@@ -324,10 +360,12 @@ export function buildScenarioFromApi(payload: RevenueApiPayload): { scenario: Sc
   }
   const periodLabelFromBrief = str(brief?.period_label);
   const insufficientFlag = brief?.insufficient_data === true;
+  const uploadedRevenueSummary = buildUploadedRevenueSummary(brief?.revenue_summary, uploadedDailySeries);
 
   const scenario: Scenario = {
     ...SCENARIO,
     uploadedDailySeries: uploadedDailySeries.length ? uploadedDailySeries : undefined,
+    uploadedRevenueSummary: uploadedRevenueSummary ?? undefined,
     insufficientData: insufficientFlag || undefined,
     periodLabel: periodLabelFromBrief || undefined,
     area: {

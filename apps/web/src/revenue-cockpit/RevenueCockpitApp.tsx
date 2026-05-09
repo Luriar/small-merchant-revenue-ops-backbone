@@ -313,11 +313,11 @@ function CockpitControlsBar({
             </button>
           </span>
         )}
-      </div>
-      <div className="rc-cockpit-controls-right">
         {notice && (
           <span className="rc-store-notice rc-cockpit-status" role="status">{notice}</span>
         )}
+      </div>
+      <div className="rc-cockpit-controls-right">
         <nav className="rc-report-nav" aria-label={lang === 'ko' ? '리포트 탭' : 'Report tabs'}>
           {tabs.map(it => (
             <button
@@ -682,12 +682,23 @@ interface RevenueUploadPanelProps {
   exportSeries?: UploadedDailyRevenuePoint[] | null;
 }
 
-const SAMPLE_DAILY_CSV = [
+const SAMPLE_DAILY_CSV_EN = [
   'business_date,channel,gross_sales_amount,order_count',
   '2026-05-08,offline,1250000,82',
   '2026-05-08,baemin,430000,24',
   '2026-05-09,offline,1180000,76',
 ].join('\n');
+
+const SAMPLE_DAILY_CSV_KO = [
+  '영업일자,판매채널,총매출,거래건수',
+  '2026-05-08,오프라인,1250000,82',
+  '2026-05-08,배민,430000,24',
+  '2026-05-09,오프라인,1180000,76',
+].join('\n');
+
+function sampleDailyCsv(lang: RcLang): string {
+  return lang === 'ko' ? SAMPLE_DAILY_CSV_KO : SAMPLE_DAILY_CSV_EN;
+}
 
 function slugifyStoreName(name: string | null | undefined, fallback: string): string {
   const base = (name ?? '').toLowerCase().replace(/[^a-z0-9가-힣]+/g, '-').replace(/^-|-$/g, '');
@@ -778,7 +789,7 @@ function RevenueUploadPanel({
   }
 
   function copySampleCsv() {
-    const text = SAMPLE_DAILY_CSV;
+    const text = sampleDailyCsv(lang);
     const okMessage = lang === 'ko' ? '예시 CSV를 복사했습니다.' : 'Sample CSV copied.';
     const failMessage = lang === 'ko' ? '클립보드에 복사하지 못했습니다.' : 'Could not copy to clipboard.';
     if (navigator.clipboard?.writeText) {
@@ -791,7 +802,7 @@ function RevenueUploadPanel({
   }
 
   function downloadSampleCsv() {
-    downloadCsvBlob('revenue-os-sample-daily-sales.csv', SAMPLE_DAILY_CSV);
+    downloadCsvBlob('revenue-os-sample-daily-sales.csv', sampleDailyCsv(lang));
     flashSampleToast(lang === 'ko' ? '예시 CSV를 다운로드했습니다.' : 'Sample CSV downloaded.');
   }
 
@@ -1008,26 +1019,26 @@ function RevenueUploadPanel({
               <summary>{lang === 'ko' ? '표준 일별 매출 CSV 작성 방법' : 'How to prepare the standard daily sales CSV'}</summary>
               <p className="rc-csv-guide-intro">
                 {lang === 'ko'
-                  ? '엑셀이나 구글시트에서 아래 형식으로 작성한 뒤 CSV로 저장해 업로드할 수 있습니다. 첫 줄은 반드시 항목명으로 두고, 금액에는 쉼표나 원 표시를 넣지 마세요.'
+                  ? '엑셀이나 구글시트에서 아래 형식으로 작성한 뒤 CSV로 저장해 업로드할 수 있습니다. 첫 줄은 반드시 항목명으로 두고, 금액에는 쉼표나 원 표시를 넣지 마세요. 한국어 항목명도 사용할 수 있습니다.'
                   : 'You can prepare this in Excel or Google Sheets and save it as CSV. Keep the first row as the header, and enter amounts as plain numbers without commas or currency symbols.'}
               </p>
               <table className="rc-csv-guide-table">
                 <tbody>
                   <tr>
-                    <th>business_date</th>
-                    <td>{lang === 'ko' ? '영업일자. 예: 2026-05-08' : 'Business date. Example: 2026-05-08'}</td>
+                    <th>{lang === 'ko' ? '영업일자' : 'business_date'}</th>
+                    <td>{lang === 'ko' ? '영업일자입니다. 예: 2026-05-08' : 'Business date. Example: 2026-05-08'}</td>
                   </tr>
                   <tr>
-                    <th>channel</th>
-                    <td>{lang === 'ko' ? '판매 채널. 예: offline, baemin, coupangeats, naver' : 'Sales channel. Example: offline, baemin, coupangeats, naver'}</td>
+                    <th>{lang === 'ko' ? '판매채널' : 'channel'}</th>
+                    <td>{lang === 'ko' ? '판매 채널입니다. 예: 오프라인, 배민, 쿠팡이츠, 네이버' : 'Sales channel. Example: offline, baemin, coupangeats, naver'}</td>
                   </tr>
                   <tr>
-                    <th>gross_sales_amount</th>
-                    <td>{lang === 'ko' ? '총매출. 예: 1250000' : 'Gross sales amount. Example: 1250000'}</td>
+                    <th>{lang === 'ko' ? '총매출' : 'gross_sales_amount'}</th>
+                    <td>{lang === 'ko' ? '해당 날짜/채널의 총매출입니다. 예: 1250000' : 'Gross sales amount. Example: 1250000'}</td>
                   </tr>
                   <tr>
-                    <th>order_count</th>
-                    <td>{lang === 'ko' ? '거래/주문 건수. 예: 82' : 'Number of orders/transactions. Example: 82'}</td>
+                    <th>{lang === 'ko' ? '거래건수' : 'order_count'}</th>
+                    <td>{lang === 'ko' ? '거래 또는 주문 건수입니다. 예: 82' : 'Number of orders/transactions. Example: 82'}</td>
                   </tr>
                 </tbody>
               </table>
@@ -1060,7 +1071,7 @@ function RevenueUploadPanel({
           <textarea
             className="rc-revenue-csv"
             value={csvText}
-            placeholder={SAMPLE_DAILY_CSV}
+            placeholder={sampleDailyCsv(lang)}
             onChange={event => setCsvText(event.target.value)}
           />
           <div className="rc-revenue-upload-actions">
@@ -1105,7 +1116,7 @@ function RevenueUploadPanel({
           </div>
 
           {productionStoreContext && (
-            <div className="rc-card rc-revenue-export-card">
+            <div className="rc-card rc-revenue-upload-card rc-revenue-export-card">
               <h2>{lang === 'ko' ? '매출 데이터 내보내기' : 'Export sales data'}</h2>
               <p className="rc-upload-note">
                 {lang === 'ko'

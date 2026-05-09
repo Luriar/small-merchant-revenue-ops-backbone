@@ -68,6 +68,14 @@ export interface UploadedDailyRevenuePoint {
   order_count?: number;
 }
 
+export interface UploadedRevenueSummary {
+  netSalesTotal: number;
+  orderCountTotal: number;
+  avgTicket: number;
+  avgDailyNetSales: number;
+  daysInPeriod: number;
+}
+
 export interface Scenario {
   area: BiLingual;
   category: BiLingual;
@@ -87,6 +95,7 @@ export interface Scenario {
   isDemo?: boolean;
   storeName?: string;
   uploadedDailySeries?: UploadedDailyRevenuePoint[];
+  uploadedRevenueSummary?: UploadedRevenueSummary;
   insufficientData?: boolean;
   periodLabel?: string;
 }

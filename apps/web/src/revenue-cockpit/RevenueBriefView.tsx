@@ -292,9 +292,21 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
   const uploadedPoints = Array.isArray(uploadedSeries) ? [...uploadedSeries].sort((a, b) => a.date.localeCompare(b.date)) : [];
   const isUploadedMode = uploadedPoints.length >= 2;
 
-  const uploadedTransactionTotal = uploadedPoints.reduce((sum, point) => sum + Number(point.order_count || 0), 0);
-  const uploadedNetSalesTotal = uploadedPoints.reduce((sum, point) => sum + Number(point.net_sales || 0), 0);
-  const uploadedTicketAverage = uploadedTransactionTotal > 0 ? Math.round(uploadedNetSalesTotal / uploadedTransactionTotal) : 0;
+  const seriesTransactionTotal = uploadedPoints.reduce((sum, point) => sum + Number(point.order_count || 0), 0);
+  const seriesNetSalesTotal = uploadedPoints.reduce((sum, point) => sum + Number(point.net_sales || 0), 0);
+  // Prefer the backend-resolved revenue_summary (which already enforces
+  // AOV = total_sales / total_orders consistently with the chart). Fall back
+  // to summing the uploaded daily series when the summary is unavailable.
+  const summary = effectiveScenario.uploadedRevenueSummary;
+  const uploadedTransactionTotal = summary?.orderCountTotal && summary.orderCountTotal > 0
+    ? summary.orderCountTotal
+    : seriesTransactionTotal;
+  const uploadedNetSalesTotal = summary?.netSalesTotal && summary.netSalesTotal > 0
+    ? summary.netSalesTotal
+    : seriesNetSalesTotal;
+  const uploadedTicketAverage = summary?.avgTicket && summary.avgTicket > 0
+    ? summary.avgTicket
+    : (uploadedTransactionTotal > 0 ? Math.round(uploadedNetSalesTotal / uploadedTransactionTotal) : 0);
   const uploadedTransactionLabel = uploadedTransactionTotal >= 1000
     ? (uploadedTransactionTotal / 1000).toFixed(1) + 'k'
     : uploadedTransactionTotal.toLocaleString();
@@ -403,7 +415,7 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 4, flexWrap: 'wrap' }}>
                 {isUploadedMode ? (
                   <span className="rc-serif rc-num" style={{ fontSize: 28, lineHeight: 1, color: 'var(--rc-fg-strong)', fontWeight: 500 }}>
-                    {formatKRWHero(uploadedSeriesTotal(uploadedSeries))}
+                    {formatKRWHero(uploadedNetSalesTotal || uploadedSeriesTotal(uploadedSeries))}
                   </span>
                 ) : (
                   <span className="rc-serif rc-num" style={{ fontSize: 28, lineHeight: 1, color: 'var(--rc-fg-strong)', fontWeight: 500 }}>

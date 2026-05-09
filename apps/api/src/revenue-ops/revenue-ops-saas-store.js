@@ -5,7 +5,7 @@ const m6DemoDataset = require("./data/m6_demo_revenue_dataset.json");
 const { getJwtClaimsFromEvent, normalizeClaims } = require("./revenue-ops-auth");
 const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
 const { planStorePublicContextCollection, normalizeContextCollectionReason } = require("./context-collectors");
-const { previewRevenueUploadPayload } = require("./revenue-upload-parsers");
+const { previewRevenueUploadPayload, canonicalChannel } = require("./revenue-upload-parsers");
 
 const DEFAULT_DEMO_PROFILE = m6DemoDataset.stores[0];
 const DEMO_STORE_NAME = DEFAULT_DEMO_PROFILE.store_name;
@@ -1252,12 +1252,14 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
     }
 
     if (overwriteMode === "by_date_channel" && supersedeKeys.size > 0) {
-      // Drop prior daily facts for the same (store, date, channel) that came from
-      // a different upload. Rows from this upload itself are preserved.
+      // Drop prior daily facts for the same (store, date, canonical channel)
+      // that came from a different upload. Compare against the canonical
+      // channel so legacy rows stored as "offline_pos" or "오프라인" are
+      // superseded by a new "offline" row, not duplicated alongside it.
       const survivors = state.dailyFacts.filter((row) => {
         if (row.store_id !== storeId) return true;
         if (row.source_upload_id === upload.upload_id) return true;
-        const key = `${row.business_date}::${row.channel}`;
+        const key = `${row.business_date}::${canonicalChannel(row.channel)}`;
         return !supersedeKeys.has(key);
       });
       state.dailyFacts.length = 0;
@@ -1685,16 +1687,24 @@ function normalizeDailyRow(row) {
   if (orderCount < 0) {
     return rejected("invalid_order_count", "order_count must be zero or greater");
   }
+  const gross = money(row.gross_sales_amount);
+  const net = money(row.net_sales_amount);
+  const refund = money(row.refund_amount);
+  const discount = money(row.discount_amount);
+  // Manual/JSON path commonly omits net_sales_amount; fall back to gross
+  // (less discount/refund) so daily_series, KPI cards and AOV don't compute
+  // from zero. CSV path already does the same in the parser's normalizer.
+  const netSales = net > 0 ? net : Math.max(0, gross - discount - refund);
   return accepted({
     business_date: businessDate,
-    channel: text(row.channel) || "offline_pos",
-    gross_sales_amount: money(row.gross_sales_amount),
-    net_sales_amount: money(row.net_sales_amount),
+    channel: canonicalChannel(row.channel),
+    gross_sales_amount: gross,
+    net_sales_amount: netSales,
     order_count: orderCount,
     cancel_count: int(row.cancel_count ?? row.cancellation_count, 0),
     cancellation_count: int(row.cancellation_count ?? row.cancel_count, 0),
-    refund_amount: money(row.refund_amount),
-    discount_amount: money(row.discount_amount),
+    refund_amount: refund,
+    discount_amount: discount,
     delivery_fee_amount: money(row.delivery_fee_amount),
     commission_amount: money(row.commission_amount),
     settlement_amount: money(row.settlement_amount),
@@ -1716,7 +1726,7 @@ function normalizeItemRow(row) {
   }
   return accepted({
     business_date: businessDate,
-    channel: text(row.channel) || "offline_pos",
+    channel: canonicalChannel(row.channel),
     item_name: itemName,
     item_category: text(row.item_category) || null,
     quantity: int(row.quantity, 0),
@@ -2092,6 +2102,36 @@ module.exports = {
 // Standalone composer that the Aurora path can call after it has loaded
 // daily facts + cause candidates + evidence + actions for a store.
 
+// Aggregate daily facts into one row per business_date. Channel-level rows
+// are summed so multi-channel days render as a single chart point and KPI
+// totals stay consistent with the chart. Returns rows sorted ascending by
+// date with no duplicate dates.
+function aggregateDailyFactsByDate(facts) {
+  const byDate = new Map();
+  for (const row of facts || []) {
+    const date = normalizeBusinessDate(row.business_date);
+    if (!date) continue;
+    const net = Number(row.net_sales_amount || 0);
+    const gross = Number(row.gross_sales_amount || 0);
+    const orders = Number(row.order_count || 0);
+    const existing = byDate.get(date);
+    if (existing) {
+      existing.net_sales += net;
+      existing.gross_sales += gross;
+      existing.order_count += orders;
+    } else {
+      byDate.set(date, { date, net_sales: net, gross_sales: gross, order_count: orders });
+    }
+  }
+  return Array.from(byDate.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((row) => ({
+      date: row.date,
+      net_sales: row.net_sales,
+      order_count: row.order_count,
+    }));
+}
+
 function normalizeBusinessDate(value) {
   if (value === null || value === undefined) return "";
 
@@ -2150,9 +2190,11 @@ function composeBriefFromUploadedFacts({
   const periodLabel = `${startDate} ~ ${endDate}`;
   const totalNet = sortedFacts.reduce((sum, row) => sum + Number(row.net_sales_amount || 0), 0);
   const totalOrders = sortedFacts.reduce((sum, row) => sum + Number(row.order_count || 0), 0);
-  const avgDailyNet = sortedFacts.length ? Math.round(totalNet / sortedFacts.length) : 0;
+  const uniqueDates = new Set(sortedFacts.map((row) => row.business_date));
+  const avgDailyNet = uniqueDates.size ? Math.round(totalNet / uniqueDates.size) : 0;
+  // AOV must be total_sales / total_orders, never the average of row AOVs.
   const avgTicket = totalOrders > 0 ? Math.round(totalNet / totalOrders) : 0;
-  const insufficient = sortedFacts.length < insufficientThresholdDays;
+  const insufficient = uniqueDates.size < insufficientThresholdDays;
 
   const evidenceByCause = new Map();
   for (const evi of causeEvidence) {
@@ -2201,11 +2243,12 @@ function composeBriefFromUploadedFacts({
     description: sanitizeCautionText(action.description),
   }));
 
-  const dailySeries = sortedFacts.map((row) => ({
-    date: row.business_date,
-    net_sales: Number(row.net_sales_amount || 0),
-    order_count: Number(row.order_count || 0),
-  }));
+  // Aggregate daily facts by business_date so the chart, KPI cards, AOV,
+  // recent-vs-previous comparison and CSV export all share the same source.
+  // Without this, multi-channel days produce duplicate entries (and the
+  // chart paints a zero-spike sawtooth when net_sales is missing on some
+  // rows). Channel-level totals are summed; AOV is total_sales / total_orders.
+  const dailySeries = aggregateDailyFactsByDate(sortedFacts);
 
   const headline = insufficient
     ? `${store?.store_name ?? "매장"}: 1일치 매출이 등록되었습니다. 추세 분석을 위해 비교 일자를 더 추가해 주세요.`

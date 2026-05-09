@@ -225,19 +225,6 @@ export function CauseEvidenceView({ lang, scenario = SCENARIO }: CauseEvidenceVi
             <span style={{ color: 'var(--rc-fg-muted)' }}><StrengthDots level={cs.strength}/></span>
           </button>
         ))}
-
-        <div style={{ padding: '16px 24px 0' }}>
-          <div style={{
-            padding: '12px 14px', borderRadius: 10,
-            background: 'var(--rc-accent-soft)', border: '1px solid var(--rc-accent-soft-bd)',
-            fontSize: 11.5, color: 'var(--rc-accent-strong)', lineHeight: 1.55,
-          }}>
-            <Icon name="shield" size={11}/> &nbsp;
-            {lang === 'ko'
-              ? '함께 관측되었다는 사실이 인과관계를 의미하지 않습니다. 추가 확인이 필요합니다.'
-              : 'Observed together does not mean causation — needs further confirmation.'}
-          </div>
-        </div>
       </aside>
 
       {/* ── DETAIL ── */}

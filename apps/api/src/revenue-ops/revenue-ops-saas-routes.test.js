@@ -421,8 +421,12 @@ test("revenue upload without overwrite_mode keeps prior daily facts (default app
   });
   assert.equal(briefs.statusCode, 200);
   const may8 = briefs.value.briefs[0].daily_series.filter((row) => row.date === "2026-05-08");
-  // Two facts present — the original append-and-create-duplicates behavior is unchanged.
-  assert.equal(may8.length, 2);
+  // Both facts are still appended in storage (default behavior, no overwrite),
+  // but daily_series is aggregated by business_date so the chart shows a
+  // single point per date with summed values.
+  assert.equal(may8.length, 1);
+  assert.equal(may8[0].net_sales, 950000 + 1900000);
+  assert.equal(may8[0].order_count, 70 + 140);
 });
 
 test("delivery CSV upload parser creates normalized delivery daily rows without raw login automation", async () => {
@@ -1078,6 +1082,293 @@ test("production-lite store records outbox, jobs, and idempotent daily mart rows
   const actions = await store.getActionsForStore(storeId);
   const outcome = store.buildActionOutcomeForStore(storeId, actions[0].action_id);
   assert.equal(outcome.summary, "결과 추적 대기 중");
+});
+
+test("offline-only CSV re-upload with overwrite is idempotent (no zero-spike sawtooth, no duplicate dates)", async () => {
+  const server = createTestServer();
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "idem-owner",
+    input: {
+      store_name: "오프라인 90일 매장",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  const storeId = created.value.store.store_id;
+
+  const lines = ["business_date,channel,gross_sales_amount,order_count"];
+  let expectedSales = 0;
+  let expectedOrders = 0;
+  for (let i = 0; i < 90; i += 1) {
+    const date = new Date(Date.UTC(2026, 1, 1) + i * 86400000).toISOString().slice(0, 10);
+    const orders = 76 + (i % 13);
+    const gross = 1180000 + (i % 11) * 12500;
+    expectedSales += gross;
+    expectedOrders += orders;
+    lines.push(`${date},offline,${gross},${orders}`);
+  }
+  const csvText = lines.join("\n");
+
+  const first = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "idem-owner",
+    input: {
+      source_type: "generic_pos_csv",
+      parser_type: "standard_daily_revenue_csv",
+      original_filename: "offline_90.csv",
+      file_type: "csv",
+      csv_text: csvText,
+      metadata: { overwrite_mode: "by_date_channel" },
+    },
+  });
+  assert.equal(first.statusCode, 201);
+  assert.equal(first.value.upload.accepted_count, 90);
+
+  const briefs1 = await requestJson({ server, method: "GET", routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`, authSub: "idem-owner" });
+  const series1 = briefs1.value.briefs[0].daily_series;
+  const summary1 = briefs1.value.briefs[0].revenue_summary;
+
+  const second = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "idem-owner",
+    input: {
+      source_type: "generic_pos_csv",
+      parser_type: "standard_daily_revenue_csv",
+      original_filename: "offline_90.csv",
+      file_type: "csv",
+      csv_text: csvText,
+      metadata: { overwrite_mode: "by_date_channel" },
+    },
+  });
+  assert.equal(second.statusCode, 201);
+
+  const briefs2 = await requestJson({ server, method: "GET", routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`, authSub: "idem-owner" });
+  const series2 = briefs2.value.briefs[0].daily_series;
+  const summary2 = briefs2.value.briefs[0].revenue_summary;
+
+  // One point per business_date, no duplicate dates, no false zero filler.
+  assert.equal(series2.length, 90);
+  const uniqueDates = new Set(series2.map((row) => row.date));
+  assert.equal(uniqueDates.size, 90);
+  for (const point of series2) {
+    assert.ok(point.net_sales > 0, `expected non-zero net_sales for ${point.date}`);
+  }
+
+  // Idempotent: totals are stable across the two uploads.
+  assert.equal(series1.length, series2.length);
+  assert.equal(summary1.net_sales_total, summary2.net_sales_total);
+  assert.equal(summary1.order_count_total, summary2.order_count_total);
+  assert.equal(summary2.order_count_total, expectedOrders);
+  assert.equal(summary2.net_sales_total, expectedSales);
+  // AOV must be derived from totals, not row-AOV averages.
+  assert.equal(summary2.avg_ticket, Math.round(expectedSales / expectedOrders));
+});
+
+test("overwrite_mode replaces values for the same (date, canonical channel)", async () => {
+  const server = createTestServer();
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "replace-owner",
+    input: {
+      store_name: "갱신 매장",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  const storeId = created.value.store.store_id;
+
+  await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "replace-owner",
+    input: {
+      source_type: "manual_template",
+      daily_rows: [{ business_date: "2026-05-08", channel: "offline", gross_sales_amount: 1000000, net_sales_amount: 1000000, order_count: 70 }],
+      metadata: { overwrite_mode: "by_date_channel" },
+    },
+  });
+  await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "replace-owner",
+    input: {
+      source_type: "manual_template",
+      daily_rows: [{ business_date: "2026-05-08", channel: "offline", gross_sales_amount: 2000000, net_sales_amount: 2000000, order_count: 140 }],
+      metadata: { overwrite_mode: "by_date_channel" },
+    },
+  });
+
+  const briefs = await requestJson({ server, method: "GET", routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`, authSub: "replace-owner" });
+  const may8 = briefs.value.briefs[0].daily_series.filter((row) => row.date === "2026-05-08");
+  assert.equal(may8.length, 1);
+  assert.equal(may8[0].net_sales, 2000000);
+  assert.equal(may8[0].order_count, 140);
+});
+
+test("channel canonicalization: offline_pos / 오프라인 / offline collapse onto one canonical channel under overwrite", async () => {
+  const server = createTestServer();
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "canonical-owner",
+    input: {
+      store_name: "정규화 매장",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  const storeId = created.value.store.store_id;
+
+  // 1) Legacy "offline_pos" row.
+  await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "canonical-owner",
+    input: {
+      source_type: "manual_template",
+      daily_rows: [{ business_date: "2026-05-08", channel: "offline_pos", gross_sales_amount: 100000, net_sales_amount: 100000, order_count: 10 }],
+    },
+  });
+  // 2) Korean "오프라인" row with overwrite — must supersede the legacy row.
+  await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "canonical-owner",
+    input: {
+      source_type: "manual_template",
+      daily_rows: [{ business_date: "2026-05-08", channel: "오프라인", gross_sales_amount: 222222, net_sales_amount: 222222, order_count: 22 }],
+      metadata: { overwrite_mode: "by_date_channel" },
+    },
+  });
+  // 3) English "offline" row with overwrite — must supersede the Korean one.
+  await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "canonical-owner",
+    input: {
+      source_type: "manual_template",
+      daily_rows: [{ business_date: "2026-05-08", channel: "offline", gross_sales_amount: 333333, net_sales_amount: 333333, order_count: 33 }],
+      metadata: { overwrite_mode: "by_date_channel" },
+    },
+  });
+
+  const briefs = await requestJson({ server, method: "GET", routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`, authSub: "canonical-owner" });
+  const may8 = briefs.value.briefs[0].daily_series.filter((row) => row.date === "2026-05-08");
+  // All three channel aliases collapsed into a single canonical "offline"
+  // series row — only the latest values survive.
+  assert.equal(may8.length, 1);
+  assert.equal(may8[0].net_sales, 333333);
+  assert.equal(may8[0].order_count, 33);
+});
+
+test("Korean CSV headers and channel values parse and register", async () => {
+  const server = createTestServer();
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "ko-csv-owner",
+    input: {
+      store_name: "한국어 CSV 매장",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  const storeId = created.value.store.store_id;
+
+  const csvText = [
+    "영업일자,판매채널,총매출,거래건수",
+    "2026-05-08,오프라인,1250000,82",
+    "2026-05-09,오프라인,1180000,76",
+  ].join("\n");
+
+  const upload = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "ko-csv-owner",
+    input: {
+      source_type: "generic_pos_csv",
+      parser_type: "standard_daily_revenue_csv",
+      original_filename: "ko.csv",
+      file_type: "csv",
+      csv_text: csvText,
+    },
+  });
+  assert.equal(upload.statusCode, 201);
+  assert.equal(upload.value.upload.accepted_count, 2);
+
+  const briefs = await requestJson({ server, method: "GET", routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/briefs`, authSub: "ko-csv-owner" });
+  const series = briefs.value.briefs[0].daily_series;
+  assert.equal(series.length, 2);
+  const may8 = series.find((row) => row.date === "2026-05-08");
+  const may9 = series.find((row) => row.date === "2026-05-09");
+  assert.equal(may8.net_sales, 1250000);
+  assert.equal(may8.order_count, 82);
+  assert.equal(may9.net_sales, 1180000);
+  assert.equal(may9.order_count, 76);
+});
+
+test("English standard CSV continues to register (backwards compatible)", async () => {
+  const server = createTestServer();
+  const created = await requestJson({
+    server,
+    method: "POST",
+    routePath: "/api/v1/stores",
+    authSub: "en-csv-owner",
+    input: {
+      store_name: "English CSV store",
+      business_category: "CS100010",
+      address_text: "서울 마포구 합정동",
+      address_source: "search",
+      address_selected: true,
+    },
+  });
+  const storeId = created.value.store.store_id;
+
+  const csvText = [
+    "business_date,channel,gross_sales_amount,order_count",
+    "2026-05-08,offline,1250000,82",
+  ].join("\n");
+
+  const upload = await requestJson({
+    server,
+    method: "POST",
+    routePath: `/api/v1/stores/${encodeURIComponent(storeId)}/revenue/uploads`,
+    authSub: "en-csv-owner",
+    input: {
+      source_type: "generic_pos_csv",
+      parser_type: "standard_daily_revenue_csv",
+      original_filename: "en.csv",
+      file_type: "csv",
+      csv_text: csvText,
+    },
+  });
+  assert.equal(upload.statusCode, 201);
+  assert.equal(upload.value.upload.accepted_count, 1);
 });
 
 async function requestJson({ server, method, routePath, input, authSub, authEmail }) {

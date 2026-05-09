@@ -26,7 +26,7 @@ const {
 const { collectStorePublicContext, planStorePublicContextCollection, normalizeContextCollectionReason } = require("./context-collectors");
 const { loadPublicContextCredentials } = require("./public-context-credentials");
 const { loadRevenueConnectorCredentials } = require("./connector-credentials");
-const { previewRevenueUploadPayload } = require("./revenue-upload-parsers");
+const { previewRevenueUploadPayload, channelAliasesFor } = require("./revenue-upload-parsers");
 const { VALID_ACTION_STATUSES } = require("./revenue-ops-store");
 
 const DEFAULT_DEMO_PROFILE = m6DemoDataset.stores[0];
@@ -1514,13 +1514,18 @@ function createAuroraRevenueOpsSaasStore({
         if (row.kind === "daily") {
           const value = normalized.value;
           if (overwriteMode === "by_date_channel") {
+            // Match every alias that maps to the same canonical channel so
+            // legacy rows stored as "offline_pos" / "오프라인" / "delivery_baemin"
+            // are superseded by a new canonical row, not duplicated alongside it.
+            const aliases = channelAliasesFor(value.channel);
             await client.query(
               `
                 DELETE FROM revenue_daily_facts
-                WHERE store_id = $1 AND business_date = $2 AND channel = $3
+                WHERE store_id = $1 AND business_date = $2
+                  AND channel = ANY($3::text[])
                   AND source_upload_id <> $4
               `,
-              [storeId, value.business_date, value.channel, upload.upload_id],
+              [storeId, value.business_date, aliases, upload.upload_id],
             );
           }
           await client.query(

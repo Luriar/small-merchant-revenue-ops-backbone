@@ -43,7 +43,7 @@ test("delivery CSV parser normalizes Baemin/CoupangEats settlement fields withou
 
   assert.equal(preview.parser_type, "baemin_orders_csv");
   assert.equal(preview.quality_summary.accepted_count, 1);
-  assert.equal(preview.daily_rows[0].channel, "delivery_baemin");
+  assert.equal(preview.daily_rows[0].channel, "baemin");
   assert.equal(preview.daily_rows[0].business_date, "2026-05-01");
   assert.equal(preview.daily_rows[0].gross_sales_amount, 128000);
   assert.equal(preview.daily_rows[0].delivery_fee_amount, 18000);

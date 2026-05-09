@@ -1,9 +1,9 @@
 const DAILY_ALIASES = {
   business_date: ["business_date", "date", "payment_date", "order_date", "영업일", "영업일자", "일자", "날짜", "결제일", "결제일자", "주문일", "주문일자", "매출일자"],
-  channel: ["channel", "sales_channel", "채널"],
-  gross_sales_amount: ["gross_sales_amount", "gross_amount", "sales_amount", "sale_amount", "총매출", "총매출액", "총 결제금액", "총 결제 금액", "결제금액", "결제 금액", "매출금액", "판매금액"],
+  channel: ["channel", "sales_channel", "판매채널", "채널"],
+  gross_sales_amount: ["gross_sales_amount", "gross_amount", "sales_amount", "sale_amount", "총매출", "총매출액", "매출", "매출액", "총 결제금액", "총 결제 금액", "결제금액", "결제 금액", "매출금액", "판매금액"],
   net_sales_amount: ["net_sales_amount", "net_amount", "settlement_amount", "순매출", "순매출액", "실매출", "실매출액", "정산금액", "정산 금액", "입금예정금액", "입금예정액"],
-  order_count: ["order_count", "orders", "transaction_count", "payment_count", "주문수", "주문 건수", "주문건수", "거래수", "거래건수", "결제건수", "판매건수"],
+  order_count: ["order_count", "orders", "transaction_count", "payment_count", "주문수", "주문 건수", "주문건수", "주문건수", "거래수", "거래건수", "건수", "결제건수", "판매건수"],
   cancel_count: ["cancel_count", "cancellation_count", "cancellations", "취소수", "취소 건수", "취소건수"],
   cancellation_count: ["cancellation_count", "cancel_count", "cancellations", "취소수", "취소 건수", "취소건수"],
   refund_amount: ["refund_amount", "refunds", "환불금액", "환불 금액"],
@@ -213,16 +213,23 @@ function normalizeDailyRow(row) {
   if (orderCount < 0) {
     return rejected("invalid_order_count", "order_count must be zero or greater");
   }
+  const gross = money(row.gross_sales_amount);
+  const net = money(row.net_sales_amount);
+  const refund = money(row.refund_amount);
+  const discount = money(row.discount_amount);
+  // When CSV provides only gross_sales_amount, fall back to gross (minus
+  // discount/refund when present) so chart/KPI/AOV don't compute from zeros.
+  const netSales = net > 0 ? net : Math.max(0, gross - discount - refund);
   return accepted({
     business_date: businessDate,
-    channel: text(row.channel) || "offline_pos",
-    gross_sales_amount: money(row.gross_sales_amount),
-    net_sales_amount: money(row.net_sales_amount),
+    channel: canonicalChannel(row.channel),
+    gross_sales_amount: gross,
+    net_sales_amount: netSales,
     order_count: orderCount,
     cancel_count: int(row.cancel_count ?? row.cancellation_count, 0),
     cancellation_count: int(row.cancellation_count ?? row.cancel_count, 0),
-    refund_amount: money(row.refund_amount),
-    discount_amount: money(row.discount_amount),
+    refund_amount: refund,
+    discount_amount: discount,
     delivery_fee_amount: money(row.delivery_fee_amount),
     commission_amount: money(row.commission_amount),
     settlement_amount: money(row.settlement_amount),
@@ -244,7 +251,7 @@ function normalizeItemRow(row) {
   }
   return accepted({
     business_date: businessDate,
-    channel: text(row.channel) || "offline_pos",
+    channel: canonicalChannel(row.channel),
     item_name: itemName,
     item_category: text(row.item_category) || null,
     quantity: int(row.quantity, 0),
@@ -252,6 +259,55 @@ function normalizeItemRow(row) {
     discount_amount: money(row.discount_amount),
     net_sales_amount: money(row.net_sales_amount),
   });
+}
+
+// Map every alias (English, legacy, Korean) onto a small canonical set. All
+// downstream code (overwrite key, daily_series builder, KPI aggregation,
+// export) compares against this canonical value, so an "offline" CSV upload
+// and a "오프라인" Korean upload and a legacy "offline_pos" manual entry all
+// land on the same internal channel.
+const CHANNEL_ALIASES = {
+  offline: ["offline", "offline_pos", "pos", "store", "in_store", "오프라인", "매장", "매장판매", "홀", "홀매출"],
+  baemin: ["baemin", "delivery_baemin", "배민", "배달의민족"],
+  coupangeats: ["coupangeats", "coupang_eats", "delivery_coupangeats", "쿠팡이츠", "쿠팡"],
+  naver: ["naver", "네이버", "네이버주문", "네이버예약"],
+  online: ["online", "온라인"],
+};
+
+const CHANNEL_ALIAS_LOOKUP = (() => {
+  const map = new Map();
+  for (const [canonical, aliases] of Object.entries(CHANNEL_ALIASES)) {
+    map.set(canonical, canonical);
+    for (const alias of aliases) {
+      map.set(normalizeChannelKey(alias), canonical);
+    }
+  }
+  return map;
+})();
+
+function normalizeChannelKey(value) {
+  return String(value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function canonicalChannel(value) {
+  const trimmed = text(value);
+  if (!trimmed) return "offline";
+  const key = normalizeChannelKey(trimmed);
+  if (CHANNEL_ALIAS_LOOKUP.has(key)) return CHANNEL_ALIAS_LOOKUP.get(key);
+  // Preserve unknown channels (e.g. "delivery_provider") rather than forcing
+  // them into "offline" — keeps non-target channels groupable but isolated.
+  return key || "offline";
+}
+
+// Aliases (raw stored values) that canonicalize to the same channel. Stores
+// pass these to their supersede WHERE so legacy rows (e.g. "offline_pos")
+// are dropped when a new upload writes the canonical "offline" row.
+function channelAliasesFor(canonical) {
+  const aliases = new Set([canonical]);
+  for (const [c, list] of Object.entries(CHANNEL_ALIASES)) {
+    if (c === canonical) for (const alias of list) aliases.add(alias);
+  }
+  return Array.from(aliases);
 }
 
 function sanitizeRevenueRow(row) {
@@ -354,4 +410,6 @@ module.exports = {
   DELIVERY_SOURCE_TYPES,
   previewRevenueUploadPayload,
   parseCsv,
+  canonicalChannel,
+  channelAliasesFor,
 };
