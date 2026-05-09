@@ -395,7 +395,7 @@ test("Seoul collector skips missing endpoint and normalizes mocked commercial be
   assert.equal(completed.observations[0].source_ref.includes("seoul-key"), false);
 });
 
-test("Naver search trend keywords prefer human category label and region fallback", async () => {
+test("Naver search trend keywords are category/menu only — no store name, region, or business code", async () => {
   const store = {
     store_id: "store-yeouido-western",
     store_name: "르뵈프",
@@ -414,7 +414,8 @@ test("Naver search trend keywords prefer human category label and region fallbac
 
   let requestBody = null;
   const trend = await collectNaverSearchTrend(store, credentials, {
-    latestRevenueDate: "2026-05-06",
+    latestRevenueDate: "2024-06-15",
+    now: () => new Date("2024-06-20T00:00:00.000Z"),
     fetchImpl: async (_url, options) => {
       requestBody = JSON.parse(options.body);
       return {
@@ -424,8 +425,8 @@ test("Naver search trend keywords prefer human category label and region fallbac
           results: [{
             title: "store_category_context",
             data: [
-              { period: "2026-05-05", ratio: 30.1 },
-              { period: "2026-05-06", ratio: 35.2 },
+              { period: "2024-06-14", ratio: 30.1 },
+              { period: "2024-06-15", ratio: 35.2 },
             ],
           }],
         }),
@@ -435,9 +436,14 @@ test("Naver search trend keywords prefer human category label and region fallbac
 
   assert.equal(trend.status, "completed");
   const keywords = requestBody.keywordGroups[0].keywords;
+  // Category/menu keywords should be present (western family).
+  assert.ok(keywords.includes("양식"), `expected "양식" in ${JSON.stringify(keywords)}`);
+  assert.ok(keywords.some((k) => k.includes("파스타")), `expected a "파스타" keyword in ${JSON.stringify(keywords)}`);
+  // Store name, region strings, and business code must NOT enter DataLab keywords.
+  assert.equal(keywords.some((k) => k.includes("르뵈프")), false);
+  assert.equal(keywords.some((k) => k.includes("여의도")), false);
+  assert.equal(keywords.some((k) => k.includes("영등포")), false);
   assert.equal(keywords.includes("CS100004"), false);
-  assert.equal(keywords.includes("여의도동 양식") || keywords.includes("여의도 양식"), true);
-  assert.equal(keywords.some((keyword) => keyword.includes("파스타")), true);
 });
 
 test("Naver collectors normalize local search and DataLab without leaking credentials", async () => {
@@ -651,6 +657,72 @@ test("Naver DataLab 200 with empty data is completed (not failed) so low-volume 
   assert.equal(result.status, "completed");
   assert.equal(result.observation_count, 0);
   assert.equal(result.raw_summary?.data_points, 0);
+});
+
+test("Naver DataLab unknown category skips with missing_safe_datalab_keywords (not failed)", async () => {
+  const store = { store_id: "store-x", region: "서울", business_category: "ZZUNKNOWN" };
+  const credentials = { naverSearchTrendClientId: "trend-id", naverSearchTrendClientSecret: "trend-secret" };
+  let called = false;
+  const result = await collectNaverSearchTrend(store, credentials, {
+    latestRevenueDate: "2024-06-15",
+    now: () => new Date("2024-06-20T00:00:00.000Z"),
+    fetchImpl: async () => {
+      called = true;
+      return { ok: true, status: 200, json: async () => ({ results: [] }) };
+    },
+  });
+  // "general" family keywords still apply (맛집/음식점), so we don't skip in this case.
+  // When even general keywords fail safety filters, we must skip with the right reason.
+  assert.equal(called, true);
+  assert.notEqual(result.status, "failed");
+});
+
+test("Naver DataLab retries with safest broad keyword on http_400 and reports fallback_used=true", async () => {
+  const store = { store_id: "store-cafe", region: "서울 성동구 성수동", business_category: "CS100010" };
+  const credentials = { naverSearchTrendClientId: "trend-id", naverSearchTrendClientSecret: "trend-secret" };
+  const requestBodies = [];
+  let call = 0;
+  const result = await collectNaverSearchTrend(store, credentials, {
+    latestRevenueDate: "2024-06-15",
+    now: () => new Date("2024-06-20T00:00:00.000Z"),
+    fetchImpl: async (_url, options) => {
+      requestBodies.push(JSON.parse(options.body));
+      call += 1;
+      if (call === 1) {
+        return { ok: false, status: 400, text: async () => "{\"errorMessage\":\"bad keywordGroups\"}", json: async () => ({}) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [{ data: [{ period: "2024-06-14", ratio: 22 }, { period: "2024-06-15", ratio: 30 }] }] }),
+      };
+    },
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(call, 2);
+  // Retry body must be the broadest single safe keyword for the cafe family.
+  assert.deepEqual(requestBodies[1].keywordGroups[0].keywords, ["카페"]);
+  assert.equal(result.raw_summary?.fallback_used, true);
+  assert.equal(result.observations[0].metadata.fallback_used, true);
+});
+
+test("Naver DataLab cafe-like store produces curated category/menu keywords", async () => {
+  const store = { store_id: "store-cafe", region: "서울 성동구 성수동", business_category: "CS100010" };
+  const credentials = { naverSearchTrendClientId: "trend-id", naverSearchTrendClientSecret: "trend-secret" };
+  let captured = null;
+  await collectNaverSearchTrend(store, credentials, {
+    latestRevenueDate: "2024-06-15",
+    now: () => new Date("2024-06-20T00:00:00.000Z"),
+    fetchImpl: async (_url, options) => {
+      captured = JSON.parse(options.body);
+      return { ok: true, status: 200, json: async () => ({ results: [{ data: [] }] }) };
+    },
+  });
+  const keywords = captured.keywordGroups[0].keywords;
+  assert.ok(keywords.includes("카페") || keywords.includes("커피"), `expected cafe-family keyword in ${JSON.stringify(keywords)}`);
+  // No store-name / region / address noise.
+  assert.equal(keywords.some((k) => k.includes("성수동")), false);
+  assert.equal(keywords.some((k) => k.length > 12), false);
 });
 
 test("Naver DataLab http_400 captures safe debug summary without leaking credentials", async () => {

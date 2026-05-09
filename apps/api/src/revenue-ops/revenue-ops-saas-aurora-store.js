@@ -1243,7 +1243,7 @@ function createAuroraRevenueOpsSaasStore({
     // Pull facts, candidates, evidence, actions, and the latest upload row in
     // parallel so /briefs is composed deterministically from uploaded data
     // — never the static export fallback.
-    const [factsResult, candidatesResult, evidenceResult, actionsResult, latestUploadResult] = await Promise.all([
+    const [factsResult, candidatesResult, evidenceResult, actionsResult, latestUploadResult, latestCollectorRunResult] = await Promise.all([
       query(
         `SELECT business_date, net_sales_amount, gross_sales_amount, order_count
          FROM revenue_daily_facts
@@ -1278,6 +1278,14 @@ function createAuroraRevenueOpsSaasStore({
          LIMIT 1`,
         [storeId],
       ),
+      query(
+        `SELECT *
+         FROM context_collector_runs
+         WHERE target_store_id = $1
+         ORDER BY COALESCE(completed_at, created_at) DESC
+         LIMIT 1`,
+        [storeId],
+      ).catch(() => ({ rows: [] })),
     ]);
 
     const composed = composeBriefFromUploadedFacts({
@@ -1288,6 +1296,7 @@ function createAuroraRevenueOpsSaasStore({
       causeEvidence: evidenceResult.rows,
       actions: actionsResult.rows,
       latestUpload: latestUploadResult.rows[0] ?? null,
+      latestCollectorRun: latestCollectorRunResult.rows[0] ?? null,
     });
     return composed ? [composed] : [];
   }

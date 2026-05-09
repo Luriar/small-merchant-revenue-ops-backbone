@@ -1500,11 +1500,8 @@ export function RevenueCockpitApp() {
     let cancelled = false;
     const token = getStoredCognitoToken();
     if (!token) {
-      setStores([]);
-      setSelectedStoreId(null);
-      setStoreNotice(lang === 'ko' ? '로그인이 만료되었습니다. 다시 로그인해주세요.' : 'Login expired. Please sign in again.');
-      setApiNotice('auth-expired');
-      setStoresFirstLoadComplete(true);
+      markAuthExpired();
+      setStoreNotice(null);
       return;
     }
 
@@ -1531,13 +1528,14 @@ export function RevenueCockpitApp() {
       .catch(error => {
         if (cancelled) return;
         console.error('Revenue Cockpit store list API failed.', error);
-        setStores([]);
-        setSelectedStoreId(null);
         const authExpired = error instanceof RevenueApiError && error.status === 401;
-        setStoreNotice(authExpired
-          ? (lang === 'ko' ? '로그인이 만료되었습니다. 다시 로그인해주세요.' : 'Login expired. Please sign in again.')
-          : (lang === 'ko' ? '가게 목록을 불러오지 못했습니다.' : 'Could not load stores.'));
-        if (authExpired) setApiNotice('auth-expired');
+        if (authExpired) {
+          markAuthExpired();
+        } else {
+          setStores([]);
+          setSelectedStoreId(null);
+          setStoreNotice(lang === 'ko' ? '가게 목록을 불러오지 못했습니다.' : 'Could not load stores.');
+        }
       })
       .finally(() => {
         if (!cancelled) {
@@ -1751,16 +1749,39 @@ export function RevenueCockpitApp() {
         setStatuses(next.defaultStatuses);
         setApiNotice(null);
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled) return;
-        setScenario(SCENARIO);
-        setLatestPipelineMeta(null);
-        setStatuses({ ...DEFAULT_STATUSES });
-        setApiNotice('fallback');
+        // Distinguish 401/Unauthorized from generic API errors so the user
+        // sees a re-login affordance instead of a misleading "demo fallback".
+        const authExpired = error instanceof RevenueApiError && error.status === 401;
+        if (authExpired) {
+          markAuthExpired();
+        } else {
+          setScenario(SCENARIO);
+          setLatestPipelineMeta(null);
+          setStatuses({ ...DEFAULT_STATUSES });
+          setApiNotice('fallback');
+        }
       });
 
     return () => { cancelled = true; };
   }, [apiMode, authReloadTick, selectedStoreId]);
+
+  // Centralized 401 handler: clear stale Cognito tokens, drop scenario back
+  // to demo placeholder, and surface the global auth-expired banner so the
+  // user can re-login from any tab. The chrome-bar login button reappears
+  // because `authSession` is now null.
+  function markAuthExpired() {
+    clearStoredAuthSession();
+    setAuthSession(null);
+    setStores([]);
+    setSelectedStoreId(null);
+    setLatestPipelineMeta(null);
+    setScenario(SCENARIO);
+    setStatuses({ ...DEFAULT_STATUSES });
+    setApiNotice('auth-expired');
+    setStoresFirstLoadComplete(true);
+  }
 
   function clearStoreManagementErrorTimer() {
     if (storeManagementErrorTimer.current !== null) {
@@ -2205,7 +2226,37 @@ export function RevenueCockpitApp() {
           <span>{lang === 'ko' ? '합성 데이터이며 실제 가맹점 매출이 아닙니다.' : 'Synthetic data, not real merchant revenue.'}</span>
         </div>
       )}
-      {noticeCopy && !showInitialSkeleton && (
+      {/* Persistent session-expired banner — shown across all cockpit tabs
+          when the API returns 401. Re-login button reuses the same auth
+          popover the chrome bar exposes; logout clears any stale state. */}
+      {apiNotice === 'auth-expired' && !showInitialSkeleton && (
+        <div className="rc-api-notice" role="alert" style={{ alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <Icon name="shield" size={12}/>
+          <span style={{ flex: 1, minWidth: 200 }}>
+            {lang === 'ko'
+              ? '세션이 만료되었습니다. 다시 로그인해 주세요.'
+              : 'Your session has expired. Please sign in again.'}
+          </span>
+          <button
+            type="button"
+            className="rc-store-button rc-store-button-primary"
+            onClick={() => {
+              setApiNotice(null);
+              setAuthPopoverOpen(true);
+            }}
+          >
+            {lang === 'ko' ? '다시 로그인' : 'Sign in again'}
+          </button>
+          <button
+            type="button"
+            className="rc-store-button"
+            onClick={handleLogout}
+          >
+            {lang === 'ko' ? '로그아웃' : 'Log out'}
+          </button>
+        </div>
+      )}
+      {noticeCopy && apiNotice !== 'auth-expired' && !showInitialSkeleton && (
         <div className="rc-api-notice">
           <Icon name="shield" size={12}/>
           <span>{noticeCopy}</span>

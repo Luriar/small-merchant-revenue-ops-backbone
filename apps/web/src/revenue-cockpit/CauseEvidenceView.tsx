@@ -6,18 +6,30 @@ import type { RcLang, CauseCandidate, Scenario } from './revenueCockpitTypes';
 // Per-cause source/observed-period footer. The bottom disclaimer still
 // carries the single causality caveat for the screen, so this footer is
 // purely a metadata strip — what data was observed, when, and from where.
+// V1.2 closure: prefer backend evidence source_name + collector metadata
+// over hardcoded UI labels. Fall back to id-based labels only when the
+// brief did not surface real source metadata.
 function deriveCauseSourceLine(cause: CauseCandidate, scenario: Scenario, lang: RcLang): string | null {
   const series = scenario.uploadedDailySeries ?? [];
   const period = series.length > 0
     ? `${series[0].date} ~ ${series[series.length - 1].date}`
     : null;
+  const evidenceSource = (cause.sources && cause.sources.length > 0) ? cause.sources[0] : null;
+  // If the backend sent a real source_name (e.g., "기상청 ASOS",
+  // "Korean Astronomy Holiday API", "Seoul Open Data local event",
+  // "Naver DataLab"), prefer that over hardcoded labels.
+  if (evidenceSource && !/manual\s*seed|synthetic_seed/i.test(evidenceSource)) {
+    return period && !evidenceSource.includes(' · ')
+      ? `${evidenceSource} · ${period}`
+      : evidenceSource;
+  }
   const id = cause.id;
   if (id === 'weather') {
     const kma = scenario.reliability.sources.find((s) => s.id === 'kma_weather');
     const status = kma?.status === 'ok'
       ? (lang === 'ko' ? '정상' : 'Healthy')
       : kma?.status === 'failed'
-        ? (lang === 'ko' ? '확인 필요' : 'Action needed')
+        ? (lang === 'ko' ? '확인 필요' : 'Needs attention')
         : kma?.status === 'skipped'
           ? (lang === 'ko' ? '미연결' : 'Not connected')
           : (lang === 'ko' ? '참고 지표' : 'Reference signal');
@@ -32,7 +44,6 @@ function deriveCauseSourceLine(cause: CauseCandidate, scenario: Scenario, lang: 
   if (id === 'context') {
     return lang === 'ko' ? '공휴일/요일/시즌 · 계산된 캘린더 맥락' : 'Holiday / weekday / season · computed calendar context';
   }
-  // Fallback: show uploaded sales window as the observed period.
   if (period) {
     return lang === 'ko' ? `업로드 매출 데이터 · ${period}` : `Uploaded sales data · ${period}`;
   }

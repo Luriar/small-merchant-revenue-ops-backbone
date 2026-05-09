@@ -1083,7 +1083,11 @@ async function collectNaverSearchTrend(store, credentials = {}, {
   const clientSecret = credentials.naverSearchTrendClientSecret || credentials.naverClientSecret;
   if (!clientId || !clientSecret) return withDuration(skipped(name, "Naver DataLab", "missing_key"), startedAt);
   const rawKeywords = buildNaverSearchTrendKeywords(store);
-  if (rawKeywords.length === 0) return withDuration(skipped(name, "Naver DataLab", "missing_query_context"), startedAt);
+  if (rawKeywords.length === 0) {
+    // No safe category/menu keyword could be derived (e.g., unknown
+    // business category). Skip honestly — never send a noisy fallback.
+    return withDuration(skipped(name, "Naver DataLab", "missing_safe_datalab_keywords"), startedAt);
+  }
   if (typeof fetchImpl !== "function") return withDuration(skipped(name, "Naver DataLab", "fetch_unavailable"), startedAt);
 
   const endpoint = credentials.naverDataLabSearchTrendEndpoint || "https://openapi.naver.com/v1/datalab/search";
@@ -1092,7 +1096,7 @@ async function collectNaverSearchTrend(store, credentials = {}, {
     timeUnit: env.NAVER_DATALAB_TIME_UNIT || null,
     now,
   });
-  if (!requestBody) return withDuration(skipped(name, "Naver DataLab", "missing_query_context"), startedAt);
+  if (!requestBody) return withDuration(skipped(name, "Naver DataLab", "missing_safe_datalab_keywords"), startedAt);
   const sourceRef = `naver_datalab_search:query_hash:${hashText(JSON.stringify(requestBody.keywordGroups))}:${requestBody.startDate}:${requestBody.endDate}`;
   const debugSummary = {
     start_date: requestBody.startDate,
@@ -1103,17 +1107,31 @@ async function collectNaverSearchTrend(store, credentials = {}, {
   };
 
   try {
-    const response = await fetchWithTimeout(endpoint, {
-      method: "POST",
-      fetchImpl,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Naver-Client-Id": clientId,
-        "X-Naver-Client-Secret": clientSecret,
-      },
-      body: JSON.stringify(requestBody),
-      throwOnHttpError: false,
-    }, timeoutMs, { collector_name: name, source_ref: sourceRef });
+    let response = await postNaverDataLab(endpoint, requestBody, { fetchImpl, clientId, clientSecret, timeoutMs, sourceRef, name });
+    let fallbackUsed = false;
+    let activeBody = requestBody;
+    if (!response.ok && response.status === 400) {
+      // Retry once with the broadest safe category keyword for this store.
+      const family = detectStoreCategoryFamily(store);
+      const fallbackKeyword = naverDataLabFallbackKeyword(family);
+      if (fallbackKeyword) {
+        const fallbackBody = buildNaverDataLabRequestBody(store, [fallbackKeyword], {
+          latestRevenueDate,
+          timeUnit: env.NAVER_DATALAB_TIME_UNIT || null,
+          now,
+        });
+        if (fallbackBody) {
+          const retry = await postNaverDataLab(endpoint, fallbackBody, { fetchImpl, clientId, clientSecret, timeoutMs, sourceRef, name });
+          if (retry.ok) {
+            response = retry;
+            activeBody = fallbackBody;
+            fallbackUsed = true;
+          } else {
+            response = retry;
+          }
+        }
+      }
+    }
     if (!response.ok) {
       const errorBodyText = await safeReadBodyText(response);
       const reason = `http_${response.status || "error"}`;
@@ -1122,6 +1140,7 @@ async function collectNaverSearchTrend(store, credentials = {}, {
           ...debugSummary,
           response_status: response.status || null,
           response_body_excerpt: sanitizeNaverErrorExcerpt(errorBodyText, clientId, clientSecret),
+          fallback_used: fallbackUsed,
         },
       }), startedAt);
     }
@@ -1133,7 +1152,7 @@ async function collectNaverSearchTrend(store, credentials = {}, {
       // so the UI can render "수집 완료 / 관측값 없음".
       return withDuration(completed(name, "Naver DataLab", {
         observations: [],
-        raw_summary: { ...debugSummary, result_count: result?.results?.length || 0, data_points: 0 },
+        raw_summary: { ...debugSummary, result_count: result?.results?.length || 0, data_points: 0, fallback_used: fallbackUsed },
       }), startedAt);
     }
     const latest = data[data.length - 1] || {};
@@ -1153,26 +1172,42 @@ async function collectNaverSearchTrend(store, credentials = {}, {
         metric_name: "naver_search_ratio",
         metric_value: latestRatio,
         metric_unit: "relative_ratio",
-        label: "검색 관심도 지표가 매출 변동 구간과 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.",
-        observation_date: latest.period || requestBody.endDate,
+        label: "카테고리/메뉴 검색 수요 맥락이 매출 변동 구간과 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.",
+        observation_date: latest.period || activeBody.endDate,
         region: store.region,
         metadata: {
-          keyword_group_hash: hashText(JSON.stringify(requestBody.keywordGroups)),
-          keyword_count: requestBody.keywordGroups.reduce((sum, group) => sum + group.keywords.length, 0),
-          start_date: requestBody.startDate,
-          end_date: requestBody.endDate,
+          keyword_group_hash: hashText(JSON.stringify(activeBody.keywordGroups)),
+          keyword_count: activeBody.keywordGroups.reduce((sum, group) => sum + group.keywords.length, 0),
+          keywords: activeBody.keywordGroups.flatMap((group) => group.keywords),
+          start_date: activeBody.startDate,
+          end_date: activeBody.endDate,
           ratio_change: ratioChange,
           relative_search_trend_not_absolute_demand: true,
           not_proven_causality: true,
+          fallback_used: fallbackUsed,
         },
       }],
-      raw_summary: { ...debugSummary, result_count: result?.results?.length || 0, data_points: data.length },
+      raw_summary: { ...debugSummary, result_count: result?.results?.length || 0, data_points: data.length, fallback_used: fallbackUsed },
     }), startedAt);
   } catch (error) {
     return withDuration(failed(name, "Naver DataLab", sanitizeErrorReason(error), {
       raw_summary: debugSummary,
     }), startedAt);
   }
+}
+
+async function postNaverDataLab(endpoint, body, { fetchImpl, clientId, clientSecret, timeoutMs, sourceRef, name }) {
+  return fetchWithTimeout(endpoint, {
+    method: "POST",
+    fetchImpl,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Naver-Client-Id": clientId,
+      "X-Naver-Client-Secret": clientSecret,
+    },
+    body: JSON.stringify(body),
+    throwOnHttpError: false,
+  }, timeoutMs, { collector_name: name, source_ref: sourceRef });
 }
 
 // Build a Naver DataLab POST body that conforms to the API spec:
@@ -1768,56 +1803,105 @@ function buildNaverLocalQuery(store = {}) {
   return `${region} ${category}`;
 }
 
+// V1.2 product decision: Naver DataLab keywords are category/menu demand
+// only — no store name, no full address, no test/demo names. Long, noisy,
+// or punctuation-heavy strings are filtered out. Returns the primary
+// keyword array; a separate `naverDataLabFallbackKeyword(family)` returns
+// the safest single-keyword fallback for retry on http_400.
 function buildNaverSearchTrendKeywords(store = {}) {
+  const family = detectStoreCategoryFamily(store);
+  const baseKeywords = NAVER_DATALAB_CATEGORY_KEYWORDS[family] || [];
+  const metadata = store.metadata && typeof store.metadata === "object" && !Array.isArray(store.metadata) ? store.metadata : {};
+  const menuKeywords = Array.isArray(metadata.representative_menu_keywords)
+    ? metadata.representative_menu_keywords.map((value) => sanitizeDataLabKeyword(value)).filter(Boolean)
+    : [];
+  const merged = [];
+  for (const keyword of [...baseKeywords, ...menuKeywords]) {
+    if (!isSafeDataLabKeyword(keyword)) continue;
+    if (!merged.some((existing) => existing.toLowerCase() === keyword.toLowerCase())) {
+      merged.push(keyword);
+    }
+    if (merged.length >= 5) break; // category/menu demand stays compact
+  }
+  return merged;
+}
+
+// Curated, clean category/menu keyword sets. Primary focus is short,
+// commonly-searched Korean category and menu terms — never store names.
+const NAVER_DATALAB_CATEGORY_KEYWORDS = {
+  cafe:     ["카페", "커피", "디저트", "브런치"],
+  bakery:   ["디저트", "베이커리", "빵집", "소금빵"],
+  korean:   ["한식", "맛집", "백반", "밥집"],
+  chinese:  ["중식", "짜장면", "중국집"],
+  japanese: ["일식", "초밥", "라멘"],
+  western:  ["양식", "파스타", "스테이크"],
+  chicken:  ["치킨", "배달치킨"],
+  bunsik:   ["분식", "떡볶이", "김밥"],
+  hof:      ["호프", "맥주", "안주"],
+  fast:     ["패스트푸드", "버거"],
+  general:  ["맛집", "음식점"],
+};
+
+function detectStoreCategoryFamily(store = {}) {
   const metadata = store.metadata && typeof store.metadata === "object" && !Array.isArray(store.metadata) ? store.metadata : {};
   const rawCategory = textValue(store.business_category);
   const categoryLabel = textValue(metadata.business_category_label)
     || textValue(metadata.business_category_label_ko)
     || humanizeBusinessCategory(rawCategory);
-  const category = normalizeSearchCategory(categoryLabel || rawCategory);
-  const region = textValue(store.region) || regionFromAddress(store.address_text);
-  const regionParts = splitKoreanRegion(region);
-  const storeName = normalizeStoreSearchName(textValue(store.store_name));
-  const menuKeywords = Array.isArray(metadata.representative_menu_keywords)
-    ? metadata.representative_menu_keywords.map(textValue).filter(Boolean)
-    : [];
+  const text = `${rawCategory} ${categoryLabel}`.toLowerCase();
+  if (/카페|커피|cafe|coffee|cs100010/i.test(text)) return "cafe";
+  if (/제과|베이커리|빵|bakery|cs100005/i.test(text)) return "bakery";
+  if (/한식|한정식|korean|cs100001/i.test(text)) return "korean";
+  if (/중식|중국|chinese|cs100002/i.test(text)) return "chinese";
+  if (/일식|일본|japanese|sushi|cs100003/i.test(text)) return "japanese";
+  if (/양식|western|파스타|이탈리|italian|french|cs100004/i.test(text)) return "western";
+  if (/치킨|chicken|cs100007/i.test(text)) return "chicken";
+  if (/분식|떡볶이|cs100008/i.test(text)) return "bunsik";
+  if (/호프|hof|호프집|cs100009/i.test(text)) return "hof";
+  if (/패스트|fast\b|cs100006/i.test(text)) return "fast";
+  return "general";
+}
 
-  const keywords = [];
+// Single safest fallback keyword used after a primary http_400. Picks the
+// most-searched broad category term for the family.
+function naverDataLabFallbackKeyword(family) {
+  if (family === "cafe" || family === "bakery") return "카페";
+  if (family === "chicken") return "치킨";
+  if (family === "bunsik") return "분식";
+  if (family === "hof") return "호프";
+  if (family === "korean") return "한식";
+  if (family === "chinese") return "중식";
+  if (family === "japanese") return "일식";
+  if (family === "western") return "양식";
+  return "맛집";
+}
 
-  if (storeName) keywords.push(storeName);
-  if (regionParts.dong && category) keywords.push(`${regionParts.dong} ${category}`);
-  if (regionParts.gu && category) keywords.push(`${regionParts.gu} ${category}`);
-  if (region && category) keywords.push(`${region} ${category}`);
+function sanitizeDataLabKeyword(value) {
+  if (typeof value !== "string") return "";
+  // Strip URLs, punctuation, numbers, and other unsafe chars; keep Hangul,
+  // ASCII letters, and inner spaces. Reject anything too long after strip.
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const cleaned = trimmed
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/[\d㄰-㆏]+/g, (m) => m) // keep digits as-is for now
+    .replace(/[!@#$%^&*()_+={}\[\]\\|;:'",<>./?~`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned;
+}
 
-  if (regionParts.dong) {
-    keywords.push(`${regionParts.dong} 맛집`);
-    if (/양식|western|파스타|이탈리/i.test(categoryLabel || rawCategory)) {
-      keywords.push(`${regionParts.dong} 양식`, `${regionParts.dong} 파스타`, `${regionParts.dong} 레스토랑`);
-    }
-    if (/카페|커피|cafe|coffee/i.test(categoryLabel || rawCategory)) {
-      keywords.push(`${regionParts.dong} 카페`, `${regionParts.dong} 디저트`, `${regionParts.dong} 커피`);
-    }
-    if (/한식|korean/i.test(categoryLabel || rawCategory)) {
-      keywords.push(`${regionParts.dong} 한식`, `${regionParts.dong} 밥집`);
-    }
-    if (/중식|chinese/i.test(categoryLabel || rawCategory)) {
-      keywords.push(`${regionParts.dong} 중식`, `${regionParts.dong} 중국집`);
-    }
-    if (/치킨/i.test(categoryLabel || rawCategory)) {
-      keywords.push(`${regionParts.dong} 치킨`, `${regionParts.dong} 배달`);
-    }
-  }
-
-  keywords.push(...menuKeywords);
-
-  if (category) keywords.push(category);
-
-  return [...new Set(
-    keywords
-      .map((keyword) => keyword.replace(/음식점/g, "").replace(/점$/g, "").replace(/\s+/g, " ").trim())
-      .filter(Boolean)
-      .filter((keyword) => !/^CS\d+$/i.test(keyword))
-  )].slice(0, 20);
+function isSafeDataLabKeyword(value) {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.length > 12) return false;
+  if (/test|demo|sample|seed/i.test(trimmed)) return false;
+  if (/[!@#$%^&*()_+={}\[\]\\|;:'",<>./?~`]/.test(trimmed)) return false;
+  if (/^https?:/i.test(trimmed)) return false;
+  if (/^CS\d+$/i.test(trimmed)) return false;
+  if (/\s.*\s.*\s/.test(trimmed)) return false; // 4+ words = address-like
+  return true;
 }
 
 function humanizeBusinessCategory(category) {

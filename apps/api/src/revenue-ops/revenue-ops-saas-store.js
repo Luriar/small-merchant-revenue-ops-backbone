@@ -940,6 +940,10 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       causeCandidates.some((cand) => cand.cause_candidate_id === row.cause_candidate_id),
     );
     const actions = state.actions.filter((row) => row.store_id === storeId);
+    const latestCollectorRun = latestBy(
+      state.collectorRuns.filter((row) => row.target_store_id === storeId || row.store_id === storeId),
+      "completed_at",
+    ) || latestBy(state.collectorRuns.filter((row) => row.target_store_id === storeId || row.store_id === storeId), "created_at");
     return composeBriefFromUploadedFacts({
       storeId,
       store,
@@ -948,6 +952,7 @@ function createRevenueOpsSaasStore({ data = exportData, clock = () => new Date()
       causeEvidence,
       actions,
       latestUpload,
+      latestCollectorRun,
     });
   }
 
@@ -2102,6 +2107,194 @@ module.exports = {
 // Standalone composer that the Aurora path can call after it has loaded
 // daily facts + cause candidates + evidence + actions for a store.
 
+// ─── V1.2: collector-sourced cause candidates ────────────────────────────
+// Pull collector summaries from a stored collector_run and turn completed
+// collectors with non-zero observations into real-source cause candidates
+// + evidence rows. Failed / observation_count=0 collectors do NOT generate
+// cause candidates. Source metadata (collector_id, collector_status,
+// observed_period, last_collected_at) is attached so the Cause Evidence
+// UI can render the correct source chip without hardcoding.
+
+function extractCollectorSummariesFromRun(run) {
+  if (!run || typeof run !== "object") return [];
+  const metadata = run.metadata && typeof run.metadata === "object" ? run.metadata : {};
+  const collectors = Array.isArray(metadata.collectors) ? metadata.collectors : [];
+  return collectors.filter((c) => c && typeof c === "object");
+}
+
+function buildCollectorSourcedCauseCandidates(collectors, { startDate, endDate } = {}) {
+  const promoted = [];
+  for (const collector of collectors || []) {
+    const status = String(collector.status || "");
+    const observationCount = Number(collector.observation_count || 0);
+    const isCompleted = status === "completed" || status === "ok";
+    if (!isCompleted) continue; // failed / skipped never promotes
+    if (observationCount <= 0) continue; // 0 observations never promotes
+    const promotedItem = collectorToCauseCandidate(collector, { startDate, endDate });
+    if (promotedItem) promoted.push(promotedItem);
+  }
+  return promoted;
+}
+
+function collectorToCauseCandidate(collector, { startDate = null, endDate = null } = {}) {
+  const id = String(collector.name || collector.collector_name || "");
+  if (!id) return null;
+  const causeId = `cause_collector_${id}`;
+  const evidenceId = `evi_collector_${id}`;
+  const lastCollectedAt = collector.collected_at || collector.freshness || null;
+  const observationCount = Number(collector.observation_count || 0);
+  const sharedMetadata = {
+    collector_id: id,
+    collector_status: collector.status,
+    observed_period: startDate && endDate ? `${startDate} ~ ${endDate}` : null,
+    last_collected_at: lastCollectedAt,
+    observation_count: observationCount,
+    not_proven_causality: true,
+  };
+  const baseCandidate = {
+    cause_candidate_id: causeId,
+    candidate_type: null,
+    title: null,
+    summary: null,
+    confidence: "medium",
+    status: "active",
+    metric_name: null,
+    created_from: "context_collector",
+    created_at: lastCollectedAt,
+    updated_at: lastCollectedAt,
+  };
+  const baseEvidence = {
+    evidence_id: evidenceId,
+    cause_candidate_id: causeId,
+    evidence_type: null,
+    strength: "medium",
+    summary: null,
+    source_name: collector.source_name || null,
+    source_ref: collector.source_ref || `collector:${id}`,
+    metric_name: null,
+    metric_value: null,
+    metadata: sharedMetadata,
+    created_at: lastCollectedAt,
+  };
+  if (id === "kma_weather") {
+    return {
+      candidate: { ...baseCandidate,
+        candidate_type: "kma_weather_context",
+        title: "기상청 날씨 맥락",
+        summary: "기상청 ASOS 관측치가 매출 변동 구간과 함께 관측되었습니다.",
+        metric_name: "weather_observation_count",
+      },
+      evidence: { ...baseEvidence,
+        evidence_type: "weather",
+        summary: "기상청 ASOS 관측치가 매출 변동 구간과 함께 관측되었습니다. 인과가 확정된 것은 아닙니다.",
+        metric_name: "weather_observation_count",
+        metric_value: observationCount,
+        source_name: collector.source_name || "기상청 ASOS",
+      },
+    };
+  }
+  if (id === "korean_holiday_calendar") {
+    return {
+      candidate: { ...baseCandidate,
+        candidate_type: "calendar_context",
+        title: "공휴일/요일/시즌 맥락",
+        summary: "공휴일/특일 일정이 매출 기간과 함께 관측되었습니다. 해석에 참고할 수 있습니다.",
+        metric_name: "holiday_count",
+      },
+      evidence: { ...baseEvidence,
+        evidence_type: "calendar",
+        summary: `공휴일/특일 ${observationCount}건이 매출 기간과 함께 관측되었습니다.`,
+        metric_name: "holiday_count",
+        metric_value: observationCount,
+        source_name: collector.source_name || "Korean Astronomy Holiday API",
+      },
+    };
+  }
+  if (id === "local_event_context") {
+    return {
+      candidate: { ...baseCandidate,
+        candidate_type: "local_event_context",
+        title: "지역 이벤트 맥락",
+        summary: "근처 지역 이벤트가 매출 기간과 함께 관측되었습니다. 해석에 참고할 수 있습니다.",
+        metric_name: "matched_event_count",
+      },
+      evidence: { ...baseEvidence,
+        evidence_type: "local_event",
+        summary: `매칭 지역 이벤트 ${observationCount}건이 매출 기간과 함께 관측되었습니다.`,
+        metric_name: "matched_event_count",
+        metric_value: observationCount,
+        source_name: collector.source_name || "Seoul Open Data local event",
+      },
+    };
+  }
+  if (id === "naver_search_trend") {
+    return {
+      candidate: { ...baseCandidate,
+        candidate_type: "search_demand_context",
+        title: "네이버 업종/메뉴 관심도",
+        summary: "카테고리/메뉴 검색 수요가 매출 변화 기간과 함께 관측되었습니다.",
+        metric_name: "naver_search_ratio",
+      },
+      evidence: { ...baseEvidence,
+        evidence_type: "search_demand",
+        summary: "카테고리/메뉴 검색 관심도가 매출 변화 기간과 함께 관측되었습니다.",
+        metric_name: "naver_search_ratio",
+        metric_value: null,
+        source_name: collector.source_name || "Naver DataLab",
+      },
+    };
+  }
+  if (id === "seoul_foot_traffic_proxy") {
+    return {
+      candidate: { ...baseCandidate,
+        candidate_type: "foot_traffic_drop",
+        title: "유동인구 변화 가능성",
+        summary: "서울 열린데이터 생활인구 프록시가 매출 변화 기간과 함께 관측되었습니다.",
+        metric_name: "foot_traffic_proxy_delta_pct",
+      },
+      evidence: { ...baseEvidence,
+        evidence_type: "foot_traffic",
+        summary: "서울 열린데이터 생활인구 프록시가 매출 변화 기간과 함께 관측되었습니다.",
+        metric_name: "foot_traffic_proxy_delta_pct",
+        source_name: collector.source_name || "Seoul Open Data foot traffic",
+      },
+    };
+  }
+  if (id === "seoul_commercial_benchmark") {
+    return {
+      candidate: { ...baseCandidate,
+        candidate_type: "benchmark_downturn",
+        title: "상권 벤치마크 변화 가능성",
+        summary: "서울 열린데이터 상권 벤치마크가 매출 변화 기간과 함께 관측되었습니다.",
+        metric_name: "commercial_area_sales_delta_pct",
+      },
+      evidence: { ...baseEvidence,
+        evidence_type: "benchmark",
+        summary: "서울 열린데이터 상권 벤치마크가 매출 변화 기간과 함께 관측되었습니다.",
+        metric_name: "commercial_area_sales_delta_pct",
+        source_name: collector.source_name || "Seoul Open Data commercial benchmark",
+      },
+    };
+  }
+  if (id === "seoul_store_density_proxy" || id === "naver_local_competitor_search") {
+    return {
+      candidate: { ...baseCandidate,
+        candidate_type: "competition_context",
+        title: "주변 점포 맥락",
+        summary: "주변 동종 점포 신호가 매출 변화 기간과 함께 관측되었습니다.",
+        metric_name: "same_category_store_count",
+      },
+      evidence: { ...baseEvidence,
+        evidence_type: "competition",
+        summary: "주변 동종 점포 신호가 매출 변화 기간과 함께 관측되었습니다.",
+        metric_name: "same_category_store_count",
+        source_name: collector.source_name || (id === "seoul_store_density_proxy" ? "Seoul Open Data store density" : "Naver Local Search"),
+      },
+    };
+  }
+  return null;
+}
+
 // Aggregate daily facts into one row per business_date. Channel-level rows
 // are summed so multi-channel days render as a single chart point and KPI
 // totals stay consistent with the chart. Returns rows sorted ascending by
@@ -2174,6 +2367,7 @@ function composeBriefFromUploadedFacts({
   causeEvidence = [],
   actions = [],
   latestUpload = null,
+  latestCollectorRun = null,
   insufficientThresholdDays = 2,
 }) {
   const normalizedFacts = [...(facts || [])]
@@ -2196,13 +2390,36 @@ function composeBriefFromUploadedFacts({
   const avgTicket = totalOrders > 0 ? Math.round(totalNet / totalOrders) : 0;
   const insufficient = uniqueDates.size < insufficientThresholdDays;
 
+  // V1.2: promote real collector observations into cause candidates so the
+  // brief cites real sources (KMA / 한국천문연구원 특일 API / Seoul Open
+  // Data / Naver DataLab) instead of the seed_rule fallback whenever the
+  // collector has produced matching observations. Seed candidates of the
+  // same evidence_type are then suppressed in the rendered list (state is
+  // not mutated — this only affects the brief view).
+  const collectorSummaries = extractCollectorSummariesFromRun(latestCollectorRun);
+  const promoted = buildCollectorSourcedCauseCandidates(collectorSummaries, { startDate, endDate, totalSales: totalNet });
+  const promotedEvidenceTypes = new Set(promoted.map((p) => p.candidate.candidate_type));
+  const filteredCauseCandidates = (causeCandidates || []).filter((candidate) => {
+    if (candidate.created_from !== "seed_rule") return true;
+    if (candidate.candidate_type === "rainy_day_offline_drop" && promotedEvidenceTypes.has("kma_weather_context")) return false;
+    return true;
+  });
+  const causeCandidatesWithCollectors = [
+    ...promoted.map((p) => p.candidate),
+    ...filteredCauseCandidates,
+  ];
+  const causeEvidenceWithCollectors = [
+    ...promoted.map((p) => p.evidence),
+    ...causeEvidence,
+  ];
+
   const evidenceByCause = new Map();
-  for (const evi of causeEvidence) {
+  for (const evi of causeEvidenceWithCollectors) {
     const key = evi.cause_candidate_id;
     if (!evidenceByCause.has(key)) evidenceByCause.set(key, []);
     evidenceByCause.get(key).push(evi);
   }
-  const qualityCauses = (causeCandidates || [])
+  const qualityCauses = (causeCandidatesWithCollectors || [])
     .filter((row) => row.status !== "superseded")
     .map((candidate) => {
       const rawEvidence = evidenceByCause.get(candidate.cause_candidate_id) || candidate.evidence || [];
