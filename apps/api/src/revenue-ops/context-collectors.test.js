@@ -5,6 +5,7 @@ const {
   collectKakaoStoreLocation,
   collectKoreanHolidayCalendar,
   collectKmaWeather,
+  collectLocalEventContext,
   collectNaverLocalCompetitorSearch,
   collectNaverSearchTrend,
   collectSeoulCommercialBenchmark,
@@ -519,6 +520,73 @@ test("Korean holiday collector parses verified Data.go.kr shape safely", async (
   assert.equal(failed.reason, "service_result_30");
 });
 
+test("Korean holiday collector returns deterministic_calendar fallback when service key is missing", async () => {
+  const fallback = await collectKoreanHolidayCalendar({ store_id: "store-1" }, {}, {
+    latestRevenueDate: "2026-05-08",
+  });
+  assert.equal(fallback.status, "skipped");
+  assert.equal(fallback.reason, "missing_key");
+  assert.equal(fallback.raw_summary?.source_type, "deterministic_calendar");
+  assert.equal(fallback.raw_summary.period_end, "2026-05-08");
+  assert.equal(fallback.raw_summary.weekday_days + fallback.raw_summary.weekend_days, 90);
+  assert.ok(fallback.raw_summary.weekend_share_pct > 0);
+  assert.ok(["spring", "summer", "autumn", "winter"].includes(fallback.raw_summary.season_label));
+  assert.equal(fallback.raw_summary.holiday_count, 0);
+});
+
+test("local_event_context is not_connected when SEOUL_OPEN_DATA_KEY or endpoint is missing", async () => {
+  const noKey = await collectLocalEventContext({ store_id: "store-1", region: "Seoul Seongsu" }, {}, {});
+  assert.equal(noKey.status, "skipped");
+  assert.equal(noKey.reason, "missing_key");
+  const noEndpoint = await collectLocalEventContext(
+    { store_id: "store-1", region: "Seoul Seongsu" },
+    { seoulOpenDataKey: "seoul-key" },
+    {},
+  );
+  assert.equal(noEndpoint.status, "skipped");
+  assert.equal(noEndpoint.reason, "endpoint_not_configured");
+});
+
+test("local_event_context fetches and matches Seoul Open Data events when configured", async () => {
+  const result = await collectLocalEventContext(
+    { store_id: "store-1", region: "Seongsu" },
+    {
+      seoulOpenDataKey: "seoul-secret",
+      seoulLocalEventEndpoint: "culturalEventInfo",
+    },
+    {
+      latestRevenueDate: "2026-05-08",
+      fetchImpl: mockJsonFetch({
+        culturalEventInfo: {
+          row: [
+            {
+              TITLE: "성수 야시장",
+              STRTDATE: "2026-05-04",
+              END_DATE: "2026-05-10",
+              GUNAME: "Seongsu",
+              CODENAME: "축제",
+            },
+            {
+              TITLE: "서대문 콘서트",
+              STRTDATE: "2026-05-06",
+              END_DATE: "2026-05-06",
+              GUNAME: "Seodaemun",
+              CODENAME: "공연",
+            },
+          ],
+        },
+      }),
+    },
+  );
+  assert.equal(result.status, "completed");
+  assert.equal(result.raw_summary.event_count, 2);
+  assert.equal(result.raw_summary.matched_event_count, 1);
+  assert.equal(result.raw_summary.matching_method, "region");
+  assert.equal(result.observations[0].context_type, "local_event");
+  assert.equal(result.observations[0].source_type, "local_event");
+  assert.equal(JSON.stringify(result).includes("seoul-secret"), false);
+});
+
 test("auto live collection falls back safely when all live collectors skip", async () => {
   const result = await collectStorePublicContext({
     store: { store_id: "store-1", region: "Seoul Seongsu", business_category: "cafe" },
@@ -629,7 +697,7 @@ test("live collection supports mixed results, collector filter, and safe source 
   });
 
   assert.equal(result.completed_collector_count, 3);
-  assert.equal(result.skipped_collector_count, 6);
+  assert.equal(result.skipped_collector_count, 7);
   assert.equal(result.failed_collector_count, 1);
   assert.equal(result.timed_out_collector_count, 1);
   assert.equal(result.collectors.find((collector) => collector.name === "seoul_commercial_benchmark").reason, "request_timeout");

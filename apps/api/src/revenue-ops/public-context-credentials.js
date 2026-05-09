@@ -22,6 +22,7 @@ const DIRECT_ENV_KEYS = [
   "SEOUL_COMMERCIAL_SALES_ENDPOINT",
   "SEOUL_FOOT_TRAFFIC_ENDPOINT",
   "SEOUL_STORE_DENSITY_ENDPOINT",
+  "SEOUL_LOCAL_EVENT_ENDPOINT",
 ];
 
 async function loadPublicContextCredentials({
@@ -94,6 +95,7 @@ function normalizePublicContextCredentials(source = {}, credentialSource = "miss
     seoulCommercialSalesEndpoint: trimToNull(source.SEOUL_COMMERCIAL_SALES_ENDPOINT),
     seoulFootTrafficEndpoint: trimToNull(source.SEOUL_FOOT_TRAFFIC_ENDPOINT),
     seoulStoreDensityEndpoint: trimToNull(source.SEOUL_STORE_DENSITY_ENDPOINT),
+    seoulLocalEventEndpoint: trimToNull(source.SEOUL_LOCAL_EVENT_ENDPOINT),
     credentialSource,
   };
 }

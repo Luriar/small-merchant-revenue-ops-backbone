@@ -23,6 +23,7 @@ const COLLECTOR_NAMES = [
   "naver_local_competitor_search",
   "naver_search_trend",
   "korean_holiday_calendar",
+  "local_event_context",
   "toss_place_connector_smoke",
   "delivery_provider_connector_smoke",
 ];
@@ -42,6 +43,7 @@ const DEFAULT_TIMEOUTS = {
   naver_local_competitor_search: 5000,
   naver_search_trend: 5000,
   korean_holiday_calendar: 5000,
+  local_event_context: 5000,
   toss_place_connector_smoke: 5000,
   delivery_provider_connector_smoke: 5000,
   global_budget: 20000,
@@ -68,6 +70,10 @@ function planStorePublicContextCollection({ mode = "auto", env = process.env, cr
     || (credentials?.naverClientId && credentials?.naverClientSecret),
   );
   const hasHoliday = Boolean(env.HOLIDAY_SERVICE_KEY || env.DATA_GO_KR_SERVICE_KEY || env.KMA_SERVICE_KEY || credentials?.holidayServiceKey || credentials?.dataGoKrServiceKey || credentials?.kmaServiceKey);
+  const hasLocalEvent = Boolean(
+    (env.SEOUL_OPEN_DATA_KEY && env.SEOUL_LOCAL_EVENT_ENDPOINT)
+    || (credentials?.seoulOpenDataKey && credentials?.seoulLocalEventEndpoint),
+  );
   const hasTossPlace = Boolean(credentials?.tossPlace?.configured || env.TOSS_PLACE_API_BASE_URL || env.TOSS_PLACE_SECRET_ID || env.TOSS_PLACE_SECRET_PATH);
   const hasDeliveryProvider = Boolean(credentials?.deliveryProvider?.configured || env.DELIVERY_PROVIDER_KIND || env.DELIVERY_PROVIDER_SECRET_ID || env.DELIVERY_PROVIDER_SECRET_PATH);
   const resolvedMode = mode === "auto" ? (liveAvailable ? "live" : "seed") : mode;
@@ -80,6 +86,7 @@ function planStorePublicContextCollection({ mode = "auto", env = process.env, cr
     collectorPlan("naver_local_competitor_search", resolvedMode, hasNaverLocal, "Naver Local Search"),
     collectorPlan("naver_search_trend", resolvedMode, hasNaverTrend, "Naver DataLab"),
     collectorPlan("korean_holiday_calendar", resolvedMode, hasHoliday, "Korean Astronomy Holiday API"),
+    collectorPlan("local_event_context", resolvedMode, hasLocalEvent, "Seoul Open Data local event"),
     connectorPlan("toss_place_connector_smoke", resolvedMode, hasTossPlace, "Toss Place connector smoke"),
     connectorPlan("delivery_provider_connector_smoke", resolvedMode, hasDeliveryProvider, "Delivery provider connector smoke"),
   ];
@@ -199,6 +206,14 @@ async function collectStorePublicContext({
         env,
         latestRevenueDate,
         timeoutMs: remainingTimeout(env.HOLIDAY_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.korean_holiday_calendar, deadlineAt),
+      })
+      : null,
+    shouldRun("local_event_context")
+      ? collectLocalEventContext(store, credentials, {
+        fetchImpl,
+        env,
+        latestRevenueDate,
+        timeoutMs: remainingTimeout(env.LOCAL_EVENT_COLLECTOR_TIMEOUT_MS, DEFAULT_TIMEOUTS.local_event_context, deadlineAt),
       })
       : null,
     shouldRun("toss_place_connector_smoke")
@@ -1135,6 +1150,104 @@ async function collectNaverSearchTrend(store, credentials = {}, {
   }
 }
 
+// Local event / festival collector (V1.2). When SEOUL_OPEN_DATA_KEY and a
+// SEOUL_LOCAL_EVENT_ENDPOINT are both configured, fetch a small page of the
+// Seoul Open Data event dataset and surface event_count + matched events.
+// When either is missing, status is "skipped" with reason "missing_key" /
+// "endpoint_not_configured" — surfaced in the UI as 미연결 / Not connected.
+// Never fabricates events.
+async function collectLocalEventContext(store, credentials = {}, {
+  fetchImpl = globalThis.fetch,
+  env = process.env,
+  latestRevenueDate = null,
+  timeoutMs = DEFAULT_TIMEOUTS.local_event_context,
+} = {}) {
+  const name = "local_event_context";
+  const sourceName = "Seoul Open Data local event";
+  const startedAt = Date.now();
+  const endpoint = credentials.seoulLocalEventEndpoint || env.SEOUL_LOCAL_EVENT_ENDPOINT || null;
+  if (!credentials.seoulOpenDataKey) return withDuration(skipped(name, sourceName, "missing_key"), startedAt);
+  if (!endpoint) return withDuration(skipped(name, sourceName, "endpoint_not_configured"), startedAt);
+  if (typeof fetchImpl !== "function") return withDuration(skipped(name, sourceName, "fetch_unavailable"), startedAt);
+
+  try {
+    const { rows, sourceRef } = await fetchSeoulOpenDataDataset({
+      endpoint,
+      key: credentials.seoulOpenDataKey,
+      baseUrl: credentials.seoulOpenDataBaseUrl,
+      timeoutMs,
+      params: { region: store?.region },
+      fetchImpl,
+    });
+    const referenceDate = isoDate(latestRevenueDate || new Date());
+    const events = (rows || []).map((row) => normalizeLocalEventRow(row, store)).filter(Boolean);
+    const matched = events.filter((event) => isEventNearReference(event, referenceDate, store));
+    if (events.length === 0) {
+      return withDuration(skipped(name, sourceName, "no_result"), startedAt);
+    }
+    return withDuration(completed(name, sourceName, {
+      observations: matched.slice(0, 5).map((event) => ({
+        source_id: "seoul_open_data_local_event",
+        source_name: sourceName,
+        source_type: "local_event",
+        provider: "seoul_open_data",
+        source_url: "https://data.seoul.go.kr/",
+        source_ref: sourceRef,
+        context_type: "local_event",
+        metric_name: "local_event_count",
+        observation_date: event.event_start_date || referenceDate,
+        metric_value: 1,
+        metric_unit: "events",
+        label: `${event.event_name} (${event.event_area || ''})`,
+        region: store?.region || null,
+        metadata: { event_type: event.event_type, source_type: "configured", not_proven_causality: true },
+      })),
+      raw_summary: {
+        event_count: events.length,
+        matched_event_count: matched.length,
+        period_reference_date: referenceDate,
+        matching_method: matched.length > 0 ? "region" : "none",
+      },
+    }), startedAt);
+  } catch (error) {
+    return withDuration(failed(name, sourceName, sanitizeErrorReason(error)), startedAt);
+  }
+}
+
+function normalizeLocalEventRow(row, store) {
+  if (!row || typeof row !== "object") return null;
+  const eventName = row.TITLE || row.SUBJECT || row.EVENT_NM || row.NM || null;
+  if (!eventName) return null;
+  const eventStart = textValue(row.STRTDATE) || textValue(row.START_DATE) || textValue(row.STRT_YMD);
+  const eventEnd = textValue(row.END_DATE) || textValue(row.END_YMD) || eventStart;
+  const eventArea = textValue(row.PLACE) || textValue(row.GUNAME) || textValue(row.AREA) || store?.region || null;
+  return {
+    event_name: String(eventName),
+    event_start_date: eventStart || null,
+    event_end_date: eventEnd || null,
+    event_area: eventArea,
+    event_type: textValue(row.CODENAME) || textValue(row.EVENT_TYPE) || null,
+  };
+}
+
+function isEventNearReference(event, referenceIso, store) {
+  if (!event || !referenceIso) return false;
+  // Match if the event window touches a 30-day band around the reference
+  // date (covers latest sales window) and area/region overlaps store region.
+  const ref = Date.parse(referenceIso);
+  const start = event.event_start_date ? Date.parse(event.event_start_date) : ref;
+  const end = event.event_end_date ? Date.parse(event.event_end_date) : start;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  const bandMs = 30 * 86400000;
+  const overlaps = end >= ref - bandMs && start <= ref + bandMs;
+  if (!overlaps) return false;
+  if (!store?.region || !event.event_area) return overlaps;
+  const region = String(store.region).trim();
+  const area = String(event.event_area).trim();
+  if (!region) return overlaps;
+  return area.includes(region) || region.includes(area);
+}
+
 async function collectKoreanHolidayCalendar(store, credentials = {}, {
   fetchImpl = globalThis.fetch,
   env = process.env,
@@ -1144,7 +1257,15 @@ async function collectKoreanHolidayCalendar(store, credentials = {}, {
   const name = "korean_holiday_calendar";
   const startedAt = Date.now();
   const serviceKey = credentials.holidayServiceKey || credentials.dataGoKrServiceKey || credentials.kmaServiceKey;
-  if (!serviceKey) return withDuration(skipped(name, "Korean Astronomy Holiday API", "missing_key"), startedAt);
+  // When the official holiday API key is unavailable, surface the deterministic
+  // calendar fallback (weekday/weekend/season counts derived from the latest
+  // revenue date) so Data Status still has a real backend collector summary
+  // labelled "deterministic_calendar". Status is "partial" — never claims the
+  // official API ran.
+  if (!serviceKey) {
+    const fallback = buildDeterministicCalendarFallback(name, latestRevenueDate);
+    return withDuration(fallback, startedAt);
+  }
   if (typeof fetchImpl !== "function") return withDuration(skipped(name, "Korean Astronomy Holiday API", "fetch_unavailable"), startedAt);
   const baseDate = isoDate(latestRevenueDate || new Date());
   const { url, sourceRef } = buildHolidayRequestUrl({
@@ -1217,6 +1338,61 @@ async function collectDeliveryProviderConnectorSmoke(store, credentials = {}, { 
     : skipped(name, "Delivery provider connector smoke", result.reason || "not_configured");
   status.observation_count = 0;
   return withDuration(status, startedAt);
+}
+
+// Deterministic calendar fallback for the holiday collector — used when no
+// official Holiday API key is configured. Returns "skipped" with a populated
+// raw_summary so the UI can render weekday/weekend/season metrics with
+// source_type=deterministic_calendar (never claims the official API ran).
+function buildDeterministicCalendarFallback(name, latestRevenueDate) {
+  const reference = latestRevenueDate ? isoDate(latestRevenueDate) : isoDate(new Date());
+  const refUtc = Date.parse(reference);
+  if (!Number.isFinite(refUtc)) {
+    return skipped(name, "Korean Astronomy Holiday API", "missing_key");
+  }
+  // Sample a 90-day window ending on latestRevenueDate as the calendar
+  // surface, matching the typical sales coverage window.
+  let weekend = 0;
+  let weekday = 0;
+  const dowCounts = [0, 0, 0, 0, 0, 0, 0];
+  let payday = 0;
+  for (let i = 0; i < 90; i += 1) {
+    const d = new Date(refUtc - i * 86400000);
+    const dow = d.getUTCDay();
+    dowCounts[dow] += 1;
+    if (dow === 0 || dow === 6) weekend += 1; else weekday += 1;
+    const dom = d.getUTCDate();
+    if (dom >= 23 && dom <= 27) payday += 1;
+    if (dom >= 28) payday += 1;
+  }
+  const total = weekend + weekday;
+  const dominant = dowCounts.indexOf(Math.max(...dowCounts));
+  const month = Number(reference.slice(5, 7));
+  const season = month >= 3 && month <= 5 ? "spring"
+    : month >= 6 && month <= 8 ? "summer"
+      : month >= 9 && month <= 11 ? "autumn" : "winter";
+  const periodStart = new Date(refUtc - 89 * 86400000).toISOString().slice(0, 10);
+  return {
+    name,
+    status: "skipped",
+    source_name: "Korean Astronomy Holiday API",
+    observation_count: 0,
+    reason: "missing_key",
+    freshness: null,
+    collected_at: new Date().toISOString(),
+    raw_summary: {
+      source_type: "deterministic_calendar",
+      period_start: periodStart,
+      period_end: reference,
+      weekday_days: weekday,
+      weekend_days: weekend,
+      weekend_share_pct: total > 0 ? Math.round((weekend / total) * 1000) / 10 : 0,
+      dominant_weekday: dominant,
+      season_label: season,
+      payday_proximity_days_count: payday,
+      holiday_count: 0,
+    },
+  };
 }
 
 function completed(name, sourceName, payload = {}) {
@@ -1767,6 +1943,7 @@ module.exports = {
   collectNaverLocalCompetitorSearch,
   collectNaverSearchTrend,
   collectKoreanHolidayCalendar,
+  collectLocalEventContext,
   collectTossPlaceConnectorSmoke,
   collectDeliveryProviderConnectorSmoke,
   buildHolidayRequestUrl,
