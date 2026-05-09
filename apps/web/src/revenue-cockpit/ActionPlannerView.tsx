@@ -2,9 +2,140 @@ import { SCENARIO, tr } from './revenueCockpitCopy';
 import { Icon, Pill, StatePill, StateMenu, DotMeter, STATES, stateTone } from './revenueCockpitShared';
 import { resolveTrend } from './revenueTrendScenarios';
 import { trendOrderedActions, trendActionsKicker } from './revenueActionPlannerLogic';
+import { computeActionOutcome, outcomeStatusLabel, outcomeNote } from './revenueActionOutcome';
+import type { ActionCompletedAtMap, ActionOutcome, ActionOutcomeStatus } from './revenueActionOutcome';
 import type { RcLang, ActionStatuses, ActionStatus, RcAction, Scenario } from './revenueCockpitTypes';
 
-function ActionCard({ a, lang, scenario, state, setState }: { a: RcAction; lang: RcLang; scenario: Scenario; state: ActionStatus; setState: (s: ActionStatus) => void }) {
+function fmtSignedPct(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '—';
+  const sign = value >= 0 ? '+' : '';
+  return `${sign}${value.toFixed(1)}%`;
+}
+
+function fmtKRWCompact(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '—';
+  if (Math.abs(value) >= 1_000_000) return `₩${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 1_000) return `₩${Math.round(value / 1000)}K`;
+  return `₩${Math.round(value)}`;
+}
+
+function outcomeTone(status: ActionOutcomeStatus): 'good' | 'bad' | 'warm' | 'quiet' {
+  if (status === 'positive') return 'good';
+  if (status === 'negative') return 'bad';
+  if (status === 'observing') return 'warm';
+  return 'quiet';
+}
+
+function OutcomeBlock({
+  outcome,
+  lang,
+  onChangeCompletedDate,
+}: {
+  outcome: ActionOutcome;
+  lang: RcLang;
+  onChangeCompletedDate: (isoDate: string) => void;
+}) {
+  const tone = outcomeTone(outcome.status);
+  const showDeltas = outcome.status === 'positive' || outcome.status === 'negative' || outcome.status === 'neutral';
+  return (
+    <div style={{
+      marginTop: 4, padding: '8px 10px',
+      border: '1px solid var(--rc-rule)', borderRadius: 8,
+      background: 'var(--rc-surface-2)',
+      display: 'flex', flexDirection: 'column', gap: 6,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 10, color: 'var(--rc-fg-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          {lang === 'ko' ? '결과 추적' : 'Outcome tracking'}
+        </span>
+        <Pill tone={tone} size="sm">{outcomeStatusLabel(outcome.status, lang)}</Pill>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--rc-fg-muted)', lineHeight: 1.5 }}>
+        {outcomeNote(outcome.status, lang)}
+      </div>
+      {/* Inline completion-date editor — lets the user re-anchor the 7-day
+          before/after window when the demo dataset doesn't include 7 days
+          after today. Recompute is automatic via React state. */}
+      <label style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: 10.5, color: 'var(--rc-fg-muted)',
+      }}>
+        <span>{lang === 'ko' ? '완료일' : 'Completed date'}</span>
+        <input
+          type="date"
+          value={outcome.completedDate}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (/^\d{4}-\d{2}-\d{2}$/.test(next)) onChangeCompletedDate(next);
+          }}
+          style={{
+            fontFamily: 'var(--rc-mono)', fontSize: 11,
+            color: 'var(--rc-fg)', background: 'var(--rc-surface-1)',
+            border: '1px solid var(--rc-rule)', borderRadius: 6,
+            padding: '2px 6px', cursor: 'pointer',
+            colorScheme: 'light dark',
+          }}
+          aria-label={lang === 'ko' ? '완료일 수정' : 'Edit completed date'}
+        />
+      </label>
+      {showDeltas && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          <div style={{ fontSize: 11, color: 'var(--rc-fg)' }}>
+            <div style={{ color: 'var(--rc-fg-muted)', fontSize: 10 }}>
+              {lang === 'ko' ? '매출 변화' : 'Sales change'}
+            </div>
+            <span className="rc-num" style={{
+              fontWeight: 600,
+              color: outcome.salesDeltaPct === null
+                ? 'var(--rc-fg-dim)'
+                : outcome.salesDeltaPct >= 0 ? 'var(--rc-good-strong)' : 'var(--rc-bad-strong)',
+            }}>
+              {fmtSignedPct(outcome.salesDeltaPct)}
+            </span>
+            <span style={{ color: 'var(--rc-fg-dim)', marginLeft: 6 }}>
+              {fmtKRWCompact(outcome.beforeAvgSales)} → {fmtKRWCompact(outcome.afterAvgSales)}
+            </span>
+          </div>
+          {outcome.orderDeltaPct !== null && (
+            <div style={{ fontSize: 11, color: 'var(--rc-fg)' }}>
+              <div style={{ color: 'var(--rc-fg-muted)', fontSize: 10 }}>
+                {lang === 'ko' ? '거래건수 변화' : 'Order change'}
+              </div>
+              <span className="rc-num" style={{
+                fontWeight: 600,
+                color: outcome.orderDeltaPct >= 0 ? 'var(--rc-good-strong)' : 'var(--rc-bad-strong)',
+              }}>
+                {fmtSignedPct(outcome.orderDeltaPct)}
+              </span>
+              {outcome.ticketDeltaPct !== null && (
+                <span style={{ color: 'var(--rc-fg-dim)', marginLeft: 6 }}>
+                  {lang === 'ko' ? '객단가' : 'Ticket'} {fmtSignedPct(outcome.ticketDeltaPct)}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{ fontSize: 10, color: 'var(--rc-fg-dim)' }}>
+        {lang === 'ko'
+          ? `전 ${outcome.beforeDays}일 / 후 ${outcome.afterDays}일 · 실행일 기준 결과를 다시 계산합니다.`
+          : `Before ${outcome.beforeDays}d / after ${outcome.afterDays}d · recalculates the outcome from this date.`}
+      </div>
+    </div>
+  );
+}
+
+function ActionCard({
+  a, lang, scenario, state, setState, completedDate, onChangeCompletedDate,
+}: {
+  a: RcAction;
+  lang: RcLang;
+  scenario: Scenario;
+  state: ActionStatus;
+  setState: (s: ActionStatus) => void;
+  completedDate: string | undefined;
+  onChangeCompletedDate: (isoDate: string) => void;
+}) {
   const tone = stateTone[state];
   const tiedCauses = a.tied.map(id => scenario.causes.find(c => c.id === id)).filter(Boolean) as typeof scenario.causes;
   const diffN = a.effort === 'low' ? 1 : a.effort === 'medium' ? 2 : 3;
@@ -70,6 +201,17 @@ function ActionCard({ a, lang, scenario, state, setState }: { a: RcAction; lang:
         <StatePill state={state} lang={lang} size="sm"/>
         <StateMenu state={state} setState={setState} lang={lang} align="right"/>
       </div>
+
+      {/* outcome tracking — visible only after completion. Shows observing /
+          insufficient_data while the 7-day window is still gathering, and a
+          before/after delta once both windows have ≥3 days of data. */}
+      {state === 'done' && completedDate && (
+        <OutcomeBlock
+          outcome={computeActionOutcome(scenario.uploadedDailySeries, completedDate)}
+          lang={lang}
+          onChangeCompletedDate={onChangeCompletedDate}
+        />
+      )}
     </div>
   );
 }
@@ -79,9 +221,18 @@ interface ActionPlannerViewProps {
   scenario?: Scenario;
   statuses: ActionStatuses;
   onSetStatus: (id: string, status: ActionStatus) => void;
+  actionCompletedAt?: ActionCompletedAtMap;
+  onSetCompletedDate?: (id: string, isoDate: string) => void;
 }
 
-export function ActionPlannerView({ lang, scenario = SCENARIO, statuses, onSetStatus }: ActionPlannerViewProps) {
+export function ActionPlannerView({
+  lang,
+  scenario = SCENARIO,
+  statuses,
+  onSetStatus,
+  actionCompletedAt = {},
+  onSetCompletedDate,
+}: ActionPlannerViewProps) {
   const orderedActions = trendOrderedActions(scenario);
   const trend = resolveTrend(scenario);
   const groups = STATES.map(s => ({
@@ -146,7 +297,9 @@ export function ActionPlannerView({ lang, scenario = SCENARIO, statuses, onSetSt
             {g.items.map(a => (
               <ActionCard key={a.id} a={a} lang={lang} scenario={scenario}
                 state={statuses[a.id] ?? 'recommended'}
-                setState={st => onSetStatus(a.id, st)}/>
+                setState={st => onSetStatus(a.id, st)}
+                completedDate={actionCompletedAt[a.id]}
+                onChangeCompletedDate={(isoDate) => onSetCompletedDate?.(a.id, isoDate)}/>
             ))}
           </div>
         ))}

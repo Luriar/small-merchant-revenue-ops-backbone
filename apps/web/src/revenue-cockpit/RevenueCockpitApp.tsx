@@ -44,6 +44,12 @@ import { RevenueBriefView } from './RevenueBriefView';
 import { CauseEvidenceView } from './CauseEvidenceView';
 import { ActionPlannerView } from './ActionPlannerView';
 import { DataReliabilityView } from './DataReliabilityView';
+import {
+  loadActionCompletedAt,
+  saveActionCompletedAt,
+  todayIsoDate,
+} from './revenueActionOutcome';
+import type { ActionCompletedAtMap } from './revenueActionOutcome';
 import type { RcLang, RcTheme, RcScreen, ActionStatuses, ActionStatus, Scenario, UploadedDailyRevenuePoint } from './revenueCockpitTypes';
 
 // ─── persistence helpers ──────────────────────────────────────────────────────
@@ -1318,6 +1324,7 @@ export function RevenueCockpitApp() {
   const [screen, setScreen] = useState<RcScreen>('brief');
   const [scenario, setScenario] = useState<Scenario>(() => SCENARIO);
   const [statuses, setStatuses] = useState<ActionStatuses>(() => ({ ...DEFAULT_STATUSES }));
+  const [actionCompletedAt, setActionCompletedAt] = useState<ActionCompletedAtMap>({});
   const [apiMode] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     return wantsApiData() || (params.has('code') && params.has('state'));
@@ -1411,8 +1418,28 @@ export function RevenueCockpitApp() {
     });
   }
 
+  const setActionCompletedDate = (id: string, isoDate: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return;
+    setActionCompletedAt(prev => {
+      const next = { ...prev, [id]: isoDate };
+      saveActionCompletedAt(selectedStoreId, next);
+      return next;
+    });
+  };
+
   const setStatus = (id: string, s: ActionStatus) => {
     setStatuses(prev => ({ ...prev, [id]: s }));
+    setActionCompletedAt(prev => {
+      // Stamp completion the first time an action becomes "done" so the
+      // outcome window can anchor on a stable date. Existing stamps are
+      // preserved (re-marking does not reset the window).
+      if (s === 'done' && !prev[id]) {
+        const next = { ...prev, [id]: todayIsoDate() };
+        saveActionCompletedAt(selectedStoreId, next);
+        return next;
+      }
+      return prev;
+    });
     if (!apiMode) return;
 
     setApiNotice('patch-saving');
@@ -1454,6 +1481,12 @@ export function RevenueCockpitApp() {
   useEffect(() => {
     setEffectiveTheme(resolveTheme(theme));
   }, [theme]);
+
+  // Load the per-store action completion stamps when the selected store
+  // changes so outcome tracking restores after a refresh / store switch.
+  useEffect(() => {
+    setActionCompletedAt(loadActionCompletedAt(selectedStoreId));
+  }, [selectedStoreId]);
 
   useEffect(() => {
     if (!apiMode) return;
@@ -2224,6 +2257,8 @@ export function RevenueCockpitApp() {
             scenario={scenario}
             statuses={statuses}
             onSetStatus={setStatus}
+            actionCompletedAt={actionCompletedAt}
+            onSetCompletedDate={setActionCompletedDate}
           />
         )}
         {!showInitialSkeleton && screen === 'reliability' && <DataReliabilityView lang={lang} scenario={scenario}/>}
