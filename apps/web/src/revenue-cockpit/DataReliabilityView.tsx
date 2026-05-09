@@ -1,8 +1,78 @@
 import { SCENARIO, tr } from './revenueCockpitCopy';
 import { Icon, Pill } from './revenueCockpitShared';
-import type { RcLang, Scenario } from './revenueCockpitTypes';
+import type { RcLang, Scenario, UploadedDailyRevenuePoint } from './revenueCockpitTypes';
 
 interface DataReliabilityViewProps { lang: RcLang; scenario?: Scenario }
+
+type AnalysisReadiness = 'sufficient' | 'limited' | 'insufficient';
+
+interface SalesCoverageStats {
+  daysCount: number;
+  earliestDate: string | null;
+  latestDate: string | null;
+  missingDates: number;
+  totalSales: number;
+  totalOrders: number;
+}
+
+function summarizeSalesCoverage(scenario: Scenario): SalesCoverageStats {
+  const series: UploadedDailyRevenuePoint[] = Array.isArray(scenario.uploadedDailySeries) ? scenario.uploadedDailySeries : [];
+  if (series.length === 0) {
+    return { daysCount: 0, earliestDate: null, latestDate: null, missingDates: 0, totalSales: 0, totalOrders: 0 };
+  }
+  const sorted = [...series].sort((a, b) => a.date.localeCompare(b.date));
+  const earliest = sorted[0].date;
+  const latest = sorted[sorted.length - 1].date;
+  const earliestUtc = Date.UTC(
+    Number(earliest.slice(0, 4)),
+    Number(earliest.slice(5, 7)) - 1,
+    Number(earliest.slice(8, 10)),
+  );
+  const latestUtc = Date.UTC(
+    Number(latest.slice(0, 4)),
+    Number(latest.slice(5, 7)) - 1,
+    Number(latest.slice(8, 10)),
+  );
+  const spanDays = Math.round((latestUtc - earliestUtc) / 86400000) + 1;
+  const presentDates = new Set(sorted.map((p) => p.date));
+  const missingDates = Math.max(0, spanDays - presentDates.size);
+
+  const summary = scenario.uploadedRevenueSummary;
+  const totalSales = summary?.netSalesTotal && summary.netSalesTotal > 0
+    ? summary.netSalesTotal
+    : sorted.reduce((sum, point) => sum + Number(point.net_sales || 0), 0);
+  const totalOrders = summary?.orderCountTotal && summary.orderCountTotal > 0
+    ? summary.orderCountTotal
+    : sorted.reduce((sum, point) => sum + Number(point.order_count || 0), 0);
+
+  return {
+    daysCount: presentDates.size,
+    earliestDate: earliest,
+    latestDate: latest,
+    missingDates,
+    totalSales,
+    totalOrders,
+  };
+}
+
+function resolveAnalysisReadiness(
+  coverage: SalesCoverageStats,
+  rel: Scenario['reliability'],
+): AnalysisReadiness {
+  const publicScope = rel.sources.filter((s) => !CONNECTOR_FOUNDATION_COLLECTOR_IDS.has(s.id));
+  const anyHealthyContext = publicScope.some((s) => s.status === 'ok');
+  if (coverage.daysCount >= 60 && anyHealthyContext) return 'sufficient';
+  if (coverage.daysCount >= 30) return 'limited';
+  return 'insufficient';
+}
+
+function formatKRWApprox(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  if (Math.abs(value) >= 100_000_000) return `₩${(value / 100_000_000).toFixed(1)}억`;
+  if (Math.abs(value) >= 1_000_000) return `₩${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 1_000) return `₩${Math.round(value / 1000)}K`;
+  return `₩${Math.round(value)}`;
+}
 
 const PUBLIC_CONTEXT_COLLECTOR_IDS = new Set([
   'kakao_geocoding',
@@ -38,6 +108,19 @@ function summarizeReliability(rel: Scenario['reliability']) {
 export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabilityViewProps) {
   const rel = scenario.reliability;
   const summary = summarizeReliability(rel);
+  const coverage = summarizeSalesCoverage(scenario);
+  const readiness = resolveAnalysisReadiness(coverage, rel);
+  const readinessTone = readiness === 'sufficient' ? 'good' : readiness === 'limited' ? 'warm' : 'bad';
+  const readinessLabel = readiness === 'sufficient'
+    ? (lang === 'ko' ? '충분' : 'Sufficient')
+    : readiness === 'limited'
+      ? (lang === 'ko' ? '제한적' : 'Limited')
+      : (lang === 'ko' ? '부족' : 'Insufficient');
+  const readinessNote = readiness === 'sufficient'
+    ? (lang === 'ko' ? '최근 매출 데이터와 외부 맥락이 있어 기본 분석이 가능합니다.' : 'Recent sales data and context sources are available for a basic analysis.')
+    : readiness === 'limited'
+      ? (lang === 'ko' ? '매출 데이터는 있지만 일부 외부 맥락이 부족해 해석이 제한적입니다.' : 'Sales data exists, but some external context is missing, so interpretation is limited.')
+      : (lang === 'ko' ? '매출 데이터가 부족해 안정적인 비교가 어렵습니다.' : 'There is not enough sales data for stable comparison.');
   const partial = summary.actualFailures > 0 || summary.publicOk < summary.publicTotal;
   const connectorWaitingCopy = summary.connectorWaiting === 0
     ? (lang === 'ko' ? '외부 연동 대기 없음' : 'No connectors waiting')
@@ -105,6 +188,48 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
           </Pill>
         </div>
 
+      </div>
+
+      {/* sales data coverage + analysis readiness — answers "do we have
+          enough sales data?" before showing context collector status. */}
+      <div className="rc-card" style={{ marginTop: 18, padding: '18px 20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+          <h2 className="rc-serif" style={{ fontSize: 18, fontWeight: 500, margin: 0, color: 'var(--rc-fg-strong)' }}>
+            {lang === 'ko' ? '매출 데이터 범위' : 'Sales data coverage'}
+          </h2>
+          <Pill tone={readinessTone} size="sm">
+            {(lang === 'ko' ? '분석 가능 수준 · ' : 'Analysis readiness · ') + readinessLabel}
+          </Pill>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
+          <CoverageStat
+            label={lang === 'ko' ? '등록된 영업일' : 'Uploaded business days'}
+            value={coverage.daysCount > 0 ? `${coverage.daysCount}${lang === 'ko' ? '일' : ' days'}` : '—'}
+          />
+          <CoverageStat
+            label={lang === 'ko' ? '최근 매출일' : 'Latest sales date'}
+            value={coverage.latestDate ?? '—'}
+          />
+          <CoverageStat
+            label={lang === 'ko' ? '가장 빠른 매출일' : 'Earliest sales date'}
+            value={coverage.earliestDate ?? '—'}
+          />
+          <CoverageStat
+            label={lang === 'ko' ? '누락 가능 일자' : 'Potential missing dates'}
+            value={coverage.daysCount > 0 ? `${coverage.missingDates}${lang === 'ko' ? '일' : ' days'}` : '—'}
+          />
+          <CoverageStat
+            label={lang === 'ko' ? '총 거래건수' : 'Total orders'}
+            value={coverage.totalOrders > 0 ? coverage.totalOrders.toLocaleString() : '—'}
+          />
+          <CoverageStat
+            label={lang === 'ko' ? '총 매출' : 'Total sales'}
+            value={coverage.totalSales > 0 ? formatKRWApprox(coverage.totalSales) : '—'}
+          />
+        </div>
+        <p className="rc-prose" style={{ fontSize: 12.5, color: 'var(--rc-fg-muted)', lineHeight: 1.6, margin: '14px 0 0' }}>
+          {readinessNote}
+        </p>
       </div>
 
       {/* three trust cards — clear semantic colors */}
@@ -223,6 +348,22 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
           <li>{lang === 'ko' ? '매출과 인구는 모두 공공데이터 기반 추정치입니다.' : 'Revenue and population are public-data estimates.'}</li>
           <li>{lang === 'ko' ? '원인 후보는 함께 관측된 신호이며, 인과관계가 확정된 것이 아닙니다. 추가 확인이 필요합니다.' : 'Cause candidates reflect signals observed together, not proven causes — needs further confirmation.'}</li>
         </ul>
+      </div>
+    </div>
+  );
+}
+
+function CoverageStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{
+      padding: '10px 12px', borderRadius: 8,
+      border: '1px solid var(--rc-rule)', background: 'var(--rc-surface-0)',
+    }}>
+      <div style={{ fontSize: 10.5, color: 'var(--rc-fg-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        {label}
+      </div>
+      <div className="rc-serif rc-num" style={{ fontSize: 18, fontWeight: 500, color: 'var(--rc-fg-strong)', marginTop: 4 }}>
+        {value}
       </div>
     </div>
   );
