@@ -237,6 +237,7 @@ interface CockpitControlsBarProps {
    * authenticated store; "새 가게 등록" moves into the manage menu. When false (demo
    * or no real store yet), the existing demo-friendly buttons are shown standalone. */
   productionStoreContext: boolean;
+  readOnlyNavOnly?: boolean;
 }
 
 function CockpitControlsBar({
@@ -257,6 +258,7 @@ function CockpitControlsBar({
   canUpload,
   canManage,
   productionStoreContext,
+  readOnlyNavOnly = false,
 }: CockpitControlsBarProps) {
   const tabs: Array<{ id: RcScreen; label: string }> = [
     { id: 'brief',       label: lang === 'ko' ? '매출 요약' : 'Revenue summary' },
@@ -266,7 +268,7 @@ function CockpitControlsBar({
   ];
   return (
     <header className="rc-cockpit-controls" aria-label={lang === 'ko' ? '매출 OS 컨트롤' : 'Revenue OS controls'}>
-      <div className="rc-cockpit-controls-left">
+      <div className="rc-cockpit-controls-left" style={readOnlyNavOnly ? { display: 'none' } : undefined}>
         <select
           className="rc-store-select rc-cockpit-store-select"
           value={selectedStoreId ?? ''}
@@ -2129,7 +2131,21 @@ export function RevenueCockpitApp() {
       <ChromeBar
         lang={lang} setLang={setLang} theme={theme} setTheme={setTheme}
         leadSlot={
-          <div className="rc-chrome-brand">
+          <div
+            className="rc-chrome-brand"
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              window.location.href = 'https://d1fquuc7vsf9cu.cloudfront.net/#revenue-cockpit?data=api';
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                window.location.href = 'https://d1fquuc7vsf9cu.cloudfront.net/#revenue-cockpit?data=api';
+              }
+            }}
+            style={{ cursor: 'pointer' }}
+          >
             <img className="rc-app-icon" src="/brand/revenue-os-icon-512.png" alt="Revenue OS"/>
             <span className="rc-serif rc-chrome-brand-name">
               Revenue&nbsp;<span style={{ fontStyle: 'italic', color: 'var(--rc-accent-strong)' }}>OS</span>
@@ -2165,7 +2181,7 @@ export function RevenueCockpitApp() {
           </div>
         ) : null}
       />
-      {isLoggedIn && (
+      {(isLoggedIn || apiMode) && (
         <CockpitControlsBar
           lang={lang}
           stores={stores}
@@ -2197,6 +2213,7 @@ export function RevenueCockpitApp() {
           canUpload={Boolean(selectedStoreId)}
           canManage={Boolean(selectedStoreId && selectedStore && !selectedStoreIsDemo)}
           productionStoreContext={productionStoreContext}
+          readOnlyNavOnly={!isLoggedIn}
         />
       )}
       {isLoggedIn && showCreateStore && (
