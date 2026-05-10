@@ -2229,7 +2229,7 @@ export function RevenueCockpitApp() {
       {/* Persistent session-expired banner — shown across all cockpit tabs
           when the API returns 401. Re-login button reuses the same auth
           popover the chrome bar exposes; logout clears any stale state. */}
-      {apiNotice === 'auth-expired' && !showInitialSkeleton && (
+      {apiNotice === 'auth-expired' && screen !== 'brief' && !showInitialSkeleton && (
         <div className="rc-api-notice" role="alert" style={{ alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <Icon name="shield" size={12}/>
           <span style={{ flex: 1, minWidth: 200 }}>
