@@ -339,8 +339,17 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
   const uploadedRecentTrend = computeUploadedRecentTrend(effectiveScenario.uploadedDailySeries);
   const trend = uploadedRecentTrend?.trend ?? resolveTrend(effectiveScenario);
   const tcopy = trendCopy(lang)[trend];
+  const presentationScenario = uploadedRecentTrend?.trend === 'up'
+    ? {
+        ...buildUpsideScenario(effectiveScenario),
+        uploadedDailySeries: effectiveScenario.uploadedDailySeries,
+        uploadedRevenueSummary: effectiveScenario.uploadedRevenueSummary,
+        periodLabel: effectiveScenario.periodLabel,
+        reliability: effectiveScenario.reliability,
+      }
+    : effectiveScenario;
 
-  const thisWeekActions = effectiveScenario.actions.filter(a => a.timeframe === 'this-week');
+  const thisWeekActions = presentationScenario.actions.filter(a => a.timeframe === 'this-week');
   const revenueDeltaUnavailable = Math.abs(effectiveScenario.revenueChange) < 0.05;
   const secondaryMetrics = [
     { lab: lang === 'ko' ? '거래건수'  : 'Transactions', v: isUploadedMode ? uploadedTransactionLabel : '11.9k',  d: isUploadedMode ? uploadedTransactionChange : effectiveScenario.txnChange,        spark: trend === 'up'
@@ -399,7 +408,7 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
         </h1>
 
         <p className="rc-prose" style={{ fontSize: 14.5, color: 'var(--rc-fg-muted)', maxWidth: 640, margin: '0 0 18px', lineHeight: 1.7 }}>
-          {buildBriefSubcopy(lang, effectiveScenario, trend)}
+          {buildBriefSubcopy(lang, presentationScenario, trend)}
         </p>
 
         {/* chart card */}
@@ -518,10 +527,10 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
             }}>{tr('seeEvidence', lang)} <Icon name="arrow-right" size={11}/></button>
           </div>
           <p className="rc-prose" style={{ fontSize: 11.5, color: 'var(--rc-fg-muted)', margin: '0 0 10px' }}>
-            {lang === 'ko' ? `${effectiveScenario.causes.length}개 후보 · 신호 강함 순` : `${effectiveScenario.causes.length} candidates · sorted by signal strength`}
+            {lang === 'ko' ? `${presentationScenario.causes.length}개 후보 · 신호 강함 순` : `${presentationScenario.causes.length} candidates · sorted by signal strength`}
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {effectiveScenario.causes.map((c, i) => (
+            {presentationScenario.causes.map((c, i) => (
               <CauseRail key={c.id} c={c} lang={lang} rank={i+1} onOpen={() => onNavigate('evidence')}/>
             ))}
           </div>
@@ -538,10 +547,10 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
             <h2 className="rc-serif" style={{ fontSize: 17, fontWeight: 500, margin: 0, color: 'var(--rc-fg-strong)' }}>
               {tr('thisWeek', lang)}
             </h2>
-            <Pill tone="quiet" size="sm">{Math.min(thisWeekActions.length, 3)} / {effectiveScenario.actions.length}</Pill>
+            <Pill tone="quiet" size="sm">{Math.min(thisWeekActions.length, 3)} / {presentationScenario.actions.length}</Pill>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {effectiveScenario.actions.filter(a => a.timeframe === 'this-week').slice(0, 3).map(a => (
+            {presentationScenario.actions.filter(a => a.timeframe === 'this-week').slice(0, 3).map(a => (
               <ShortlistRow key={a.id} a={a} lang={lang}
                 state={statuses[a.id] ?? 'recommended'}
                 setState={st => onSetStatus(a.id, st)}/>
