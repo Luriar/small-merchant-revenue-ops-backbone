@@ -29,18 +29,7 @@ function shouldShowDemoTrendToggle(): boolean {
 // ─── cause rail (compact row for right rail) ──────────────────────────────────
 
 function CauseRail({ c, lang, trend, rank, onOpen }: { c: CauseCandidate; lang: RcLang; trend: 'up' | 'down' | 'flat'; rank: number; onOpen: () => void }) {
-  const impactLabel = lang === 'ko'
-    ? trend === 'up'
-      ? '상승 후보'
-      : trend === 'down'
-        ? '하락 후보'
-        : '관찰 후보'
-    : trend === 'up'
-      ? 'Uplift signal'
-      : trend === 'down'
-        ? 'Downside signal'
-        : 'Observed signal';
-  const impactColor = trend === 'up'
+  const candidateDeltaColor = trend === 'up'
     ? 'var(--rc-good-strong)'
     : trend === 'down'
       ? 'var(--rc-bad-strong)'
@@ -73,8 +62,8 @@ function CauseRail({ c, lang, trend, rank, onOpen }: { c: CauseCandidate; lang: 
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-        <span className="rc-mono" style={{ fontSize: 10.5, fontWeight: 600, color: impactColor }}>
-          {impactLabel}
+        <span className="rc-num" style={{ fontSize: 12, fontWeight: 600, color: candidateDeltaColor }}>
+          {fmtPct(c.delta)}
         </span>
         <span style={{ color: c.strength === 'strong' ? 'var(--rc-accent-strong)' : c.strength === 'medium' ? 'var(--rc-fg-muted)' : 'var(--rc-fg-dim)' }}>
           <StrengthDots level={c.strength}/>
