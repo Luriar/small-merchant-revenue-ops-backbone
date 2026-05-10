@@ -1500,8 +1500,13 @@ export function RevenueCockpitApp() {
     let cancelled = false;
     const token = getStoredCognitoToken();
     if (!token) {
-      markAuthExpired();
+      // No token means unauthenticated, not expired.
+      // Keep the header login affordance, but do not show the session-expired banner.
+      setStores([]);
+      setSelectedStoreId(null);
       setStoreNotice(null);
+      setApiNotice(null);
+      setStoresFirstLoadComplete(true);
       return;
     }
 
@@ -1528,7 +1533,7 @@ export function RevenueCockpitApp() {
       .catch(error => {
         if (cancelled) return;
         console.error('Revenue Cockpit store list API failed.', error);
-        const authExpired = error instanceof RevenueApiError && error.status === 401;
+        const authExpired = error instanceof RevenueApiError && error.status === 401 && Boolean(getStoredCognitoToken());
         if (authExpired) {
           markAuthExpired();
         } else {
@@ -1753,7 +1758,7 @@ export function RevenueCockpitApp() {
         if (cancelled) return;
         // Distinguish 401/Unauthorized from generic API errors so the user
         // sees a re-login affordance instead of a misleading "demo fallback".
-        const authExpired = error instanceof RevenueApiError && error.status === 401;
+        const authExpired = error instanceof RevenueApiError && error.status === 401 && Boolean(getStoredCognitoToken());
         if (authExpired) {
           markAuthExpired();
         } else {
@@ -2229,7 +2234,7 @@ export function RevenueCockpitApp() {
       {/* Persistent session-expired banner — shown across all cockpit tabs
           when the API returns 401. Re-login button reuses the same auth
           popover the chrome bar exposes; logout clears any stale state. */}
-      {apiNotice === 'auth-expired' && screen !== 'brief' && !showInitialSkeleton && (
+      {apiNotice === 'auth-expired' && !showInitialSkeleton && (
         <div className="rc-api-notice" role="alert" style={{ alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <Icon name="shield" size={12}/>
           <span style={{ flex: 1, minWidth: 200 }}>
