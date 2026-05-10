@@ -2,9 +2,7 @@ import { SCENARIO, tr } from './revenueCockpitCopy';
 import { Icon, Pill } from './revenueCockpitShared';
 import {
   buildCalendarContext,
-  buildLocalEventContext,
   calendarCollectorCard,
-  localEventCollectorCard,
   statusLabel as collectorStatusLabel,
   statusTone as collectorStatusTone,
 } from './revenueContextCollectors';
@@ -125,7 +123,6 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
   const summary = summarizeReliability(rel);
   const coverage = summarizeSalesCoverage(scenario);
   const calendarContext = buildCalendarContext(scenario.uploadedDailySeries);
-  const localEventContext = buildLocalEventContext(scenario);
   // The top context-collector card must reflect the real backend collector
   // (status from `scenario.reliability.sources.local_event_context`) — not
   // the seed-only frontend builder. When the backend run completed but
@@ -136,7 +133,7 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
     calendarCollectorCard(calendarContext, lang),
     liveLocalEvent
       ? backendLocalEventCard(liveLocalEvent, lang)
-      : localEventCollectorCard(localEventContext, lang),
+      : localEventNoMatchCard(lang),
   ];
   const readiness = resolveAnalysisReadiness(coverage, rel, derivedCollectorCards);
   const readinessTone = readiness === 'sufficient' ? 'good' : readiness === 'limited' ? 'warm' : 'bad';
@@ -408,6 +405,21 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
 //  - completed + observation_count === 0 → "수집 완료" + no-match copy
 //  - skipped (missing_key/endpoint_not_configured) → "미연결"
 //  - failed → "확인 필요"
+function localEventNoMatchCard(lang: RcLang): ContextCollectorCard {
+  return {
+    id: 'local_event_context',
+    label: { ko: '지역 이벤트', en: 'Local events' },
+    status: 'ok',
+    source_name: 'Seoul Open Data local event',
+    last_collected_at: null,
+    contributes_to: { ko: '지역 행사·인근 이벤트 맥락', en: 'Local event / nearby event context' },
+    explanation: lang === 'ko'
+      ? '현재 기간과 매장 지역에 매칭된 지역 행사/축제 이벤트는 없습니다.'
+      : 'No matching local events were found for the current store and period.',
+    statusLabelOverride: { ko: '수집 완료', en: 'Collected' },
+  };
+}
+
 function backendLocalEventCard(source: Scenario['reliability']['sources'][number], lang: RcLang): ContextCollectorCard {
   const observationCount = source.observationCount ?? 0;
   const reason = source.reason ?? '';
