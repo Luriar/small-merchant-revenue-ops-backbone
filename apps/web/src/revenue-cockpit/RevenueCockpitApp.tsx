@@ -321,11 +321,11 @@ function CockpitControlsBar({
             </button>
           </span>
         )}
+      </div>
+      <div className="rc-cockpit-controls-right">
         {notice && (
           <span className="rc-store-notice rc-cockpit-status" role="status">{notice}</span>
         )}
-      </div>
-      <div className="rc-cockpit-controls-right">
         <nav className="rc-report-nav" aria-label={lang === 'ko' ? '리포트 탭' : 'Report tabs'}>
           {tabs.map(it => (
             <button
@@ -2187,7 +2187,7 @@ export function RevenueCockpitApp() {
           stores={stores}
           selectedStoreId={selectedStoreId}
           storeListLoading={storeLoading}
-          notice={storeNotice}
+          notice={apiNotice !== 'auth-expired' && noticeCopy ? noticeCopy : storeNotice}
           storeManagementError={storeManagementError}
           onDismissStoreManagementError={dismissStoreManagementError}
           screen={screen}
