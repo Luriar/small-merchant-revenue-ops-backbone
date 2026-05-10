@@ -28,7 +28,12 @@ function shouldShowDemoTrendToggle(): boolean {
 
 // ─── cause rail (compact row for right rail) ──────────────────────────────────
 
-function CauseRail({ c, lang, rank, onOpen }: { c: CauseCandidate; lang: RcLang; rank: number; onOpen: () => void }) {
+function CauseRail({ c, lang, trend, rank, onOpen }: { c: CauseCandidate; lang: RcLang; trend: 'up' | 'down' | 'flat'; rank: number; onOpen: () => void }) {
+  const deltaColor = trend === 'up'
+    ? 'var(--rc-good-strong)'
+    : trend === 'down'
+      ? 'var(--rc-bad-strong)'
+      : 'var(--rc-fg-muted)';
   return (
     <button onClick={onOpen} style={{
       all: 'unset', cursor: 'pointer',
@@ -53,7 +58,7 @@ function CauseRail({ c, lang, rank, onOpen }: { c: CauseCandidate; lang: RcLang;
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
         <span className="rc-num" style={{ fontSize: 12, fontWeight: 600,
-          color: c.delta < 0 ? 'var(--rc-bad-strong)' : 'var(--rc-accent-strong)' }}>
+          color: deltaColor }}>
           {fmtPct(c.delta)}
         </span>
         <span style={{ color: c.strength === 'strong' ? 'var(--rc-accent-strong)' : c.strength === 'medium' ? 'var(--rc-fg-muted)' : 'var(--rc-fg-dim)' }}>
@@ -349,6 +354,29 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
       }
     : effectiveScenario;
 
+  const causeSectionTitle = lang === 'ko'
+    ? trend === 'up'
+      ? '왜 올랐을지'
+      : trend === 'down'
+        ? '왜 줄었을지'
+        : '왜 변화했을지'
+    : trend === 'up'
+      ? 'Why it rose'
+      : trend === 'down'
+        ? 'Why it fell'
+        : 'Why it changed';
+  const causeListSummary = lang === 'ko'
+    ? trend === 'up'
+      ? `상승 요인 ${presentationScenario.causes.length}개 후보 · 신호 강함 순`
+      : trend === 'down'
+        ? `하락 원인 ${presentationScenario.causes.length}개 후보 · 신호 강함 순`
+        : `${presentationScenario.causes.length}개 후보 · 신호 강함 순`
+    : trend === 'up'
+      ? `${presentationScenario.causes.length} uplift candidates · sorted by signal strength`
+      : trend === 'down'
+        ? `${presentationScenario.causes.length} downside candidates · sorted by signal strength`
+        : `${presentationScenario.causes.length} candidates · sorted by signal strength`;
+
   const thisWeekActions = presentationScenario.actions.filter(a => a.timeframe === 'this-week');
   const revenueDeltaUnavailable = Math.abs(effectiveScenario.revenueChange) < 0.05;
   const secondaryMetrics = [
@@ -527,11 +555,11 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
             }}>{tr('seeEvidence', lang)} <Icon name="arrow-right" size={11}/></button>
           </div>
           <p className="rc-prose" style={{ fontSize: 11.5, color: 'var(--rc-fg-muted)', margin: '0 0 10px' }}>
-            {lang === 'ko' ? `${presentationScenario.causes.length}개 후보 · 신호 강함 순` : `${presentationScenario.causes.length} candidates · sorted by signal strength`}
+            {causeListSummary}
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
             {presentationScenario.causes.map((c, i) => (
-              <CauseRail key={c.id} c={c} lang={lang} rank={i+1} onOpen={() => onNavigate('evidence')}/>
+              <CauseRail key={c.id} c={c} lang={lang} trend={trend} rank={i + 1} onOpen={() => onNavigate('evidence')}/>
             ))}
           </div>
         </div>
