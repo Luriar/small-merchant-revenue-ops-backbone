@@ -2278,12 +2278,6 @@ export function RevenueCockpitApp() {
           </button>
         </div>
       )}
-      {noticeCopy && apiNotice !== 'auth-expired' && !showInitialSkeleton && (
-        <div className="rc-api-notice">
-          <Icon name="shield" size={12}/>
-          <span>{noticeCopy}</span>
-        </div>
-      )}
       {apiMode && bootstrapStatus && selectedStoreId === bootstrapStatus.storeId && !showInitialSkeleton && (
         <OnboardingBootstrapPanel
           lang={lang}
