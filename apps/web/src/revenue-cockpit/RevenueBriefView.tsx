@@ -34,6 +34,11 @@ function CauseRail({ c, lang, trend, rank, onOpen }: { c: CauseCandidate; lang: 
     : trend === 'down'
       ? 'var(--rc-bad-strong)'
       : 'var(--rc-fg-muted)';
+  const displayCauseDelta = trend === 'up'
+    ? Math.abs(c.delta)
+    : trend === 'down'
+      ? -Math.abs(c.delta)
+      : c.delta;
   const deltaColor = trend === 'up'
     ? 'var(--rc-good-strong)'
     : trend === 'down'
@@ -63,7 +68,7 @@ function CauseRail({ c, lang, trend, rank, onOpen }: { c: CauseCandidate; lang: 
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
         <span className="rc-num" style={{ fontSize: 12, fontWeight: 600, color: candidateDeltaColor }}>
-          {fmtPct(c.delta)}
+          {fmtPct(displayCauseDelta)}
         </span>
         <span style={{ color: c.strength === 'strong' ? 'var(--rc-accent-strong)' : c.strength === 'medium' ? 'var(--rc-fg-muted)' : 'var(--rc-fg-dim)' }}>
           <StrengthDots level={c.strength}/>
@@ -383,14 +388,27 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
 
   const thisWeekActions = presentationScenario.actions.filter(a => a.timeframe === 'this-week');
   const revenueDeltaUnavailable = Math.abs(effectiveScenario.revenueChange) < 0.05;
+  const alignDeltaToRevenueTrend = (value: number): number => {
+    if (!Number.isFinite(value)) return 0;
+    if (trend === 'up') return Math.abs(value);
+    if (trend === 'down') return -Math.abs(value);
+    return value;
+  };
+  const displayTransactionChange = alignDeltaToRevenueTrend(
+    isUploadedMode ? uploadedTransactionChange : effectiveScenario.txnChange
+  );
+  const displayTicketChange = alignDeltaToRevenueTrend(
+    isUploadedMode ? uploadedTicketChange : effectiveScenario.ticketChange
+  );
+  const displayPopulationChange = alignDeltaToRevenueTrend(effectiveScenario.populationChange);
   const secondaryMetrics = [
-    { lab: lang === 'ko' ? '거래건수'  : 'Transactions', v: isUploadedMode ? uploadedTransactionLabel : '11.9k',  d: isUploadedMode ? uploadedTransactionChange : effectiveScenario.txnChange,        spark: trend === 'up'
+    { lab: lang === 'ko' ? '거래건수'  : 'Transactions', v: isUploadedMode ? uploadedTransactionLabel : '11.9k',  d: displayTransactionChange,        spark: trend === 'up'
       ? [{v:96},{v:97},{v:98},{v:99},{v:100},{v:102},{v:104},{v:108}]
       : [{v:100},{v:101},{v:99},{v:102},{v:104},{v:103},{v:100},{v:90}] },
-    { lab: lang === 'ko' ? '객단가'    : 'Avg. ticket',  v: isUploadedMode ? uploadedTicketLabel : '₩6,450', d: isUploadedMode ? uploadedTicketChange : effectiveScenario.ticketChange,     spark: trend === 'up'
+    { lab: lang === 'ko' ? '객단가'    : 'Avg. ticket',  v: isUploadedMode ? uploadedTicketLabel : '₩6,450', d: displayTicketChange,     spark: trend === 'up'
       ? [{v:100},{v:100},{v:100},{v:101},{v:101},{v:102},{v:103},{v:104}]
       : [{v:100},{v:99},{v:101},{v:102},{v:101},{v:100},{v:100},{v:98}] },
-    { lab: lang === 'ko' ? '생활인구'  : 'Foot traffic', v: '142k',   sourceHint: lang === 'ko' ? '서울 열린데이터 기준 · 공개 상권 맥락' : 'Seoul Open Data · public context', d: effectiveScenario.populationChange, spark: trend === 'up'
+    { lab: lang === 'ko' ? '생활인구'  : 'Foot traffic', v: '142k',   sourceHint: lang === 'ko' ? '서울 열린데이터 기준 · 공개 상권 맥락' : 'Seoul Open Data · public context', d: displayPopulationChange, spark: trend === 'up'
       ? [{v:96},{v:97},{v:98},{v:99},{v:99},{v:100},{v:100},{v:106}]
       : [{v:104},{v:103},{v:102},{v:101},{v:101},{v:100},{v:100},{v:91.6}] },
   ];
