@@ -126,9 +126,17 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
   const coverage = summarizeSalesCoverage(scenario);
   const calendarContext = buildCalendarContext(scenario.uploadedDailySeries);
   const localEventContext = buildLocalEventContext(scenario);
+  // The top context-collector card must reflect the real backend collector
+  // (status from `scenario.reliability.sources.local_event_context`) — not
+  // the seed-only frontend builder. When the backend run completed but
+  // returned no matched events for the current store/period, show
+  // "수집 완료" instead of the misleading "미연결".
+  const liveLocalEvent = rel.sources.find((source) => source.id === 'local_event_context');
   const derivedCollectorCards: ContextCollectorCard[] = [
     calendarCollectorCard(calendarContext, lang),
-    localEventCollectorCard(localEventContext, lang),
+    liveLocalEvent
+      ? backendLocalEventCard(liveLocalEvent, lang)
+      : localEventCollectorCard(localEventContext, lang),
   ];
   const readiness = resolveAnalysisReadiness(coverage, rel, derivedCollectorCards);
   const readinessTone = readiness === 'sufficient' ? 'good' : readiness === 'limited' ? 'warm' : 'bad';
@@ -394,6 +402,67 @@ export function DataReliabilityView({ lang, scenario = SCENARIO }: DataReliabili
   );
 }
 
+// Build the top "맥락 수집기" card for local_event_context using the real
+// backend collector status from `reliability.sources`. Distinguishes:
+//  - completed + observation_count > 0  → "수집됨" + N matching events
+//  - completed + observation_count === 0 → "수집 완료" + no-match copy
+//  - skipped (missing_key/endpoint_not_configured) → "미연결"
+//  - failed → "확인 필요"
+function backendLocalEventCard(source: Scenario['reliability']['sources'][number], lang: RcLang): ContextCollectorCard {
+  const observationCount = source.observationCount ?? 0;
+  const reason = source.reason ?? '';
+  let status: ContextCollectorCard['status'];
+  let sourceLabel: string;
+  let explanation: string;
+  let statusLabelOverride: ContextCollectorCard['statusLabelOverride'];
+  if (source.status === 'failed') {
+    status = 'failed';
+    sourceLabel = source.sourceName || 'Seoul Open Data local event';
+    explanation = lang === 'ko'
+      ? '최근 수집에서 확인이 필요한 응답이 있었습니다.'
+      : 'The latest collection had responses that need attention.';
+    statusLabelOverride = { ko: '확인 필요', en: 'Needs attention' };
+  } else if (source.status === 'skipped') {
+    status = (reason === 'missing_key' || reason === 'endpoint_not_configured') ? 'not_connected' : 'skipped';
+    sourceLabel = lang === 'ko' ? '미연결' : 'Not connected';
+    explanation = lang === 'ko'
+      ? '지역 이벤트 데이터 소스가 아직 연결되지 않았습니다. 수동 등록 또는 연동 후에 표시됩니다.'
+      : 'No local event source is connected yet. Will appear after manual registration or integration.';
+    statusLabelOverride = { ko: '미연결', en: 'Not connected' };
+  } else if (source.status === 'partial') {
+    status = 'partial';
+    sourceLabel = source.sourceName || 'Seoul Open Data local event';
+    explanation = lang === 'ko'
+      ? '일부 매칭만 수집되었습니다.'
+      : 'Only partial matches were collected.';
+  } else {
+    // completed / ok
+    status = 'ok';
+    sourceLabel = source.sourceName || 'Seoul Open Data local event';
+    if (observationCount > 0) {
+      explanation = lang === 'ko'
+        ? `매칭 지역 이벤트 ${observationCount}건`
+        : `${observationCount} matching local events`;
+      statusLabelOverride = { ko: '수집됨', en: 'Collected' };
+    } else {
+      explanation = lang === 'ko'
+        ? '지역 행사/축제 데이터는 수집됐지만, 현재 기간과 매장 지역에 매칭된 이벤트는 없습니다.'
+        : 'Local event data was collected, but no matching events were found for the current store and period.';
+      statusLabelOverride = { ko: '수집 완료', en: 'Collected' };
+    }
+  }
+  return {
+    id: 'local_event_context',
+    label: { ko: '지역 이벤트', en: 'Local events' },
+    status,
+    source_name: sourceLabel,
+    last_collected_at: source.freshness || null,
+    contributes_to: { ko: '지역 행사·인근 이벤트 맥락', en: 'Local event / nearby event context' },
+    explanation,
+    statusLabelOverride,
+  };
+}
+
 function CollectorCard({ card, lang }: { card: ContextCollectorCard; lang: RcLang }) {
   const tone = collectorStatusTone(card.status);
   const pillTone = tone === 'good' ? 'good' : tone === 'bad' ? 'bad' : tone === 'warm' ? 'warm' : 'quiet';
@@ -403,7 +472,9 @@ function CollectorCard({ card, lang }: { card: ContextCollectorCard; lang: RcLan
         <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--rc-fg-strong)' }}>
           {card.label[lang]}
         </div>
-        <Pill tone={pillTone} size="sm">{collectorStatusLabel(card.status, lang)}</Pill>
+        <Pill tone={pillTone} size="sm">
+          {card.statusLabelOverride?.[lang] ?? collectorStatusLabel(card.status, lang)}
+        </Pill>
       </div>
       <div style={{ fontSize: 11.5, color: 'var(--rc-fg-muted)' }}>
         {card.source_name || (lang === 'ko' ? '소스 미지정' : 'Source unspecified')}

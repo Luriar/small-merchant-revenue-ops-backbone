@@ -117,6 +117,7 @@ export interface ContextCollectorCard {
   last_collected_at: string | null;
   contributes_to: BiLingual;
   explanation: string;
+  statusLabelOverride?: BiLingual;
 }
 
 export type ActionStatuses = Record<string, ActionStatus>;
