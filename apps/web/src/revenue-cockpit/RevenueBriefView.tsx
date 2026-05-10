@@ -336,7 +336,8 @@ export function RevenueBriefView({ lang, scenario = SCENARIO, onNavigate, status
     // Avoid setState during render; defer:
     queueMicrotask(() => setChartWindow(allowedWindows[0]));
   }
-  const trend = resolveTrend(effectiveScenario);
+  const uploadedRecentTrend = computeUploadedRecentTrend(effectiveScenario.uploadedDailySeries);
+  const trend = uploadedRecentTrend?.trend ?? resolveTrend(effectiveScenario);
   const tcopy = trendCopy(lang)[trend];
 
   const thisWeekActions = effectiveScenario.actions.filter(a => a.timeframe === 'this-week');
@@ -584,6 +585,37 @@ function uploadedSeriesTotal(series: UploadedDailyPoint[] | undefined): number {
   return series.reduce((sum, point) => sum + (Number.isFinite(point.net_sales) ? point.net_sales : 0), 0);
 }
 
+function computeUploadedRecentTrend(series: UploadedDailyPoint[] | undefined): { trend: 'up' | 'down' | 'flat'; deltaPct: number } | null {
+  if (!series || series.length < 60) return null;
+
+  const byDate = new Map<string, number>();
+  for (const point of series) {
+    if (!point.date) continue;
+    const sales = Number(point.net_sales);
+    if (!Number.isFinite(sales)) continue;
+    byDate.set(point.date, (byDate.get(point.date) ?? 0) + sales);
+  }
+
+  const daily = Array.from(byDate.entries())
+    .map(([date, sales]) => ({ date, sales }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (daily.length < 60) return null;
+
+  const recent = daily.slice(-30);
+  const previous = daily.slice(-60, -30);
+
+  const recentTotal = recent.reduce((sum, row) => sum + row.sales, 0);
+  const previousTotal = previous.reduce((sum, row) => sum + row.sales, 0);
+
+  if (previousTotal <= 0) return null;
+
+  const deltaPct = ((recentTotal - previousTotal) / previousTotal) * 100;
+  const trend = deltaPct > 1 ? 'up' : deltaPct < -1 ? 'down' : 'flat';
+
+  return { trend, deltaPct };
+}
+
 function formatKRWHero(value: number): string {
   if (!Number.isFinite(value)) return '—';
   if (Math.abs(value) >= 100_000_000) return `₩${(value / 100_000_000).toFixed(1)}억`;
@@ -620,20 +652,22 @@ function buildRevenueHeadline(lang: RcLang, scenario: Scenario, unavailable: boo
   // Calm single-line headline, with a single emphasized percentage span — no
   // small-caps lead, no fragmenting. Korean keep-all wrapping prevents
   // mid-word breaks at common widths.
-  const delta = Math.abs(scenario.revenueChange).toFixed(1);
-  const semanticColor = trend === 'up'
+  const uploadedTrend = computeUploadedRecentTrend(scenario.uploadedDailySeries);
+  const effectiveTrend = uploadedTrend?.trend ?? trend;
+  const delta = Math.abs(uploadedTrend?.deltaPct ?? scenario.revenueChange).toFixed(1);
+  const semanticColor = effectiveTrend === 'up'
     ? 'var(--rc-good-strong)'
-    : trend === 'down'
+    : effectiveTrend === 'down'
       ? 'var(--rc-bad-strong)'
       : 'var(--rc-fg-strong)';
   const isUploadedHeadline = Array.isArray(scenario.uploadedDailySeries) && scenario.uploadedDailySeries.length >= 2;
   const pct = <span style={{ color: semanticColor, fontWeight: 700 }}>{delta}%</span>;
   if (lang === 'ko') {
-    if (trend === 'up') return isUploadedHeadline ? <>최근 30일 등록 매출이 직전 30일 대비 {pct} 늘었습니다.</> : <>{scenario.compare.ko} 추정매출이 직전 분기 대비 {pct} 늘었습니다.</>;
-    if (trend === 'down') return isUploadedHeadline ? <>최근 30일 등록 매출이 직전 30일 대비 {pct} 줄었습니다.</> : <>{scenario.compare.ko} 추정매출이 직전 분기 대비 {pct} 줄었습니다.</>;
+    if (effectiveTrend === 'up') return isUploadedHeadline ? <>최근 30일 등록 매출이 직전 30일 대비 {pct} 늘었습니다.</> : <>{scenario.compare.ko} 추정매출이 직전 분기 대비 {pct} 늘었습니다.</>;
+    if (effectiveTrend === 'down') return isUploadedHeadline ? <>최근 30일 등록 매출이 직전 30일 대비 {pct} 줄었습니다.</> : <>{scenario.compare.ko} 추정매출이 직전 분기 대비 {pct} 줄었습니다.</>;
     return isUploadedHeadline ? <>최근 30일 등록 매출에 큰 변화가 없습니다.</> : <>{scenario.compare.ko} 추정매출에 큰 변화가 없습니다.</>;
   }
-  if (trend === 'up') return isUploadedHeadline ? <>Registered revenue rose {pct} in the latest 30 days versus the previous 30 days.</> : <>Estimated revenue rose {pct} from the prior quarter.</>;
-  if (trend === 'down') return isUploadedHeadline ? <>Registered revenue fell {pct} in the latest 30 days versus the previous 30 days.</> : <>Estimated revenue fell {pct} from the prior quarter.</>;
+  if (effectiveTrend === 'up') return isUploadedHeadline ? <>Registered revenue rose {pct} in the latest 30 days versus the previous 30 days.</> : <>Estimated revenue rose {pct} from the prior quarter.</>;
+  if (effectiveTrend === 'down') return isUploadedHeadline ? <>Registered revenue fell {pct} in the latest 30 days versus the previous 30 days.</> : <>Estimated revenue fell {pct} from the prior quarter.</>;
   return isUploadedHeadline ? <>Registered revenue stayed roughly flat in the latest 30 days versus the previous 30 days.</> : <>Estimated revenue stayed roughly flat.</>;
 }
