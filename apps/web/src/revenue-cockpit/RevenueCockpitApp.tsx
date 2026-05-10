@@ -2142,12 +2142,12 @@ export function RevenueCockpitApp() {
             role="button"
             tabIndex={0}
             onClick={() => {
-              window.location.href = 'https://d1fquuc7vsf9cu.cloudfront.net/#revenue-cockpit?data=api';
+              setScreen('brief');
             }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                window.location.href = 'https://d1fquuc7vsf9cu.cloudfront.net/#revenue-cockpit?data=api';
+                setScreen('brief');
               }
             }}
             style={{ cursor: 'pointer' }}
