@@ -322,9 +322,15 @@ function CockpitControlsBar({
           </span>
         )}
       </div>
-      <div className="rc-cockpit-controls-right">
+      <div className="rc-cockpit-controls-right" style={notice ? { flex: "1 1 auto", marginLeft: 0, justifyContent: "space-between" } : undefined}>
         {notice && (
-          <span className="rc-store-notice rc-cockpit-status" role="status">{notice}</span>
+          <span
+            className="rc-store-notice rc-cockpit-status"
+            role="status"
+            style={{ marginRight: 'auto', marginLeft: 0 }}
+          >
+            {notice}
+          </span>
         )}
         <nav className="rc-report-nav" aria-label={lang === 'ko' ? '리포트 탭' : 'Report tabs'}>
           {tabs.map(it => (
