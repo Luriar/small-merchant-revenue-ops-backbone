@@ -194,10 +194,11 @@ resource "aws_apigatewayv2_api" "api" {
   protocol_type = "HTTP"
 
   cors_configuration {
-    allow_headers = ["authorization", "content-type"]
-    allow_methods = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
-    allow_origins = ["https://*"]
-    max_age       = 300
+    allow_headers  = ["authorization", "content-type"]
+    allow_methods  = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
+    allow_origins  = ["https://*", "http://localhost:5173"]
+    expose_headers = ["content-type"]
+    max_age        = 300
   }
 
   tags = merge(var.tags, {
