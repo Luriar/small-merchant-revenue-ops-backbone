@@ -10,16 +10,16 @@
 
 ## 1. 프로젝트 개요
 
-소상공인은 POS를 통해 주문·결제 데이터는 확보하지만 실제 운영에서는 다음 질문에 답하기 어렵습니다.
+소상공인은 POS로 주문·결제 데이터는 확보하지만 실제 운영에서는 다음 질문에 답하기 어렵습니다.
 
     왜 이번 주 매출이 떨어졌는가?
     어떤 메뉴, 시간대, 날씨, 지역 이벤트가 영향을 주었을 가능성이 있는가?
     지금 점주는 어떤 액션을 해야 하는가?
     이 판단을 신뢰할 수 있는 근거는 무엇인가?
 
-본 프로젝트는 이러한 문제를 해결하기 위해 매장 매출 데이터와 외부 맥락 데이터를 함께 수집·정리하고 원인 후보와 실행 액션을 evidence 기반으로 제시합니다.
+본 프로젝트는 이 문제를 풀기 위해 매장 매출 데이터와 외부 맥락 데이터를 함께 수집·정리하고 원인 후보와 실행 액션을 evidence 기반으로 제시합니다.
 
-핵심 원칙은 다음과 같습니다.
+핵심 원칙:
 
     단정 대신 근거
     인과 확정 대신 원인 후보 제시
@@ -65,7 +65,7 @@
 
 ## 4. 핵심 가치
 
-본 프로젝트가 제공하려는 가치는 다음과 같습니다.
+본 프로젝트가 제공하려는 가치:
 
     매출 변화 감지
     매출 변화와 외부 맥락의 연결
@@ -89,7 +89,7 @@
 
 ## 5. 전체 아키텍처
 
-현재 전체 구조는 다음과 같습니다.
+현재 전체 구조:
 
     Frontend
     → CloudFront
@@ -112,16 +112,16 @@
 
 ## 6. AWS Runtime 구조
 
-현재 API 호출 경로는 다음과 같습니다.
+현재 API 호출 경로:
 
     API Gateway HTTP API
     → Lambda alias: live
     → Lambda version 3
     → Aurora PostgreSQL
 
-API Gateway는 더 이상 Lambda function ARN을 직접 호출하지 않고, `live` Lambda alias를 통해 호출합니다.
+API Gateway는 더 이상 Lambda function ARN을 직접 호출하지 않고, `live` Lambda alias를 거쳐 호출합니다.
 
-이 구조는 CodeDeploy Lambda canary deployment를 가능하게 하기 위한 기반입니다.
+CodeDeploy Lambda canary deployment는 이 alias 구조를 전제로 합니다.
 
 ---
 
@@ -129,7 +129,7 @@ API Gateway는 더 이상 Lambda function ARN을 직접 호출하지 않고, `li
 
 M7에서 CodeDeploy 기반 canary deployment 구조를 구성하고 실제 smoke deployment까지 검증했습니다.
 
-현재 구성은 다음과 같습니다.
+현재 구성:
 
     CodeDeploy application:
     revenue-ops-revenue-dev-revenue-api
@@ -144,7 +144,7 @@ M7에서 CodeDeploy 기반 canary deployment 구조를 구성하고 실제 smoke
     BLUE_GREEN
     WITH_TRAFFIC_CONTROL
 
-Rollback 기준은 다음과 같습니다.
+Rollback 기준:
 
     DEPLOYMENT_FAILURE
     DEPLOYMENT_STOP_ON_ALARM
@@ -264,7 +264,7 @@ M7 작업 중 `de-ai-12` 사용자에 임시로 부여했던 canary 배포 권�
 
 Frontend는 Vite + React 기반입니다.
 
-주요 화면은 다음과 같습니다.
+주요 화면:
 
     Revenue Brief
     Revenue Cockpit
@@ -296,7 +296,7 @@ UI 문구는 인과관계를 단정하지 않고 다음 표현을 우선합니�
 
 Backend는 Node.js 기반 API Lambda로 구성됩니다.
 
-주요 역할은 다음과 같습니다.
+주요 역할:
 
     인증된 사용자 요청 처리
     매장 목록 조회
@@ -307,7 +307,7 @@ Backend는 Node.js 기반 API Lambda로 구성됩니다.
     Aurora PostgreSQL 연동
     외부 공개 데이터 collector 실행
 
-주요 API 예시는 다음과 같습니다.
+주요 API 예시:
 
     GET /api/v1/stores
     POST /api/v1/stores
@@ -398,7 +398,7 @@ CI에서는 backend를 비활성화한 상태로 검증합니다.
 
 이 파일은 의도적으로 `.gitignore` 대상이며 Git에 커밋하지 않습니다.
 
-현재 중요한 값은 다음과 같습니다.
+현재 중요한 값:
 
     enable_api_lambda_versioning = true
     enable_api_lambda_alias      = true
@@ -418,7 +418,7 @@ Lambda canary smoke runner:
 
     scripts/m7_codedeploy_canary_smoke.sh
 
-Canary smoke runner는 다음 작업을 수행합니다.
+Canary smoke runner가 하는 일:
 
     1. 현재 live alias version 확인
     2. Lambda $LATEST description marker 업데이트
@@ -502,7 +502,7 @@ M6 관련 문서:
 
 ## 19. 현재 검증된 상태
 
-M7 종료 기준 현재 API 호출 경로는 다음과 같습니다.
+M7 종료 기준 API 호출 경로:
 
     API Gateway
     → Lambda alias: live
@@ -540,7 +540,7 @@ CI 상태:
 
 ## 20. 남은 작업
 
-M7 이후 남은 작업은 다음과 같습니다.
+M7 이후 남은 작업:
 
     1. 배포 실행 권한을 GitHub Actions OIDC deploy role로 이전
     2. Canary smoke runner를 manual deploy workflow에 연결할지 결정
@@ -557,7 +557,7 @@ M7 이후 남은 작업은 다음과 같습니다.
 
 소상공인 매출 운영 문제를 제품 관점에서 정의하고 이를 인증 API, 외부 맥락 수집, Aurora 기반 저장소, AWS serverless runtime, Terraform 인프라, CodeDeploy canary 배포 구조까지 연결한 end-to-end SaaS 플랫폼 프로젝트입니다.
 
-강조할 수 있는 포인트는 다음과 같습니다.
+강조할 수 있는 포인트:
 
     소상공인 대상 Revenue Ops OS 기획
     evidence 기반 원인 후보 제시
@@ -570,7 +570,7 @@ M7 이후 남은 작업은 다음과 같습니다.
     rollback alarm 설계
     CI/CD hygiene
 
-핵심 포지셔닝은 다음과 같습니다.
+핵심 포지셔닝:
 
     Small Merchant Revenue Ops OS
     매출 판단을 위한 evidence-based operating layer
@@ -582,7 +582,7 @@ M7 이후 남은 작업은 다음과 같습니다.
 
 이 프로젝트는 약한 신호를 근거로 인과관계를 단정하지 않습니다.
 
-목표는 사용자가 다음을 구조적으로 볼 수 있게 만드는 것입니다.
+사용자가 다음을 구조적으로 볼 수 있게 만드는 것이 목표입니다.
 
     무엇이 변했는가
     어떤 맥락 신호가 함께 관측되었는가
