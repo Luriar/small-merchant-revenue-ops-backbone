@@ -8,6 +8,25 @@
 
 ---
 
+## 서비스 구성과 배포 검증
+
+```mermaid
+flowchart LR
+    U["React 운영 화면"] --> CF["CloudFront / S3"]
+    U --> API["API Gateway"]
+    API --> L["Lambda live alias"]
+    L --> DB["Aurora PostgreSQL"]
+    L --> EXT["외부 맥락 데이터"]
+    CD["CodeDeploy Canary"] --> L
+    CW["CloudWatch 알람"] --> CD
+```
+
+| 개발 환경 검증 | 기록 |
+|---|---|
+| 외부 맥락 데이터 수집 | [M6 Live Smoke 결과](docs/m6_live_smoke_result_kr.md) |
+| Canary 배포 | 10% 트래픽으로 5분간 검증 후 전환 성공, API smoke test 통과 (아래 7절) |
+| Terraform | 배포 후 plan에서 변경 사항 없음 확인 (아래 8절) |
+
 ## 1. 프로젝트 개요
 
 소상공인은 POS로 주문·결제 데이터는 확보하지만 실제 운영에서는 다음 질문에 답하기 어렵습니다.
